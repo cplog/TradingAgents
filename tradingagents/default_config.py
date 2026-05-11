@@ -90,6 +90,7 @@ _CONFIG_BASE: dict = {
     "output_language": os.getenv("OUTPUT_LANGUAGE", "English"),
     # Debate and discussion settings
 <<<<<<< HEAD
+<<<<<<< HEAD
     "max_debate_rounds": int(os.getenv("MAX_DEBATE_ROUNDS", "1")),
     "max_risk_discuss_rounds": int(os.getenv("MAX_RISK_DISCUSS_ROUNDS", "1")),
     "max_recur_limit": int(os.getenv("MAX_RECUR_LIMIT", "100")),
@@ -120,6 +121,16 @@ _CONFIG_BASE: dict = {
     # When True, the CLI limits OpenRouter model selection to free-tier models
     "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
 >>>>>>> 5320475 (feat(cli): add OpenRouter free-model filter extension)
+=======
+    "max_debate_rounds": int(os.getenv("MAX_DEBATE_ROUNDS", "1")),
+    "max_risk_discuss_rounds": int(os.getenv("MAX_RISK_DISCUSS_ROUNDS", "1")),
+    "max_recur_limit": int(os.getenv("MAX_RECUR_LIMIT", "100")),
+    # When True, the CLI limits OpenRouter model selection to free-tier models
+    "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
+    # Service settings (API mode)
+    "max_concurrency": int(os.getenv("MAX_CONCURRENCY", "3")),
+    "job_ttl_hours": int(os.getenv("JOB_TTL_HOURS", "24")),
+>>>>>>> 28cefdf (feat(api): add FastAPI service with async jobs, HK/US ticker support, and env-var config)
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
