@@ -19,10 +19,13 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_MAX_RECUR_LIMIT":      "max_recur_limit",
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
+<<<<<<< HEAD
     "TRADINGAGENTS_OPENROUTER_FREE_ONLY": "openrouter_free_only",
     "TRADINGAGENTS_MAX_CONCURRENCY":      "max_concurrency",
     "TRADINGAGENTS_JOB_TTL_HOURS":        "job_ttl_hours",
     "TRADINGAGENTS_LLM_TEMPERATURE":      "llm_temperature",
+=======
+>>>>>>> 78d063d (feat(reflection): configurable alpha benchmark for non-US tickers)
 }
 
 
@@ -138,6 +141,7 @@ _CONFIG_BASE: dict = {
         ".AX":  "^AXJO",    # Australia (ASX 200)
         "":     "SPY",      # default for US-listed tickers (no suffix)
     },
+<<<<<<< HEAD
 }
 
 
@@ -147,3 +151,6 @@ def build_fresh_config() -> dict:
 
 
 DEFAULT_CONFIG = build_fresh_config()
+=======
+})
+>>>>>>> 78d063d (feat(reflection): configurable alpha benchmark for non-US tickers)
