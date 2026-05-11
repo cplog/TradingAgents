@@ -73,7 +73,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "checkpoint_enabled": False,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
-    "output_language": "English",
+    "output_language": os.getenv("OUTPUT_LANGUAGE", "English"),
     # Debate and discussion settings
     "max_debate_rounds": int(os.getenv("MAX_DEBATE_ROUNDS", "1")),
     "max_risk_discuss_rounds": int(os.getenv("MAX_RISK_DISCUSS_ROUNDS", "1")),
