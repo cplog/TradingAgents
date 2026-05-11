@@ -89,6 +89,8 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "ECB Bank of England BOJ central bank policy",
         "oil commodities supply chain energy",
     ],
+    # When True, the CLI limits OpenRouter model selection to free-tier models
+    "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
