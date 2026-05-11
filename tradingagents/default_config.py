@@ -89,6 +89,7 @@ _CONFIG_BASE: dict = {
     # Internal agent debate stays in English for reasoning quality
     "output_language": os.getenv("OUTPUT_LANGUAGE", "English"),
     # Debate and discussion settings
+<<<<<<< HEAD
     "max_debate_rounds": int(os.getenv("MAX_DEBATE_ROUNDS", "1")),
     "max_risk_discuss_rounds": int(os.getenv("MAX_RISK_DISCUSS_ROUNDS", "1")),
     "max_recur_limit": int(os.getenv("MAX_RECUR_LIMIT", "100")),
@@ -112,6 +113,13 @@ _CONFIG_BASE: dict = {
     # Service settings (API mode)
     "max_concurrency": 3,
     "job_ttl_hours": 24,
+=======
+    "max_debate_rounds": 1,
+    "max_risk_discuss_rounds": 1,
+    "max_recur_limit": 100,
+    # When True, the CLI limits OpenRouter model selection to free-tier models
+    "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
+>>>>>>> 5320475 (feat(cli): add OpenRouter free-model filter extension)
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
