@@ -118,8 +118,6 @@ def test_ollama_local_has_no_cf_headers(monkeypatch):
     monkeypatch.setenv("OLLAMA_CF_TOKEN", "cf-token")
     mod = _reload_client()
     assert mod._resolve_ollama_headers("ollama-local") == {}
-
-
 # ---- cli.utils side: select_llm_provider dropdown -------------------------
 
 

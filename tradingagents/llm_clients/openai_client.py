@@ -222,8 +222,6 @@ def _resolve_ollama_headers(provider: str) -> dict[str, str]:
         headers["CF-Access-Client-Id"] = client_id
         headers["CF-Access-Client-Secret"] = client_secret
     return headers
-
-
 class OpenAIClient(BaseLLMClient):
     """Client for OpenAI, Ollama, OpenRouter, and xAI providers.
 
