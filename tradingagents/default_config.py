@@ -15,8 +15,12 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_OUTPUT_LANGUAGE":      "output_language",
     "TRADINGAGENTS_MAX_DEBATE_ROUNDS":    "max_debate_rounds",
     "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
+    "TRADINGAGENTS_MAX_RECUR_LIMIT":      "max_recur_limit",
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
+    "TRADINGAGENTS_OPENROUTER_FREE_ONLY": "openrouter_free_only",
+    "TRADINGAGENTS_MAX_CONCURRENCY":      "max_concurrency",
+    "TRADINGAGENTS_JOB_TTL_HOURS":        "job_ttl_hours",
 }
 
 
@@ -69,7 +73,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "checkpoint_enabled": False,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
-    "output_language": os.getenv("OUTPUT_LANGUAGE", "English"),
+    "output_language": "English",
     # Debate and discussion settings
     "max_debate_rounds": int(os.getenv("MAX_DEBATE_ROUNDS", "1")),
     "max_risk_discuss_rounds": int(os.getenv("MAX_RISK_DISCUSS_ROUNDS", "1")),
@@ -90,10 +94,10 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "oil commodities supply chain energy",
     ],
     # When True, the CLI limits OpenRouter model selection to free-tier models
-    "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
+    "openrouter_free_only": False,
     # Service settings (API mode)
-    "max_concurrency": int(os.getenv("MAX_CONCURRENCY", "3")),
-    "job_ttl_hours": int(os.getenv("JOB_TTL_HOURS", "24")),
+    "max_concurrency": 3,
+    "job_ttl_hours": 24,
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
