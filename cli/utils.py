@@ -1,3 +1,4 @@
+import os
 import questionary
 from typing import List, Optional, Tuple, Dict
 
@@ -149,6 +150,11 @@ def _fetch_openrouter_models() -> List[Tuple[str, str]]:
 
 def select_openrouter_model() -> str:
     """Select an OpenRouter model from the newest available, or enter a custom ID."""
+    # Extension hook: free-only mode (see cli/openrouter_free.py)
+    if os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"):
+        from cli.openrouter_free import select_openrouter_free_model
+        return select_openrouter_free_model()
+
     models = _fetch_openrouter_models()
 
     choices = [questionary.Choice(name, value=mid) for name, mid in models[:5]]

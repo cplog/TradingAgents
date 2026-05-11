@@ -35,6 +35,8 @@ DEFAULT_CONFIG = {
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
+    # When True, the CLI limits OpenRouter model selection to free-tier models
+    "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
