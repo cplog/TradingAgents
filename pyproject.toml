@@ -35,8 +35,11 @@ dependencies = [
 [project.scripts]
 tradingagents = "cli.main:app"
 
+[project.optional-dependencies]
+api = ["fastapi>=0.115.0", "uvicorn>=0.34.0", "python-multipart>=0.0.20"]
+
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+include = ["tradingagents*", "cli*", "api*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
