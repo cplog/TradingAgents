@@ -1246,11 +1246,18 @@ def analyze(
         "--clear-checkpoints",
         help="Delete all saved checkpoints before running (force fresh start).",
     ),
+    free: bool = typer.Option(
+        False,
+        "--free",
+        help="Force OpenRouter model picker to show only free-tier models.",
+    ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
+    if free:
+        os.environ["TRADINGAGENTS_OPENROUTER_FREE_ONLY"] = "1"
     run_analysis(checkpoint=checkpoint)
 
 
