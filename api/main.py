@@ -1,6 +1,8 @@
 """FastAPI application for the TradingAgents headless service."""
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -10,7 +12,7 @@ from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
 from api.config import build_service_config, get_redacted_config, validate_api_key
 from api.jobs import Worker
@@ -133,6 +135,46 @@ async def get_job(job_id: str) -> JobStatusResponse:
         result=record.result,
         error=record.error,
     )
+
+
+@app.get("/jobs/{job_id}/events")
+async def job_events(job_id: str) -> StreamingResponse:
+    """Server-Sent Events stream of progress log lines."""
+
+    async def event_gen():
+        rec0 = _worker.store.get(job_id)
+        if rec0 is None:
+            yield "retry: 5000\n"
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'Job not found'})}\n\n"
+            return
+
+        yield "retry: 5000\n"
+        yield (
+            "data: "
+            + json.dumps({
+                "type": "connected",
+                "cursor": len(rec0.progress_events),
+                "status": rec0.status,
+            })
+            + "\n\n"
+        )
+
+        cursor = len(rec0.progress_events)
+        while True:
+            chunk, new_cursor, _ = _worker.store.read_progress_since(job_id, cursor)
+            cursor = new_cursor
+            for evt in chunk:
+                yield f"data: {json.dumps(evt)}\n\n"
+            rec = _worker.store.get(job_id)
+            if rec and rec.status in ("completed", "failed", "cancelled"):
+                yield f"data: {json.dumps({'type': 'terminal', 'status': rec.status})}\n\n"
+                break
+            if rec is None:
+                yield f"data: {json.dumps({'type': 'error', 'detail': 'Job not found'})}\n\n"
+                break
+            await asyncio.sleep(0.35)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
 @app.get("/jobs/{job_id}/report")
