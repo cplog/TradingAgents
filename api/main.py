@@ -19,9 +19,20 @@ from api.dimensions import (
     DimensionsBuildError,
     build_dimensions_facts_only,
 )
+from api.dimensions.builder import (
+    build_commentary as build_commentary_orchestrator,
+    build_dimensions,
+)
 from api.dimensions.schemas import StockDimensions
+from api.history import get_run, persist_completed_run
 from api.jobs import Worker
-from api.models import AnalyzeRequest, AnalyzeResponse, JobStatusResponse
+from api.models import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    HistoryRunDetail,
+    JobStatusResponse,
+)
+from api.state_store import get_state_store
 from api.tickers import normalize_ticker, validate_date
 
 logger = logging.getLogger(__name__)
@@ -289,3 +300,82 @@ async def admin_refresh_peer_cache(
             logger.warning("peer refresh skip %s: %s", t, exc)
     cache.write(slug, list(facts.keys()), facts)
     return {"slug": slug, "count": len(facts), "tickers": list(facts.keys())}
+
+
+def _build_llm_for_dimensions(cfg: Dict[str, Any]):
+    """Construct an LLM client suitable for dimensions recomputation."""
+    from tradingagents.llm_clients import create_llm_client
+
+    client = create_llm_client(
+        provider=cfg["llm_provider"],
+        model=cfg["quick_think_llm"],
+        base_url=cfg.get("backend_url"),
+    )
+    return client.get_llm()
+
+
+@app.post("/history/runs/{run_id}/recompute-dimensions", response_model=HistoryRunDetail)
+async def recompute_dimensions(run_id: str) -> Dict[str, Any]:
+    """Recompute dimensions + commentary for an existing run and patch the record."""
+    store = get_state_store()
+    rec = get_run(store, run_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    reports = rec.get("reports") or {}
+    if not isinstance(reports, dict):
+        reports = {}
+    missing = [k for k in ("market", "social", "news", "fundamentals") if not reports.get(k)]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is missing reports required to recompute dimensions: {missing}",
+        )
+
+    llm = _build_llm_for_dimensions(_service_config)
+    try:
+        dims = build_dimensions(
+            ticker=rec["ticker"],
+            as_of_date=rec["date"],
+            analyst_reports={
+                "market": reports.get("market") or "",
+                "social": reports.get("social") or "",
+                "news": reports.get("news") or "",
+                "fundamentals": reports.get("fundamentals") or "",
+            },
+            llm=llm,
+            config=_service_config,
+        )
+        commentary = build_commentary_orchestrator(
+            dimensions=dims,
+            pm_decision_text=reports.get("portfolio_decision") or "",
+            llm=llm,
+        )
+    except DimensionsBuildError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    rec["dimensions"] = dims.model_dump()
+    rec["dimensions_commentary"] = commentary.model_dump()
+    rec["dimensions_error"] = None
+
+    created_at_raw = rec.get("created_at") or ""
+    try:
+        created_dt = (
+            datetime.fromisoformat(created_at_raw.replace("Z", ""))
+            if created_at_raw
+            else datetime.utcnow()
+        )
+    except ValueError:
+        created_dt = datetime.utcnow()
+
+    persist_completed_run(
+        store,
+        job_id=rec["job_id"],
+        ticker=rec["ticker"],
+        date=rec["date"],
+        result=rec,
+        created_at=created_dt,
+        batch_id=rec.get("batch_id"),
+        config_snapshot=rec.get("config_snapshot"),
+    )
+    return HistoryRunDetail.model_validate(rec).model_dump()
