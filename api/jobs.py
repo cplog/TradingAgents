@@ -16,6 +16,9 @@ from typing import Any, Dict, Optional
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
+from api.dimensions.builder import (
+    DimensionsBuildError, build_commentary, build_dimensions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,7 @@ class JobRecord:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     config_snapshot: Dict[str, Any] = field(default_factory=dict)
+    cancellation_requested: bool = False
 
 
 class JobStore:
@@ -71,6 +75,22 @@ class JobStore:
         if rec:
             rec.status = "failed"
             rec.error = error
+
+    def request_cancellation(self, job_id: str) -> bool:
+        rec = self._jobs.get(job_id)
+        if not rec:
+            return False
+        rec.cancellation_requested = True
+        return True
+
+    def is_cancellation_requested(self, job_id: str) -> bool:
+        rec = self._jobs.get(job_id)
+        return bool(rec and rec.cancellation_requested)
+
+    def mark_cancelled(self, job_id: str) -> None:
+        rec = self._jobs.get(job_id)
+        if rec:
+            rec.status = "cancelled"
 
     def _prune(self) -> None:
         cutoff = datetime.utcnow() - self._ttl
@@ -131,7 +151,98 @@ class Worker:
                     date=date,
                     config=config,
                 )
-                self.store.set_result(job_id, result)
+
+                # --- Dimensions post-pass (failure-isolated) ---
+                dimensions_enabled = bool(config.get("dimensions_enabled", True))
+                if dimensions_enabled and not self.store.is_cancellation_requested(job_id):
+                    try:
+                        self.store.append_progress(
+                            job_id, "Building dimensions: extracting facts (yfinance)…",
+                            stage="dimensions",
+                        )
+                        self.store.append_progress(
+                            job_id,
+                            "Building dimensions: loading sector peers…",
+                            stage="dimensions",
+                        )
+                        self.store.append_progress(
+                            job_id,
+                            "Building dimensions: scoring 16 pillars (1 LLM call)…",
+                            stage="dimensions",
+                        )
+                        from tradingagents.llm_clients import create_llm_client
+                        llm_client = create_llm_client(
+                            provider=config.get("llm_provider", "openai"),
+                            model=config.get("quick_think_llm", "gpt-4o-mini"),
+                            base_url=config.get("backend_url"),
+                        )
+                        llm = llm_client.get_llm()
+                        analyst_reports = {
+                            "market": final_state.get("market_report") or "",
+                            "social": final_state.get("sentiment_report") or "",
+                            "news": final_state.get("news_report") or "",
+                            "fundamentals": final_state.get("fundamentals_report") or "",
+                        }
+                        dimensions = await loop.run_in_executor(
+                            None,
+                            lambda: build_dimensions(
+                                ticker=ticker, as_of_date=date,
+                                analyst_reports=analyst_reports, llm=llm, config=config,
+                            ),
+                        )
+                        self.store.append_progress(
+                            job_id,
+                            "Building dimensions: computing 6 factor scores…",
+                            stage="dimensions",
+                        )
+                        if not self.store.is_cancellation_requested(job_id):
+                            self.store.append_progress(
+                                job_id,
+                                "Building dimensions: writing commentary (1 LLM call)…",
+                                stage="dimensions",
+                            )
+                            commentary = await loop.run_in_executor(
+                                None,
+                                lambda: build_commentary(
+                                    dimensions=dimensions,
+                                    pm_decision_text=final_state.get("final_trade_decision") or "",
+                                    llm=llm,
+                                ),
+                            )
+                            result["dimensions_commentary"] = commentary.model_dump()
+                        result["dimensions"] = dimensions.model_dump()
+                        self.store.append_progress(
+                            job_id,
+                            f"Dimensions built (version {dimensions.dimensions_version}). Persisting…",
+                            stage="dimensions",
+                        )
+                    except DimensionsBuildError as exc:
+                        logger.warning("Dimensions build failed for %s: %s", job_id, exc)
+                        result["dimensions"] = None
+                        result["dimensions_commentary"] = None
+                        result["dimensions_error"] = str(exc)
+                        self.store.append_progress(
+                            job_id, f"Dimensions skipped: {exc}",
+                            stage="dimensions_skipped",
+                        )
+                    except Exception as exc:
+                        logger.exception("Unexpected dimensions failure for %s", job_id)
+                        result["dimensions"] = None
+                        result["dimensions_commentary"] = None
+                        result["dimensions_error"] = f"{type(exc).__name__}: {exc}"
+                        self.store.append_progress(
+                            job_id, f"Dimensions skipped: {exc}",
+                            stage="dimensions_skipped",
+                        )
+
+                if self.store.is_cancellation_requested(job_id):
+                    self.store.set_result(job_id, result)
+                    self.store.append_progress(
+                        job_id, "Job cancelled at stage boundary; partial result returned.",
+                        stage="cancelled",
+                    )
+                else:
+                    self.store.set_result(job_id, result)
                 logger.info("Job %s completed for %s", job_id, ticker)
             except Exception as exc:
                 logger.exception("Job %s failed for %s", job_id, ticker)
