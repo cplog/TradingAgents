@@ -185,6 +185,34 @@ An interface will appear showing results as they load, letting you track the age
   <img src="assets/cli/cli_transaction.png" width="100%" style="display: inline-block; margin: 0 2%;">
 </p>
 
+### Standardized stock dimensions
+
+Every completed run also produces a standardized dimensions layer:
+
+- **Facts** — ~30 deterministic yfinance fields (price, valuation, growth, quality, etc.)
+- **Pillar scores** — 16 LLM-judged 1-5 sub-dimensions across Market / Sentiment / News / Fundamentals
+- **Factor scores** — 6 cross-cutting 0-100 scores (Value, Growth, Quality, Momentum, Low-Risk, Sentiment)
+- **Commentary** — a one-paragraph dimensions-grounded second opinion on the Portfolio Manager decision
+
+Surfaced via:
+
+- `GET /jobs/{job_id}/dimensions` — full dimensions for a completed run
+- `GET /dimensions/{ticker}` — facts-only preview (no LLM call) for screening
+- `POST /history/runs/{run_id}/recompute-dimensions` — rebuild dimensions for an older run
+- The frontend Dashboard, Batch, History, Compare, and new `/screener` page
+
+Toggle off per-job via `config_overrides.dimensions_enabled = false` (adds ~2 LLM calls per run otherwise).
+
+Pre-warm the peer cache for cross-stock percentile ranking:
+
+```bash
+python scripts/warm_peer_cache.py --sector Technology \
+  --industry "Consumer Electronics" \
+  --tickers AAPL MSFT GOOGL META AMZN NVDA AMD
+```
+
+See `docs/superpowers/specs/2026-05-13-standardized-stock-dimensions-design.md` for the full design.
+
 ## TradingAgents Package
 
 ### Implementation Details
