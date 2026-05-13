@@ -16,9 +16,12 @@ def _reload_client():
 
 
 def test_resolver_returns_default_when_env_unset(monkeypatch):
-    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    # Test environments may auto-load .env files; force the canonical default.
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.delenv("OLLAMA_CF_URL", raising=False)
     mod = _reload_client()
     assert mod._resolve_provider_base_url("ollama") == "http://localhost:11434/v1"
+    assert mod._resolve_provider_base_url("ollama-local") == "http://localhost:11434/v1"
 
 
 def test_resolver_returns_env_when_set(monkeypatch):
@@ -27,9 +30,25 @@ def test_resolver_returns_env_when_set(monkeypatch):
     assert mod._resolve_provider_base_url("ollama") == "http://remote-ollama:11434/v1"
 
 
+def test_ollama_base_url_normalizer_appends_v1_when_missing(monkeypatch):
+    mod = _reload_client()
+    assert mod._normalize_ollama_openai_base_url("https://ollama.example.com") == "https://ollama.example.com/v1"
+    assert mod._normalize_ollama_openai_base_url("https://ollama.example.com/") == "https://ollama.example.com/v1"
+    assert mod._normalize_ollama_openai_base_url("https://ollama.example.com/v1") == "https://ollama.example.com/v1"
+
+
+def test_resolver_uses_cf_url_alias_when_primary_unset(monkeypatch):
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    monkeypatch.setenv("OLLAMA_CF_URL", "https://ollama.example.com/v1")
+    mod = _reload_client()
+    assert mod._resolve_provider_base_url("ollama") == "https://ollama.example.com/v1"
+    assert mod._resolve_provider_base_url("ollama-remote") == "https://ollama.example.com/v1"
+
+
 def test_resolver_evaluation_is_call_time(monkeypatch):
     """Setting the env AFTER module import must still take effect."""
     monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_CF_URL", raising=False)
     mod = _reload_client()
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://late-set:11434/v1")
     assert mod._resolve_provider_base_url("ollama") == "http://late-set:11434/v1"
@@ -64,6 +83,41 @@ def test_explicit_base_url_overrides_env(monkeypatch):
     llm = client.get_llm()
     assert "explicit" in str(llm.openai_api_base)
     assert "env-set" not in str(llm.openai_api_base)
+
+
+def test_ollama_api_key_uses_cf_token(monkeypatch):
+    monkeypatch.setenv("OLLAMA_CF_TOKEN", "cf-token-123")
+    mod = _reload_client()
+    assert mod._resolve_ollama_api_key("ollama") == "cf-token-123"
+    assert mod._resolve_ollama_api_key("ollama-remote") == "cf-token-123"
+
+
+def test_ollama_api_key_falls_back_to_generic_alias_then_default(monkeypatch):
+    monkeypatch.delenv("OLLAMA_CF_TOKEN", raising=False)
+    monkeypatch.setenv("OLLAMA_API_KEY", "ollama-api-key")
+    mod = _reload_client()
+    assert mod._resolve_ollama_api_key("ollama") == "ollama-api-key"
+    assert mod._resolve_ollama_api_key("ollama-local") == "ollama-api-key"
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    mod = _reload_client()
+    assert mod._resolve_ollama_api_key("ollama") == "ollama"
+
+
+def test_ollama_remote_cf_headers(monkeypatch):
+    monkeypatch.setenv("OLLAMA_CF_TOKEN", "cf-token")
+    monkeypatch.setenv("OLLAMA_CF_CLIENT_ID", "cid")
+    monkeypatch.setenv("OLLAMA_CF_CLIENT_SECRET", "csecret")
+    mod = _reload_client()
+    headers = mod._resolve_ollama_headers("ollama-remote")
+    assert headers["CF-Access-Token"] == "cf-token"
+    assert headers["CF-Access-Client-Id"] == "cid"
+    assert headers["CF-Access-Client-Secret"] == "csecret"
+
+
+def test_ollama_local_has_no_cf_headers(monkeypatch):
+    monkeypatch.setenv("OLLAMA_CF_TOKEN", "cf-token")
+    mod = _reload_client()
+    assert mod._resolve_ollama_headers("ollama-local") == {}
 
 
 # ---- cli.utils side: select_llm_provider dropdown -------------------------

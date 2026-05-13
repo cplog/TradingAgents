@@ -175,6 +175,34 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Custom model ID", "custom"),
         ],
     },
+    "ollama-local": {
+        "quick": [
+            ("Qwen3:latest (8B)", "qwen3:latest"),
+            ("GPT-OSS:latest (20B)", "gpt-oss:latest"),
+            ("GLM-4.7-Flash:latest (30B)", "glm-4.7-flash:latest"),
+            ("Custom model ID", "custom"),
+        ],
+        "deep": [
+            ("GLM-4.7-Flash:latest (30B)", "glm-4.7-flash:latest"),
+            ("GPT-OSS:latest (20B)", "gpt-oss:latest"),
+            ("Qwen3:latest (8B)", "qwen3:latest"),
+            ("Custom model ID", "custom"),
+        ],
+    },
+    "ollama-remote": {
+        "quick": [
+            ("Qwen3:latest (8B)", "qwen3:latest"),
+            ("GPT-OSS:latest (20B)", "gpt-oss:latest"),
+            ("GLM-4.7-Flash:latest (30B)", "glm-4.7-flash:latest"),
+            ("Custom model ID", "custom"),
+        ],
+        "deep": [
+            ("GLM-4.7-Flash:latest (30B)", "glm-4.7-flash:latest"),
+            ("GPT-OSS:latest (20B)", "gpt-oss:latest"),
+            ("Qwen3:latest (8B)", "qwen3:latest"),
+            ("Custom model ID", "custom"),
+        ],
+    },
 }
 
 

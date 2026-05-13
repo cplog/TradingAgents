@@ -1,6 +1,8 @@
 """yfinance-based news data fetching functions."""
 
-from typing import Optional
+from __future__ import annotations
+
+from typing import Any, List, Optional
 
 import yfinance as yf
 from datetime import datetime
@@ -200,3 +202,96 @@ def get_global_news_yfinance(
 
     except Exception as e:
         return f"Error fetching global news: {str(e)}"
+
+
+def fetch_macro_news_feed_items(
+    curr_date: str,
+    *,
+    look_back_days: Optional[int] = None,
+    limit: Optional[int] = None,
+) -> List[dict[str, Any]]:
+    """Macro headlines from Yahoo Finance Search (same queries as ``get_global_news_yfinance``).
+
+    Returns one dict per article: title, summary, publisher, link, pub_date (ISO ``Z`` or ``None``).
+    """
+    config = get_config()
+    if look_back_days is None:
+        look_back_days = config["global_news_lookback_days"]
+    if limit is None:
+        limit = config["global_news_article_limit"]
+    search_queries = config["global_news_queries"]
+
+    all_news: list[dict] = []
+    seen_titles: set[str] = set()
+
+    for query in search_queries:
+        search = yf_retry(
+            lambda q=query: yf.Search(
+                query=q,
+                news_count=limit,
+                enable_fuzzy_query=True,
+            )
+        )
+
+        if search.news:
+            for article in search.news:
+                if "content" in article:
+                    data = _extract_article_data(article)
+                    title = data["title"]
+                else:
+                    title = article.get("title", "")
+
+                if title and title not in seen_titles:
+                    seen_titles.add(title)
+                    all_news.append(article)
+
+        if len(all_news) >= limit:
+            break
+
+    if not all_news:
+        return []
+
+    curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+    out: List[dict[str, Any]] = []
+    for article in all_news[:limit]:
+        if "content" in article:
+            data = _extract_article_data(article)
+            if data.get("pub_date"):
+                pub_naive = (
+                    data["pub_date"].replace(tzinfo=None)
+                    if hasattr(data["pub_date"], "replace")
+                    else data["pub_date"]
+                )
+                if pub_naive > curr_dt + relativedelta(days=1):
+                    continue
+            title = data["title"]
+            publisher = data["publisher"]
+            link = data["link"]
+            summary = data["summary"]
+            pub = data.get("pub_date")
+        else:
+            title = article.get("title", "No title")
+            publisher = article.get("publisher", "Unknown")
+            link = article.get("link", "")
+            summary = ""
+            pub = None
+
+        pub_s: str | None = None
+        if pub:
+            try:
+                naive = pub.replace(tzinfo=None) if hasattr(pub, "replace") else pub
+                pub_s = naive.isoformat() + "Z"  # type: ignore[union-attr]
+            except (AttributeError, ValueError):
+                pub_s = str(pub)
+
+        out.append(
+            {
+                "title": title,
+                "summary": summary or "",
+                "publisher": publisher,
+                "link": link or "",
+                "pub_date": pub_s,
+            }
+        )
+
+    return out

@@ -13,6 +13,22 @@ from typing import Any, Dict, Optional
 from api.tickers import _safe_ticker_component
 
 
+def rating_to_confidence(rating: str) -> float:
+    """Map PM rating text to a rough confidence score for batch tables."""
+    r = (rating or "").strip().lower()
+    tiers = {
+        "buy": 0.92,
+        "overweight": 0.78,
+        "hold": 0.55,
+        "underweight": 0.35,
+        "sell": 0.18,
+    }
+    for word, score in tiers.items():
+        if word in r:
+            return score
+    return 0.5
+
+
 def build_result(
     final_state: Dict[str, Any],
     rating: str,
@@ -61,6 +77,7 @@ def build_result(
         "ticker": ticker,
         "date": date,
         "rating": rating,
+        "confidence": rating_to_confidence(rating),
         "reports": reports,
         "structured": structured if structured else None,
         "artifacts_path": str(artifact_path),

@@ -104,3 +104,55 @@ def fetch_reddit_posts(
             f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"
         )
     return "\n\n".join(blocks)
+
+
+def _reddit_post_permalink(p: dict) -> str:
+    """Best URL for opening a post (self or link)."""
+    url = (p.get("url") or "").strip()
+    if url.startswith("http") and "reddit.com" not in url:
+        return url
+    perm = (p.get("permalink") or "").strip()
+    if perm.startswith("/"):
+        return f"https://www.reddit.com{perm}"
+    if url.startswith("http"):
+        return url
+    return ""
+
+
+def fetch_reddit_feed_items(
+    ticker: str,
+    *,
+    subreddits: Iterable[str] = DEFAULT_SUBREDDITS,
+    limit_per_sub: int = 5,
+    timeout: float = 10.0,
+    inter_request_delay: float = 0.4,
+) -> list[dict]:
+    """Structured posts for the API news feed (one dict per post).
+
+    Keys: title, summary, publisher, link, pub_date (ISO or None).
+    """
+    out: list[dict] = []
+    for i, sub in enumerate(subreddits):
+        if i > 0:
+            time.sleep(inter_request_delay)
+        posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        for p in posts:
+            title = (p.get("title") or "").replace("\n", " ").strip() or "(no title)"
+            selftext = (p.get("selftext") or "").replace("\n", " ").strip()
+            if len(selftext) > 500:
+                selftext = selftext[:500] + "…"
+            created = p.get("created_utc")
+            pub_s = None
+            if created is not None:
+                try:
+                    pub_s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(created)))
+                except (TypeError, ValueError, OSError):
+                    pass
+            out.append({
+                "title": title,
+                "summary": selftext,
+                "publisher": f"r/{sub}",
+                "link": _reddit_post_permalink(p),
+                "pub_date": pub_s,
+            })
+    return out

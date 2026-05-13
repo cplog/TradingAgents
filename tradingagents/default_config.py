@@ -1,3 +1,4 @@
+import copy
 import os
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
@@ -21,6 +22,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_OPENROUTER_FREE_ONLY": "openrouter_free_only",
     "TRADINGAGENTS_MAX_CONCURRENCY":      "max_concurrency",
     "TRADINGAGENTS_JOB_TTL_HOURS":        "job_ttl_hours",
+    "TRADINGAGENTS_LLM_TEMPERATURE":      "llm_temperature",
 }
 
 
@@ -32,6 +34,12 @@ def _coerce(value: str, reference):
         return int(value)
     if isinstance(reference, float):
         return float(value)
+    # Env-only keys whose template default is None (e.g. llm_temperature)
+    if reference is None:
+        try:
+            return float(value)
+        except ValueError:
+            return value
     return value
 
 
@@ -45,7 +53,7 @@ def _apply_env_overrides(config: dict) -> dict:
     return config
 
 
-DEFAULT_CONFIG = _apply_env_overrides({
+_CONFIG_BASE: dict = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
     "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
@@ -68,6 +76,9 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
     "anthropic_effort": None,           # "high", "medium", "low"
+    # Optional sampling temperature for chat models (OpenAI-compatible, Google, Anthropic).
+    # When None, the LangChain/model default is used.
+    "llm_temperature": None,
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
@@ -127,4 +138,12 @@ DEFAULT_CONFIG = _apply_env_overrides({
         ".AX":  "^AXJO",    # Australia (ASX 200)
         "":     "SPY",      # default for US-listed tickers (no suffix)
     },
-})
+}
+
+
+def build_fresh_config() -> dict:
+    """Return a new config dict with current ``TRADINGAGENTS_*`` env applied."""
+    return _apply_env_overrides(copy.deepcopy(_CONFIG_BASE))
+
+
+DEFAULT_CONFIG = build_fresh_config()

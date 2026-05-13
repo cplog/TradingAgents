@@ -30,8 +30,10 @@ PROVIDER_API_KEY_ENV: dict[str, Optional[str]] = {
     "minimax":    "MINIMAX_API_KEY",
     "minimax-cn": "MINIMAX_CN_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
-    # Local runtimes do not authenticate.
-    "ollama":     None,
+    # Ollama local runtime does not require auth; remote front-doors may.
+    "ollama":         None,
+    "ollama-local":   None,
+    "ollama-remote":  None,
 }
 
 

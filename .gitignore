@@ -215,9 +215,15 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Node / Vite frontend
+frontend/node_modules/
+
 # Cache
 **/data_cache/
 AGENTS.md
 .DS_Store
 uv.lock
 .vscode/settings.json
+
+# Local agent workspace artifacts
+.agents/

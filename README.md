@@ -185,6 +185,34 @@ An interface will appear showing results as they load, letting you track the age
   <img src="assets/cli/cli_transaction.png" width="100%" style="display: inline-block; margin: 0 2%;">
 </p>
 
+### Web command center (React + FastAPI)
+
+Optional browser UI for single-ticker analysis, batch portfolio runs, news sentiment, and system maintenance.
+
+1. Install API extras and build the frontend:
+```bash
+pip install ".[api]"
+cd frontend && npm install && npm run build && cd ..
+```
+
+2. Run the API (serves REST + OpenAPI at `/docs` and the production SPA from `frontend/dist` when present):
+```bash
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+3. For interactive UI development with hot reload, run Vite separately (proxies API calls to port 8000):
+```bash
+cd frontend && npm run dev
+```
+
+Environment variables (see `.env.example`):
+
+- `TRADINGAGENTS_ADMIN_KEY` — required for `POST /admin/runtime-config` and `POST /admin/cache/clear`.
+- `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_KV_NAMESPACE_ID`, `CLOUDFLARE_API_TOKEN` — optional; when set, runtime config and persisted secrets use Workers KV instead of `~/.tradingagents/api_state.json`.
+- `TRADINGAGENTS_API_STATE_FILE` — optional path override for the local JSON state file.
+
+Docker Compose profile `api` still runs `uvicorn api.main:app` on port 8000; build the frontend before building the image if you want the bundled SPA.
+
 ### Standardized stock dimensions
 
 Every completed run also produces a standardized dimensions layer:
