@@ -19,8 +19,14 @@ def test_pillar_score_validates_range():
 
 
 def test_factor_score_allows_null():
-    fs = FactorScore(score=None, inputs={"reason": "no_inputs"})
+    fs = FactorScore(score=None, inputs={})
     assert fs.score is None
+    assert fs.inputs == {}
+
+
+def test_factor_score_inputs_must_be_floats():
+    with pytest.raises(ValidationError):
+        FactorScore(score=50.0, inputs={"reason": "no_inputs"})
 
 
 def test_factor_score_validates_range():

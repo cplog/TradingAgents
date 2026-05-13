@@ -1,7 +1,7 @@
 """Pydantic schemas for the standardized stock dimensions layer."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -105,7 +105,7 @@ class PillarScores(BaseModel):
 
 class FactorScore(BaseModel):
     score: Optional[float] = Field(default=None, ge=0.0, le=100.0)
-    inputs: Dict[str, Any] = Field(default_factory=dict)
+    inputs: Dict[str, float] = Field(default_factory=dict)
 
 
 class FactorScores(BaseModel):
