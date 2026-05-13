@@ -1,0 +1,11 @@
+{
+  "currency": "HKD",
+  "exchange": "HKG",
+  "sector": "Communication Services",
+  "industry": "Internet Content & Information",
+  "marketCap": 4000000000000,
+  "regularMarketPrice": 380.0,
+  "trailingPE": 17.0,
+  "forwardPE": 14.5,
+  "returnOnEquity": 0.18
+}
