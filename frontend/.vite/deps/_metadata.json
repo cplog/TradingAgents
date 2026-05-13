@@ -1,0 +1,58 @@
+{
+  "hash": "8b1ebc34",
+  "configHash": "3b7d558a",
+  "lockfileHash": "372806b8",
+  "browserHash": "7a74f881",
+  "optimized": {
+    "react/jsx-dev-runtime": {
+      "src": "../../node_modules/react/jsx-dev-runtime.js",
+      "file": "react_jsx-dev-runtime.js",
+      "fileHash": "298ccb01",
+      "needsInterop": true
+    },
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "92b5dbdd",
+      "needsInterop": true
+    },
+    "react-dom/client": {
+      "src": "../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "63289ed0",
+      "needsInterop": true
+    },
+    "react-router-dom": {
+      "src": "../../node_modules/react-router-dom/dist/index.mjs",
+      "file": "react-router-dom.js",
+      "fileHash": "49453147",
+      "needsInterop": false
+    },
+    "react-markdown": {
+      "src": "../../node_modules/react-markdown/index.js",
+      "file": "react-markdown.js",
+      "fileHash": "a4d10c5d",
+      "needsInterop": false
+    },
+    "remark-gfm": {
+      "src": "../../node_modules/remark-gfm/index.js",
+      "file": "remark-gfm.js",
+      "fileHash": "f0873d93",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-LV5CB5Y7": {
+      "file": "chunk-LV5CB5Y7.js"
+    },
+    "chunk-MQ4DZOKW": {
+      "file": "chunk-MQ4DZOKW.js"
+    },
+    "chunk-R5GCASJP": {
+      "file": "chunk-R5GCASJP.js"
+    },
+    "chunk-DC5AMYBS": {
+      "file": "chunk-DC5AMYBS.js"
+    }
+  }
+}

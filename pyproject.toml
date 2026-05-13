@@ -17,8 +17,11 @@ dependencies = [
     "langchain-openai>=0.3.23",
     "langgraph>=0.4.8",
     "langgraph-checkpoint-sqlite>=2.0.0",
+    # Optional pandas accelerator; old wheels break on NumPy 2.x (`_ARRAY_API not found`).
+    "numexpr>=2.10.0",
     "pandas>=2.3.0",
     "parsel>=1.10.0",
+    "python-dotenv>=1.1.0",
     "pytz>=2025.2",
     "questionary>=2.1.0",
     "redis>=6.2.0",
@@ -36,7 +39,7 @@ dependencies = [
 tradingagents = "cli.main:app"
 
 [project.optional-dependencies]
-api = ["fastapi>=0.115.0", "uvicorn>=0.34.0", "python-multipart>=0.0.20"]
+api = ["fastapi>=0.115.0", "uvicorn>=0.34.0", "python-multipart>=0.0.20", "pytest-asyncio"]
 
 [tool.setuptools.packages.find]
 include = ["tradingagents*", "cli*", "api*"]

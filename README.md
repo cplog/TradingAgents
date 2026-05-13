@@ -185,6 +185,62 @@ An interface will appear showing results as they load, letting you track the age
   <img src="assets/cli/cli_transaction.png" width="100%" style="display: inline-block; margin: 0 2%;">
 </p>
 
+### Web command center (React + FastAPI)
+
+Optional browser UI for single-ticker analysis, batch portfolio runs, news sentiment, and system maintenance.
+
+1. Install API extras and build the frontend:
+```bash
+pip install ".[api]"
+cd frontend && npm install && npm run build && cd ..
+```
+
+2. Run the API (serves REST + OpenAPI at `/docs` and the production SPA from `frontend/dist` when present):
+```bash
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+3. For interactive UI development with hot reload, run Vite separately (proxies API calls to port 8000):
+```bash
+cd frontend && npm run dev
+```
+
+Environment variables (see `.env.example`):
+
+- `TRADINGAGENTS_ADMIN_KEY` — required for `POST /admin/runtime-config` and `POST /admin/cache/clear`.
+- `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_KV_NAMESPACE_ID`, `CLOUDFLARE_API_TOKEN` — optional; when set, runtime config and persisted secrets use Workers KV instead of `~/.tradingagents/api_state.json`.
+- `TRADINGAGENTS_API_STATE_FILE` — optional path override for the local JSON state file.
+
+Docker Compose profile `api` still runs `uvicorn api.main:app` on port 8000; build the frontend before building the image if you want the bundled SPA.
+
+### Standardized stock dimensions
+
+Every completed run also produces a standardized dimensions layer:
+
+- **Facts** — ~30 deterministic yfinance fields (price, valuation, growth, quality, etc.)
+- **Pillar scores** — 16 LLM-judged 1-5 sub-dimensions across Market / Sentiment / News / Fundamentals
+- **Factor scores** — 6 cross-cutting 0-100 scores (Value, Growth, Quality, Momentum, Low-Risk, Sentiment)
+- **Commentary** — a one-paragraph dimensions-grounded second opinion on the Portfolio Manager decision
+
+Surfaced via:
+
+- `GET /jobs/{job_id}/dimensions` — full dimensions for a completed run
+- `GET /dimensions/{ticker}` — facts-only preview (no LLM call) for screening
+- `POST /history/runs/{run_id}/recompute-dimensions` — rebuild dimensions for an older run
+- The frontend Dashboard, Batch, History, Compare, and new `/screener` page
+
+Toggle off per-job via `config_overrides.dimensions_enabled = false` (adds ~2 LLM calls per run otherwise).
+
+Pre-warm the peer cache for cross-stock percentile ranking:
+
+```bash
+python scripts/warm_peer_cache.py --sector Technology \
+  --industry "Consumer Electronics" \
+  --tickers AAPL MSFT GOOGL META AMZN NVDA AMD
+```
+
+See `docs/superpowers/specs/2026-05-13-standardized-stock-dimensions-design.md` for the full design.
+
 ## TradingAgents Package
 
 ### Implementation Details

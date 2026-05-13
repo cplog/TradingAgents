@@ -24,7 +24,7 @@ def test_every_select_llm_provider_choice_has_an_entry():
         "qwen", "qwen-cn",
         "glm", "glm-cn",
         "minimax", "minimax-cn",
-        "openrouter", "azure", "ollama",
+        "openrouter", "azure", "ollama", "ollama-local", "ollama-remote",
     }
     assert expected.issubset(PROVIDER_API_KEY_ENV.keys())
 
@@ -53,6 +53,8 @@ def test_known_providers_resolve(provider, env_var):
 
 def test_ollama_has_no_key():
     assert get_api_key_env("ollama") is None
+    assert get_api_key_env("ollama-local") is None
+    assert get_api_key_env("ollama-remote") is None
 
 
 def test_unknown_provider_returns_none():
@@ -87,6 +89,16 @@ def test_ensure_api_key_no_op_for_ollama(monkeypatch, cli_utils):
     with patch.object(cli_utils, "questionary") as mock_q:
         result = cli_utils.ensure_api_key("ollama")
     assert result is None
+    mock_q.password.assert_not_called()
+
+
+def test_ensure_api_key_no_op_for_ollama_modes(monkeypatch, cli_utils):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with patch.object(cli_utils, "questionary") as mock_q:
+        local = cli_utils.ensure_api_key("ollama-local")
+        remote = cli_utils.ensure_api_key("ollama-remote")
+    assert local is None
+    assert remote is None
     mock_q.password.assert_not_called()
 
 

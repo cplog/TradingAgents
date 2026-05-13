@@ -132,7 +132,7 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
 
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "reasoning_effort",
+    "timeout", "max_retries", "reasoning_effort", "temperature",
     "api_key", "callbacks", "http_client", "http_async_client",
 )
 
@@ -152,25 +152,76 @@ _PROVIDER_BASE_URL = {
     "minimax-cn": "https://api.minimaxi.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "ollama":     "http://localhost:11434/v1",
+    "ollama-local": "http://localhost:11434/v1",
+    "ollama-remote": "http://localhost:11434/v1",
 }
 
 
 def _resolve_provider_base_url(provider: str) -> Optional[str]:
     """Default base URL for ``provider``, with env-var overrides where defined.
 
-    Currently only Ollama supports an env-var override (``OLLAMA_BASE_URL``),
-    matching the convention in the broader Ollama tooling ecosystem so users
-    can point at a remote ollama-serve without editing code. The check is
-    call-time, not import-time, so tests that monkeypatch the env after
-    import behave correctly.
+    Currently only Ollama supports env-var overrides. Resolution order:
+    1) ``OLLAMA_BASE_URL`` (existing convention)
+    2) ``OLLAMA_CF_URL`` (Cloudflare tunnel/front-door alias)
+
+    This keeps backward compatibility while allowing users to keep Cloudflare
+    endpoint vars grouped as ``OLLAMA_CF_*``. The check is call-time, not
+    import-time, so tests that monkeypatch env after import behave correctly.
     """
-    if provider == "ollama":
+    if provider == "ollama-local":
         env_url = os.environ.get("OLLAMA_BASE_URL")
+        if env_url:
+            return env_url
+    elif provider == "ollama-remote":
+        env_url = os.environ.get("OLLAMA_CF_URL") or os.environ.get("OLLAMA_BASE_URL")
+        if env_url:
+            return env_url
+    elif provider == "ollama":
+        env_url = os.environ.get("OLLAMA_BASE_URL") or os.environ.get("OLLAMA_CF_URL")
         if env_url:
             return env_url
     return _PROVIDER_BASE_URL.get(provider)
 
 
+def _normalize_ollama_openai_base_url(raw: Optional[str]) -> Optional[str]:
+    """Ensure Ollama OpenAI-compatible base URL ends with /v1."""
+    if not raw:
+        return raw
+    base = raw.rstrip("/")
+    if base.endswith("/v1"):
+        return base
+    return f"{base}/v1"
+
+
+def _resolve_ollama_api_key(provider: str) -> str:
+    """Resolve auth token for Ollama-compatible endpoints.
+
+    Local ``ollama-serve`` does not require auth, so ``"ollama"`` remains the
+    fallback sentinel token. For remote front-doors (Cloudflare Tunnel, API
+    gateway), allow users to supply:
+    - ``OLLAMA_CF_TOKEN`` (preferred for Cloudflare naming consistency)
+    - ``OLLAMA_API_KEY`` (generic alias)
+    """
+    if provider == "ollama-local":
+        return os.environ.get("OLLAMA_API_KEY") or "ollama"
+    return os.environ.get("OLLAMA_CF_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "ollama"
+
+
+def _resolve_ollama_headers(provider: str) -> dict[str, str]:
+    """Return optional extra headers for Ollama front-doors."""
+    if provider != "ollama-remote":
+        return {}
+
+    headers: dict[str, str] = {}
+    access_token = os.environ.get("OLLAMA_CF_TOKEN", "").strip()
+    client_id = os.environ.get("OLLAMA_CF_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("OLLAMA_CF_CLIENT_SECRET", "").strip()
+    if access_token:
+        headers["CF-Access-Token"] = access_token
+    if client_id and client_secret:
+        headers["CF-Access-Client-Id"] = client_id
+        headers["CF-Access-Client-Secret"] = client_secret
+    return headers
 class OpenAIClient(BaseLLMClient):
     """Client for OpenAI, Ollama, OpenRouter, and xAI providers.
 
@@ -200,6 +251,8 @@ class OpenAIClient(BaseLLMClient):
         # provider default so users can route through their own gateway.
         if self.provider in _PROVIDER_BASE_URL:
             llm_kwargs["base_url"] = self.base_url or _resolve_provider_base_url(self.provider)
+            if self.provider in ("ollama", "ollama-local", "ollama-remote"):
+                llm_kwargs["base_url"] = _normalize_ollama_openai_base_url(llm_kwargs["base_url"])
             api_key_env = get_api_key_env(self.provider)
             if api_key_env:
                 api_key = os.environ.get(api_key_env)
@@ -212,7 +265,10 @@ class OpenAIClient(BaseLLMClient):
                         f"(e.g. add {api_key_env}=your_key to your .env file)."
                     )
             else:
-                llm_kwargs["api_key"] = "ollama"
+                llm_kwargs["api_key"] = _resolve_ollama_api_key(self.provider)
+                extra_headers = _resolve_ollama_headers(self.provider)
+                if extra_headers:
+                    llm_kwargs["default_headers"] = extra_headers
         elif self.base_url:
             llm_kwargs["base_url"] = self.base_url
 

@@ -81,3 +81,59 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
         f"Total: {total} most-recent messages"
     )
     return summary + "\n\n" + "\n".join(lines)
+
+
+def fetch_stocktwits_feed_items(
+    ticker: str,
+    *,
+    limit: int = 30,
+    timeout: float = 10.0,
+) -> list[dict]:
+    """Structured messages for the API news feed.
+
+    Each dict: title, summary, publisher, link, pub_date (ISO or ""),
+    sentiment_basic (``Bullish`` / ``Bearish`` / None).
+    """
+    url = _API.format(ticker=ticker.upper())
+    req = Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+    except (HTTPError, URLError, json.JSONDecodeError, TimeoutError) as exc:
+        logger.warning("StockTwits structured fetch failed for %s: %s", ticker, exc)
+        raise
+
+    messages = data.get("messages", []) if isinstance(data, dict) else []
+    out: list[dict] = []
+    for m in messages[:limit]:
+        body = (m.get("body") or "").replace("\n", " ").strip()
+        if not body:
+            continue
+        title = body if len(body) <= 140 else body[:137] + "…"
+        user = (m.get("user") or {}).get("username") or ""
+        mid = m.get("id")
+        link = (
+            f"https://stocktwits.com/{user}/message/{mid}"
+            if user and mid is not None
+            else f"https://stocktwits.com/symbol/{ticker.upper()}"
+        )
+        created = m.get("created_at") or ""
+        pub_s = ""
+        if created:
+            try:
+                dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                pub_s = dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except (ValueError, TypeError):
+                pub_s = str(created)
+        entities = m.get("entities") or {}
+        sentiment_obj = entities.get("sentiment") or {}
+        basic = sentiment_obj.get("basic") if isinstance(sentiment_obj, dict) else None
+        out.append({
+            "title": title,
+            "summary": body,
+            "publisher": f"@{user}" if user else "StockTwits",
+            "link": link,
+            "pub_date": pub_s or None,
+            "sentiment_basic": basic,
+        })
+    return out

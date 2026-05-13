@@ -152,6 +152,13 @@ class TradingAgentsGraph:
             if effort:
                 kwargs["effort"] = effort
 
+        temp = self.config.get("llm_temperature")
+        if temp is not None:
+            try:
+                kwargs["temperature"] = float(temp)
+            except (TypeError, ValueError):
+                pass
+
         return kwargs
 
     def _create_tool_nodes(self) -> Dict[str, ToolNode]:

@@ -1,3 +1,4 @@
+import copy
 import os
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
@@ -18,9 +19,13 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_MAX_RECUR_LIMIT":      "max_recur_limit",
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
+<<<<<<< HEAD
     "TRADINGAGENTS_OPENROUTER_FREE_ONLY": "openrouter_free_only",
     "TRADINGAGENTS_MAX_CONCURRENCY":      "max_concurrency",
     "TRADINGAGENTS_JOB_TTL_HOURS":        "job_ttl_hours",
+    "TRADINGAGENTS_LLM_TEMPERATURE":      "llm_temperature",
+=======
+>>>>>>> 78d063d (feat(reflection): configurable alpha benchmark for non-US tickers)
 }
 
 
@@ -32,6 +37,12 @@ def _coerce(value: str, reference):
         return int(value)
     if isinstance(reference, float):
         return float(value)
+    # Env-only keys whose template default is None (e.g. llm_temperature)
+    if reference is None:
+        try:
+            return float(value)
+        except ValueError:
+            return value
     return value
 
 
@@ -45,7 +56,7 @@ def _apply_env_overrides(config: dict) -> dict:
     return config
 
 
-DEFAULT_CONFIG = _apply_env_overrides({
+_CONFIG_BASE: dict = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
     "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
@@ -68,13 +79,18 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
     "anthropic_effort": None,           # "high", "medium", "low"
+    # Optional sampling temperature for chat models (OpenAI-compatible, Google, Anthropic).
+    # When None, the LangChain/model default is used.
+    "llm_temperature": None,
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
-    "output_language": "English",
+    "output_language": os.getenv("OUTPUT_LANGUAGE", "English"),
     # Debate and discussion settings
+<<<<<<< HEAD
+<<<<<<< HEAD
     "max_debate_rounds": int(os.getenv("MAX_DEBATE_ROUNDS", "1")),
     "max_risk_discuss_rounds": int(os.getenv("MAX_RISK_DISCUSS_ROUNDS", "1")),
     "max_recur_limit": int(os.getenv("MAX_RECUR_LIMIT", "100")),
@@ -98,6 +114,23 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Service settings (API mode)
     "max_concurrency": 3,
     "job_ttl_hours": 24,
+=======
+    "max_debate_rounds": 1,
+    "max_risk_discuss_rounds": 1,
+    "max_recur_limit": 100,
+    # When True, the CLI limits OpenRouter model selection to free-tier models
+    "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
+>>>>>>> 5320475 (feat(cli): add OpenRouter free-model filter extension)
+=======
+    "max_debate_rounds": int(os.getenv("MAX_DEBATE_ROUNDS", "1")),
+    "max_risk_discuss_rounds": int(os.getenv("MAX_RISK_DISCUSS_ROUNDS", "1")),
+    "max_recur_limit": int(os.getenv("MAX_RECUR_LIMIT", "100")),
+    # When True, the CLI limits OpenRouter model selection to free-tier models
+    "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
+    # Service settings (API mode)
+    "max_concurrency": int(os.getenv("MAX_CONCURRENCY", "3")),
+    "job_ttl_hours": int(os.getenv("JOB_TTL_HOURS", "24")),
+>>>>>>> 28cefdf (feat(api): add FastAPI service with async jobs, HK/US ticker support, and env-var config)
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
@@ -127,4 +160,16 @@ DEFAULT_CONFIG = _apply_env_overrides({
         ".AX":  "^AXJO",    # Australia (ASX 200)
         "":     "SPY",      # default for US-listed tickers (no suffix)
     },
+<<<<<<< HEAD
+}
+
+
+def build_fresh_config() -> dict:
+    """Return a new config dict with current ``TRADINGAGENTS_*`` env applied."""
+    return _apply_env_overrides(copy.deepcopy(_CONFIG_BASE))
+
+
+DEFAULT_CONFIG = build_fresh_config()
+=======
 })
+>>>>>>> 78d063d (feat(reflection): configurable alpha benchmark for non-US tickers)
