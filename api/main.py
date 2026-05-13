@@ -8,13 +8,18 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
 from api.config import build_service_config, get_redacted_config, validate_api_key
+from api.dimensions import (
+    DimensionsBuildError,
+    build_dimensions_facts_only,
+)
+from api.dimensions.schemas import StockDimensions
 from api.jobs import Worker
 from api.models import AnalyzeRequest, AnalyzeResponse, JobStatusResponse
 from api.tickers import normalize_ticker, validate_date
@@ -24,6 +29,15 @@ logger = logging.getLogger(__name__)
 # Global state managed by lifespan
 _service_config: Dict[str, Any] = {}
 _worker: Worker | None = None
+
+
+def _admin_key_dep(x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")) -> None:
+    """Dependency that requires a valid X-Admin-Key header for admin endpoints."""
+    expected = os.getenv("TRADINGAGENTS_ADMIN_KEY", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin API disabled (set TRADINGAGENTS_ADMIN_KEY)")
+    if not x_admin_key or x_admin_key != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Admin-Key")
 
 
 @asynccontextmanager
@@ -197,3 +211,81 @@ async def get_report(job_id: str) -> FileResponse:
         media_type="text/markdown",
         filename=f"{record.ticker}_{record.date}_report.md",
     )
+
+
+@app.get("/jobs/{job_id}/dimensions", response_model=StockDimensions)
+async def get_job_dimensions(job_id: str) -> Dict[str, Any]:
+    """Return the StockDimensions payload produced by a completed analysis job."""
+    rec = _worker.store.get(job_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Job not found")
+    dims = (rec.result or {}).get("dimensions") if rec.result else None
+    if not dims:
+        raise HTTPException(
+            status_code=404,
+            detail="Dimensions not available for this job (still running, build failed, or disabled)",
+        )
+    return dims
+
+
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> Dict[str, Any]:
+    """Request cancellation of a running job; honored at the next stage boundary."""
+    if not _worker.store.request_cancellation(job_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+    rec = _worker.store.get(job_id)
+    return {
+        "cancellation_requested": True,
+        "status": rec.status if rec else "unknown",
+        "note": "Cancellation is honored at the next stage boundary; propagate() cannot be interrupted mid-run.",
+    }
+
+
+@app.get("/dimensions/{ticker}", response_model=StockDimensions)
+async def get_dimensions_facts_only(
+    ticker: str,
+    as_of_date: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    """Facts-only dimensions preview: factor scores only, no LLM pillars."""
+    try:
+        norm = normalize_ticker(ticker)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid ticker: {exc}")
+    d = as_of_date or datetime.utcnow().strftime("%Y-%m-%d")
+    if not validate_date(d):
+        raise HTTPException(status_code=400, detail="as_of_date must be YYYY-MM-DD")
+    try:
+        out = build_dimensions_facts_only(
+            ticker=norm, as_of_date=d, config=_service_config,
+        )
+    except DimensionsBuildError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return out.model_dump()
+
+
+@app.post("/admin/dimensions/peer-cache/refresh")
+async def admin_refresh_peer_cache(
+    body: Dict[str, Any],
+    _admin: None = Depends(_admin_key_dep),
+) -> Dict[str, Any]:
+    """Refresh peer cache for a sector+industry. Reads peer list from request or defaults."""
+    from api.dimensions.peers import PeerCache, slug_for_sector
+    from api.dimensions.facts import extract_facts
+    sector = (body or {}).get("sector")
+    industry = (body or {}).get("industry")
+    tickers = (body or {}).get("tickers") or []
+    slug = slug_for_sector(sector, industry)
+    if not slug:
+        raise HTTPException(status_code=400, detail="sector and industry required")
+    cache_dir = Path(_service_config.get("data_cache_dir") or "./data_cache") / "peer_facts"
+    cache = PeerCache(base_dir=cache_dir)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    facts: Dict[str, Dict[str, Any]] = {}
+    for t in tickers:
+        try:
+            snap, _flags = extract_facts(t, today)
+            facts[t] = snap.model_dump()
+        except Exception as exc:
+            logger.warning("peer refresh skip %s: %s", t, exc)
+    cache.write(slug, list(facts.keys()), facts)
+    return {"slug": slug, "count": len(facts), "tickers": list(facts.keys())}
