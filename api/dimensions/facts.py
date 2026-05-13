@@ -74,12 +74,124 @@ _FIELD_TO_INFO_KEY = {
 
 _INT_FIELDS = {"analyst_count"}
 
+# Price-history-derived fields are populated separately from `tk.history()`,
+# not from `info`. They still need missing-flag treatment when computation
+# cannot run (empty history, too few rows, etc.).
+_PRICE_HISTORY_FIELDS = (
+    "return_1m",
+    "return_3m",
+    "return_6m",
+    "return_12m",
+    "realized_vol_30d",
+    "rsi_14",
+    "avg_daily_dollar_volume_30d",
+)
+
+
+def _compute_return(closes, lookback: int) -> Optional[float]:
+    """Return (last_close / close_lookback_ago) - 1, or None if insufficient data."""
+    if closes is None or len(closes) <= lookback:
+        return None
+    try:
+        last = float(closes.iloc[-1])
+        prior = float(closes.iloc[-1 - lookback])
+    except (IndexError, ValueError, TypeError):
+        return None
+    if not math.isfinite(last) or not math.isfinite(prior) or prior == 0:
+        return None
+    return (last / prior) - 1.0
+
+
+def _compute_realized_vol_30d(closes) -> Optional[float]:
+    """Annualized stdev of last 30 daily log returns (× sqrt(252))."""
+    if closes is None or len(closes) < 31:
+        return None
+    try:
+        import numpy as np
+        log_returns = np.log(closes / closes.shift(1)).dropna().iloc[-30:]
+        if len(log_returns) < 30:
+            return None
+        vol = float(log_returns.std(ddof=1) * math.sqrt(252))
+    except (ValueError, TypeError, ZeroDivisionError):
+        return None
+    if not math.isfinite(vol):
+        return None
+    return vol
+
+
+def _compute_rsi_14(closes) -> Optional[float]:
+    """Standard 14-day RSI using Wilder's smoothing (SMA of gains/losses)."""
+    if closes is None or len(closes) < 15:
+        return None
+    try:
+        diffs = closes.diff().dropna()
+        if len(diffs) < 14:
+            return None
+        gains = diffs.clip(lower=0.0).iloc[-14:]
+        losses = (-diffs.clip(upper=0.0)).iloc[-14:]
+        avg_gain = float(gains.mean())
+        avg_loss = float(losses.mean())
+    except (ValueError, TypeError):
+        return None
+    if avg_loss == 0:
+        # No losses in the window → RSI is conventionally 100.
+        return 100.0 if avg_gain > 0 else None
+    rs = avg_gain / avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    if not math.isfinite(rsi):
+        return None
+    return rsi
+
+
+def _compute_avg_dollar_volume_30d(closes, volumes) -> Optional[float]:
+    """Mean of (Close × Volume) over the last 30 trading days."""
+    if closes is None or volumes is None:
+        return None
+    if len(closes) < 30 or len(volumes) < 30:
+        return None
+    try:
+        dv = (closes * volumes).iloc[-30:]
+        avg = float(dv.mean())
+    except (ValueError, TypeError):
+        return None
+    if not math.isfinite(avg):
+        return None
+    return avg
+
+
+def _populate_price_history(payload: dict, history_df) -> None:
+    """Fill price-history-derived fields on `payload` in place.
+
+    Leaves any field as None when the calculation cannot run, so the
+    subsequent flag-append loop will record `missing_*` flags.
+    """
+    closes = None
+    volumes = None
+    if history_df is not None:
+        try:
+            if "Close" in history_df.columns:
+                closes = history_df["Close"].dropna()
+            if "Volume" in history_df.columns:
+                volumes = history_df["Volume"].dropna()
+        except AttributeError:
+            closes = None
+            volumes = None
+
+    payload["return_1m"] = _compute_return(closes, 21)
+    payload["return_3m"] = _compute_return(closes, 63)
+    payload["return_6m"] = _compute_return(closes, 126)
+    payload["return_12m"] = _compute_return(closes, 252)
+    payload["realized_vol_30d"] = _compute_realized_vol_30d(closes)
+    payload["rsi_14"] = _compute_rsi_14(closes)
+    payload["avg_daily_dollar_volume_30d"] = _compute_avg_dollar_volume_30d(closes, volumes)
+
 
 def extract_facts(ticker: str, as_of_date: str) -> Tuple[FactSnapshot, List[str]]:
     """Return (FactSnapshot, data_quality_flags). Raises FactExtractionError on yfinance error."""
     try:
         tk = _yf_ticker(ticker)
         info = tk.info or {}
+        history_df = tk.history(period="13mo", interval="1d")
     except Exception as exc:
         raise FactExtractionError(f"yfinance error for {ticker}: {exc}") from exc
 
@@ -96,8 +208,12 @@ def extract_facts(ticker: str, as_of_date: str) -> Tuple[FactSnapshot, List[str]
             payload[field] = str(raw) if isinstance(raw, str) and raw else None
         else:
             payload[field] = _maybe_float(raw)
-        if payload.get(field) is None and field not in {"currency"}:
-            flags.append(f"missing_{field}")
+
+    # Price-history-derived fields (single tk.history() call above).
+    _populate_price_history(payload, history_df)
+
+    # Deferred to follow-up: roic, interest_coverage, revenue_cagr_3y, eps_cagr_3y
+    # require additional yfinance calls (financials, balance_sheet). See spec §4.1.
 
     price = payload.get("price")
     high = payload.get("price_52w_high")
@@ -108,6 +224,18 @@ def extract_facts(ticker: str, as_of_date: str) -> Tuple[FactSnapshot, List[str]
     mcap = payload.get("market_cap_usd")
     if fcf is not None and mcap and mcap > 0:
         payload["fcf_yield"] = fcf / mcap
+
+    # Flag any source fact field that ended up None. Centralized here so all
+    # fields — info-derived, history-derived, and analyst_count — get the
+    # same treatment. (`pct_off_52w_high` and `fcf_yield` are derived
+    # composites already covered by their inputs' flags, so not re-flagged.)
+    flag_fields: List[str] = list(_FIELD_TO_INFO_KEY.keys())
+    flag_fields.extend(_PRICE_HISTORY_FIELDS)
+    flag_fields.append("analyst_count")
+    for field in flag_fields:
+        # currency always defaults to "USD"; not flagged.
+        if payload.get(field) is None and field not in {"currency"}:
+            flags.append(f"missing_{field}")
 
     snapshot = FactSnapshot(**payload)
     return snapshot, flags
