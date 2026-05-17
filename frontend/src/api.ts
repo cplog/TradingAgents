@@ -1,6 +1,18 @@
 /** API base: same origin in prod (served by FastAPI); Vite dev proxies /api, /analyze, … */
 
-import type { StockDimensions } from './dimensions-types';
+import type { StockDimensions, DimensionsCommentary } from './dimensions-types';
+
+/** When Vite’s dev proxy misfires, set `VITE_API_ORIGIN=http://127.0.0.1:8000` in `frontend/.env.local`. */
+export function resolveApiUrl(path: string): string {
+  if (!path.startsWith("/")) return path;
+  const raw =
+    typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    typeof import.meta.env.VITE_API_ORIGIN === "string"
+      ? import.meta.env.VITE_API_ORIGIN.trim().replace(/\/$/, "")
+      : "";
+  return raw ? `${raw}${path}` : path;
+}
 
 function looksLikeHtmlDocument(body: string): boolean {
   const t = body.replace(/^\uFEFF/, "").trimStart();
@@ -13,7 +25,8 @@ function looksLikeHtmlDocument(body: string): boolean {
 }
 
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const url = resolveApiUrl(path);
+  const res = await fetch(url, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
@@ -23,12 +36,20 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (looksLikeHtmlDocument(text)) {
     const apiHint =
-      path.startsWith("/history") || path.startsWith("/jobs") || path.startsWith("/providers")
+      path.startsWith("/api/") ||
+      path.startsWith("/history") ||
+      path.startsWith("/api/history") ||
+      path.startsWith("/jobs") ||
+      path.startsWith("/providers") ||
+      path.startsWith("/dimensions")
         ? "Start the FastAPI API on port 8000 (e.g. `uvicorn api.main:app --port 8000`) so Vite can proxy this path. "
         : "";
     throw new Error(
-      `Expected JSON from ${path}, got HTML (usually index.html: API not reached). ${apiHint}` +
-        `If you use \`vite preview\`, set the same \`preview.proxy\` as dev (see frontend/vite.config.ts).`
+      `Expected JSON from ${url}, got HTML (usually index.html: API not reached). ${apiHint}` +
+        `If you use \`vite preview\`, set the same \`preview.proxy\` as dev (see frontend/vite.config.ts).` +
+        (typeof import.meta !== "undefined" && import.meta.env?.DEV
+          ? " Or set VITE_API_ORIGIN=http://127.0.0.1:8000 in frontend/.env.local to bypass the proxy."
+          : ""),
     );
   }
   try {
@@ -37,10 +58,10 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("Unexpected token") && text.trimStart().startsWith("<")) {
       throw new Error(
-        `Expected JSON from ${path}, got HTML/markup. Start the API on :8000 or fix the dev proxy. First bytes: ${JSON.stringify(text.slice(0, 160))}`
+        `Expected JSON from ${url}, got HTML/markup. Start the API on :8000 or fix the dev proxy. First bytes: ${JSON.stringify(text.slice(0, 160))}`
       );
     }
-    throw new Error(`${msg} (response from ${path}, first bytes: ${JSON.stringify(text.slice(0, 120))})`);
+    throw new Error(`${msg} (response from ${url}, first bytes: ${JSON.stringify(text.slice(0, 120))})`);
   }
 }
 
@@ -53,6 +74,15 @@ export type HealthPayload = {
   data_cache_dir: string;
   results_dir: string;
   yfinance_reachable: boolean | null;
+  data_source_checks?: Record<
+    string,
+    {
+      ok: boolean;
+      configured: boolean;
+      checked_at: string;
+      detail?: string | null;
+    }
+  >;
 };
 
 export async function fetchHealth(): Promise<HealthPayload> {
@@ -80,21 +110,34 @@ export async function fetchProviderModels(
   return apiJson(`/providers/${encodeURIComponent(provider)}/models${suffix}`);
 }
 
+export type JobResultPayload = {
+  ticker: string;
+  date: string;
+  rating: string;
+  confidence?: number | null;
+  reports: Record<string, string>;
+  structured?: Record<string, unknown> | null;
+  artifacts_path?: string | null;
+  completed_at: string;
+  dimensions?: StockDimensions | null;
+  dimensions_commentary?: DimensionsCommentary | null;
+  dimensions_error?: string | null;
+  dimensions_in_graph?: boolean | null;
+};
+
+export type JobDimensionsBundle = {
+  dimensions: StockDimensions | null;
+  commentary: DimensionsCommentary | null;
+  error: string | null;
+};
+
 export type JobStatus = {
   job_id: string;
   status: string;
   created_at: string;
   ticker?: string | null;
   date?: string | null;
-  result?: {
-    ticker: string;
-    date: string;
-    rating: string;
-    confidence?: number | null;
-    reports: Record<string, string>;
-    artifacts_path?: string | null;
-    completed_at: string;
-  } | null;
+  result?: JobResultPayload | null;
   error?: string | null;
   progress_events: { ts: string; stage: string; message: string; details?: string }[];
   batch_id?: string | null;
@@ -140,6 +183,9 @@ export async function getBatch(batchId: string): Promise<{
 export type NewsSource =
   | "yfinance"
   | "yfinance_macro"
+  | "finnhub"
+  | "google_rss"
+  | "akshare"
   | "reddit"
   | "stocktwits"
   | "alpha_vantage";
@@ -171,7 +217,7 @@ export async function fetchNews(ticker: string, limit = 50): Promise<NewsFeedPay
 }
 
 export function openJobEvents(jobId: string): EventSource {
-  return new EventSource(`/jobs/${jobId}/events`);
+  return new EventSource(resolveApiUrl(`/jobs/${jobId}/events`));
 }
 
 export async function postRuntimeConfig(
@@ -181,7 +227,7 @@ export async function postRuntimeConfig(
   },
   adminKey: string
 ): Promise<void> {
-  const res = await fetch("/admin/runtime-config", {
+  const res = await fetch(resolveApiUrl("/admin/runtime-config"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -202,6 +248,35 @@ export type HistoryRunRef = {
   completed_at?: string | null;
   created_at?: string | null;
   batch_id?: string | null;
+  factor_scores?: Record<string, number> | null;
+  facts_sector?: string | null;
+  facts_industry?: string | null;
+  has_dimensions?: boolean | null;
+  has_commentary?: boolean | null;
+};
+
+/** Aggregated persisted-run counts per sector/industry (D1 history only). */
+export type HistoryCoverageRow = {
+  sector: string;
+  industry: string;
+  run_count: number;
+  with_dimensions_count: number;
+  with_commentary_count: number;
+  latest_completed_at?: string | null;
+};
+
+/** Catalog constituent with optional latest persisted analysis coverage. */
+export type IndustryConstituentRow = {
+  ticker: string;
+  market: string;
+  run_count: number;
+  has_report: boolean;
+  has_dimensions: boolean;
+  has_commentary: boolean;
+  latest_rating?: string | null;
+  latest_date?: string | null;
+  latest_run_id?: string | null;
+  latest_completed_at?: string | null;
 };
 
 export type HistoryRunDetail = {
@@ -218,6 +293,10 @@ export type HistoryRunDetail = {
   created_at?: string | null;
   batch_id?: string | null;
   config_snapshot: Record<string, unknown>;
+  dimensions?: StockDimensions | null;
+  dimensions_commentary?: DimensionsCommentary | null;
+  dimensions_error?: string | null;
+  dimensions_in_graph?: boolean | null;
 };
 
 export type HistoryCompareSide = {
@@ -247,35 +326,86 @@ export async function fetchHistoryRuns(params?: {
   limit?: number;
   date_from?: string;
   date_to?: string;
+  sector?: string;
+  industry?: string;
 }): Promise<HistoryRunRef[]> {
   const qs = new URLSearchParams();
   if (params?.ticker?.trim()) qs.set("ticker", params.ticker.trim());
   if (params?.limit != null) qs.set("limit", String(params.limit));
   if (params?.date_from?.trim()) qs.set("date_from", params.date_from.trim());
   if (params?.date_to?.trim()) qs.set("date_to", params.date_to.trim());
+  if (params?.sector?.trim()) qs.set("sector", params.sector.trim());
+  if (params?.industry?.trim()) qs.set("industry", params.industry.trim());
   const suffix = qs.size ? `?${qs.toString()}` : "";
-  return apiJson<HistoryRunRef[]>(`/history/runs${suffix}`);
+  return apiJson<HistoryRunRef[]>(`/api/history/runs${suffix}`);
+}
+
+export async function fetchHistoryCoverage(): Promise<HistoryCoverageRow[]> {
+  return apiJson<HistoryCoverageRow[]>("/api/history/coverage");
+}
+
+export async function fetchIndustryConstituents(params: {
+  sector: string;
+  industry: string;
+  market?: string;
+}): Promise<IndustryConstituentRow[]> {
+  const qs = new URLSearchParams();
+  qs.set("sector", params.sector.trim());
+  qs.set("industry", params.industry.trim());
+  if (params.market?.trim()) qs.set("market", params.market.trim().toUpperCase());
+  const q = qs.toString();
+  const paths = [
+    `/api/catalog/industry-constituents?${q}`,
+    `/api/history/constituents?${q}`,
+  ];
+  let lastErr: Error | null = null;
+  for (const path of paths) {
+    try {
+      return await apiJson<IndustryConstituentRow[]>(path);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      lastErr = e instanceof Error ? e : new Error(msg);
+      if (msg.startsWith("404:") && path !== paths[paths.length - 1]) {
+        continue;
+      }
+      if (msg.startsWith("404:") && path === paths[paths.length - 1]) {
+        throw new Error(
+          `${msg}\n` +
+            "If the API is running, the Vite dev proxy may be returning this 404. " +
+            "Create frontend/.env.local with VITE_API_ORIGIN=http://127.0.0.1:8000 (or your API port), restart npm run dev, and try again. " +
+            "Verify the route exists: curl -sS 'http://127.0.0.1:8000/openapi.json' | grep industry-constituents",
+        );
+      }
+      throw lastErr;
+    }
+  }
+  throw lastErr ?? new Error("Failed to load industry constituents");
 }
 
 export async function fetchHistoryRun(runId: string): Promise<HistoryRunDetail> {
-  return apiJson<HistoryRunDetail>(`/history/runs/${encodeURIComponent(runId)}`);
+  return apiJson<HistoryRunDetail>(
+    `/api/history/runs/${encodeURIComponent(runId)}`
+  );
 }
 
 export async function deleteHistoryRun(runId: string): Promise<{ deleted: boolean; run_id: string }> {
-  return apiJson<{ deleted: boolean; run_id: string }>(`/history/runs/${encodeURIComponent(runId)}`, {
-    method: "DELETE",
-  });
+  return apiJson<{ deleted: boolean; run_id: string }>(
+    `/api/history/runs/${encodeURIComponent(runId)}`,
+    {
+      method: "DELETE",
+    }
+  );
 }
 
 export async function postHistoryCompare(runIdA: string, runIdB: string): Promise<HistoryCompareResponse> {
-  return apiJson<HistoryCompareResponse>("/history/compare", {
+  return apiJson<HistoryCompareResponse>("/api/history/compare", {
     method: "POST",
     body: JSON.stringify({ run_id_a: runIdA, run_id_b: runIdB }),
   });
 }
 
 export async function postClearCache(adminKey: string, mode = "checkpoints"): Promise<unknown> {
-  const res = await fetch("/admin/cache/clear", {
+  const res = await fetch(resolveApiUrl("/admin/cache/clear"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -287,31 +417,46 @@ export async function postClearCache(adminKey: string, mode = "checkpoints"): Pr
   return res.json();
 }
 
-export async function getJobDimensions(jobId: string): Promise<StockDimensions> {
-  const r = await fetch(`/jobs/${jobId}/dimensions`);
-  if (!r.ok) throw new Error(`getJobDimensions failed: ${r.status}`);
-  return r.json();
+export async function getJobDimensions(jobId: string): Promise<JobDimensionsBundle> {
+  const r = await fetch(resolveApiUrl(`/jobs/${jobId}/dimensions`));
+  if (!r.ok) {
+    throw new Error(`getJobDimensions failed: ${r.status}`);
+  }
+  const raw = (await r.json()) as unknown;
+  if (raw && typeof raw === "object") {
+    const o = raw as Record<string, unknown>;
+    if ("dimensions" in o || "commentary" in o || "error" in o) {
+      return {
+        dimensions: (o.dimensions ?? null) as StockDimensions | null,
+        commentary: (o.commentary ?? null) as DimensionsCommentary | null,
+        error: (typeof o.error === "string" ? o.error : null) as string | null,
+      };
+    }
+  }
+  if (raw && typeof raw === "object" && "ticker" in raw && "factor_scores" in raw) {
+    return { dimensions: raw as StockDimensions, commentary: null, error: null };
+  }
+  return { dimensions: null, commentary: null, error: null };
 }
 
 export async function getDimensionsByTicker(
   ticker: string, asOfDate?: string,
 ): Promise<StockDimensions> {
   const url = asOfDate
-    ? `/dimensions/${encodeURIComponent(ticker)}?as_of_date=${asOfDate}`
-    : `/dimensions/${encodeURIComponent(ticker)}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`getDimensionsByTicker failed: ${r.status}`);
-  return r.json();
+    ? `/api/dimensions/${encodeURIComponent(ticker)}?as_of_date=${encodeURIComponent(asOfDate)}`
+    : `/api/dimensions/${encodeURIComponent(ticker)}`;
+  return apiJson<StockDimensions>(url);
 }
 
 export async function cancelJob(jobId: string): Promise<{ cancellation_requested: boolean; status: string }> {
-  const r = await fetch(`/jobs/${jobId}/cancel`, { method: 'POST' });
+  const r = await fetch(resolveApiUrl(`/jobs/${jobId}/cancel`), { method: 'POST' });
   if (!r.ok) throw new Error(`cancelJob failed: ${r.status}`);
   return r.json();
 }
 
 export async function recomputeDimensions(runId: string) {
-  const r = await fetch(`/history/runs/${runId}/recompute-dimensions`, { method: 'POST' });
-  if (!r.ok) throw new Error(`recomputeDimensions failed: ${r.status}`);
-  return r.json();
+  return apiJson<HistoryRunDetail>(
+    `/api/history/runs/${encodeURIComponent(runId)}/recompute-dimensions`,
+    { method: "POST" }
+  );
 }

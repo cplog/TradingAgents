@@ -14,8 +14,8 @@ describe('colorTier', () => {
 
 describe('FactorBar', () => {
   it('renders the score label', () => {
-    render(<FactorBar label="Value" score={72.5} />);
-    expect(screen.getByText(/72/)).toBeInTheDocument();
+    const { container } = render(<FactorBar label="Value" score={72.5} />);
+    expect(container.textContent).toMatch(/73/);
     expect(screen.getByText('Value')).toBeInTheDocument();
   });
 

@@ -40,6 +40,8 @@ tradingagents = "cli.main:app"
 
 [project.optional-dependencies]
 api = ["fastapi>=0.115.0", "uvicorn>=0.34.0", "python-multipart>=0.0.20", "pytest-asyncio"]
+# Free mainland A-share OHLCV (no API key). Heavy dependency graph; install when needed.
+china-data = ["akshare>=1.14.0", "baostock>=0.8.8"]
 
 [tool.setuptools.packages.find]
 include = ["tradingagents*", "cli*", "api*"]

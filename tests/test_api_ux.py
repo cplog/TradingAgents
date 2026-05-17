@@ -94,6 +94,30 @@ def test_admin_disabled_without_key(api_client: TestClient, monkeypatch):
 
 
 @pytest.mark.unit
+def test_admin_jobs_clear(api_client: TestClient, monkeypatch):
+    monkeypatch.setenv("TRADINGAGENTS_ADMIN_KEY", "admin-test-key")
+    from api import main as main_mod
+
+    main_mod._worker.store.create("AAPL", "2026-05-14", {})
+    main_mod._worker.store.create("MSFT", "2026-05-14", {})
+
+    r = api_client.post(
+        "/admin/jobs/clear",
+        json={"mode": "all"},
+        headers={"X-Admin-Key": "admin-test-key"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cleared"] is True
+    assert body["mode"] == "all"
+    assert body["jobs_removed"] >= 2
+
+    r2 = api_client.get("/jobs")
+    assert r2.status_code == 200
+    assert r2.json() == []
+
+
+@pytest.mark.unit
 def test_news_endpoint_structure(api_client: TestClient, monkeypatch):
     def fake_fetch(ticker, **kwargs):
         from datetime import datetime

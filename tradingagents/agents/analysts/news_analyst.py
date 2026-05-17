@@ -20,7 +20,9 @@ def create_news_analyst(llm):
 
         system_message = (
             "You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: get_news(query, start_date, end_date) for company-specific or targeted news searches, and get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
-            + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
+            + " Structure: lead with developments that are directly tied to the ticker and company named in the instrument context (use get_news first). Add macro/global context only after that, and keep it clearly separated when it is not ticker-specific."
+            + " If there is little company-specific news, say so succinctly—do not pad the report with long digressions about unrelated companies or themes."
+            + " End with exactly one Markdown summary table of key points; do not repeat the same table or duplicate entire sections."
             + get_language_instruction()
         )
 

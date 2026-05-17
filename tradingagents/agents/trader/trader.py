@@ -25,6 +25,20 @@ def create_trader(llm):
         instrument_context = build_instrument_context(company_name)
         investment_plan = state["investment_plan"]
 
+        summary = (state.get("dimensions_summary") or "").strip()
+        dim_err = (state.get("dimensions_error") or "").strip()
+        dim_note = ""
+        if summary:
+            dim_note = (
+                "\n\n**Standardized dimensions snapshot** "
+                "(quantitative cross-check of the analyst narrative; computed after analysts, before the research debate):\n"
+                f"{summary}\n"
+            )
+        elif dim_err:
+            dim_note = (
+                f"\n\n**Standardized dimensions snapshot:** unavailable ({dim_err}).\n"
+            )
+
         messages = [
             {
                 "role": "system",
@@ -42,7 +56,8 @@ def create_trader(llm):
                     f"plan tailored for {company_name}. {instrument_context} This plan incorporates "
                     f"insights from current technical market trends, macroeconomic indicators, and "
                     f"social media sentiment. Use this plan as a foundation for evaluating your next "
-                    f"trading decision.\n\nProposed Investment Plan: {investment_plan}\n\n"
+                    f"trading decision.\n\nProposed Investment Plan: {investment_plan}\n"
+                    f"{dim_note}\n"
                     f"Leverage these insights to make an informed and strategic decision."
                 ),
             },

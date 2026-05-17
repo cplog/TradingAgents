@@ -8,10 +8,13 @@ Reddit/X/StockTwits content under prompt pressure (verified live).
 The redesigned agent pre-fetches three complementary data sources before
 the LLM is invoked and injects them into the prompt as structured blocks:
 
-  1. News headlines     — Yahoo Finance (institutional framing)
-  2. StockTwits messages — retail-trader posts indexed by cashtag, with
-                           user-labeled Bullish/Bearish sentiment tags
-  3. Reddit posts        — r/wallstreetbets, r/stocks, r/investing
+  1. News headlines     — Multi-vendor company news (``route_to_vendor``):
+                           Yahoo Finance → Finnhub (``FINNHUB_API_KEY``) → Google News
+                           RSS (no key) → AKShare Eastmoney (``stock_news_em``) →
+                           Alpha Vantage; order follows ``DEFAULT_CONFIG``.
+  2. StockTwits messages — retail-trader posts (US-heavy; many ``.HK`` streams absent)
+  3. Reddit posts        — r/wallstreetbets, r/stocks, r/investing; search includes
+                           yfinance company names for HK/non-US symbols
 
 The agent does not use tool-calling; the data is in the prompt from
 turn 0. The LLM produces the sentiment report in a single invocation.
@@ -35,6 +38,26 @@ def _seven_days_back(trade_date: str) -> str:
     return (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
 
 
+def _reddit_extra_queries(ticker: str) -> list[str]:
+    """Company names from yfinance so Reddit search can match threads without ``6060.HK``."""
+    out: list[str] = []
+    try:
+        import yfinance as yf
+
+        from tradingagents.dataflows.stockstats_utils import yf_retry
+
+        info = yf_retry(lambda: yf.Ticker(ticker).info)
+        if not isinstance(info, dict):
+            return out
+        for key in ("shortName", "longName"):
+            v = info.get(key)
+            if isinstance(v, str) and len(v.strip()) > 2:
+                out.append(v.strip())
+    except Exception:
+        pass
+    return out
+
+
 def create_sentiment_analyst(llm):
     """Create a sentiment analyst node for the trading graph.
 
@@ -54,7 +77,9 @@ def create_sentiment_analyst(llm):
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
         stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
+        reddit_block = fetch_reddit_posts(
+            ticker, additional_queries=_reddit_extra_queries(ticker)
+        )
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -110,22 +135,22 @@ def _build_system_message(
 
 ## Data sources (pre-fetched, in this prompt)
 
-### News headlines — Yahoo Finance, past 7 days
-Institutional framing. Fact-driven, slower-moving signal.
+### Company news — past 7 days (multi-vendor)
+Headlines from routed news tools (typically Yahoo Finance first; **Finnhub** often fills gaps for US and HK symbols when YF returns none—set ``FINNHUB_API_KEY``). Treat as institutional / media framing.
+
+### StockTwits messages — retail cashtag stream
+Fast-moving retail tone. **Coverage is strongest for US-listed symbols**; many Hong Kong and other non-US suffixes have no reliable stream—if the block says skipped or empty, do not infer “no interest” beyond “this venue had no data.”
+
+### Reddit posts — r/wallstreetbets, r/stocks, r/investing (past 7 days)
+Community discussion. Search uses the exact ticker **plus** yfinance ``shortName`` / ``longName`` when available, so HK names may match threads that never typed ``6060.HK``. Engagement (upvotes/comments) still matters.
 
 <start_of_news>
 {news_block}
 <end_of_news>
 
-### StockTwits messages — retail-trader social platform indexed by cashtag
-Fast-moving signal. Each message carries a user-labeled sentiment tag (Bullish / Bearish / no-label) plus the message body.
-
 <start_of_stocktwits>
 {stocktwits_block}
 <end_of_stocktwits>
-
-### Reddit posts — r/wallstreetbets, r/stocks, r/investing (past 7 days)
-Community discussion. Engagement signal via upvote score and comment count. Subreddit character matters (r/wallstreetbets is often contrarian/exuberant; r/stocks more measured; r/investing longer-term).
 
 <start_of_reddit>
 {reddit_block}

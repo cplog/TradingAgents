@@ -11,12 +11,144 @@ body,
   margin: 0;
 }
 
+html {
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   font-family: var(--font-inter);
   background: var(--surface-canvas-fog);
   color: var(--color-slate-text);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+
+/* App shell composition */
+.app-shell {
+  display: flex;
+  min-height: 100%;
+  width: 100%;
+}
+
+.app-shell__nav {
+  width: 220px;
+  flex-shrink: 0;
+}
+
+.app-shell__main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .app-shell__nav {
+    width: 100%;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-stone-border);
+    padding: var(--spacing-16);
+  }
+
+  .app-shell__main {
+    padding: var(--spacing-16) !important;
+  }
+}
+
+/* Dashboard layout rhythm + adaptation */
+.dashboard-page {
+  width: min(100%, 72rem);
+  margin-inline: auto;
+  padding-inline: clamp(var(--spacing-12), 2vw, var(--spacing-24));
+  min-width: 0;
+}
+
+.dashboard-page > * {
+  min-width: 0;
+}
+
+.dashboard-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(19rem, 24rem);
+  gap: var(--spacing-24);
+  align-items: start;
+}
+
+.dashboard-setup-card,
+.dashboard-run-card {
+  min-width: 0;
+}
+
+.dashboard-run-card {
+  position: sticky;
+  top: var(--spacing-16);
+}
+
+.dashboard-log-section {
+  min-width: 0;
+}
+
+.dashboard-progress-log {
+  max-width: 100%;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.dashboard-progress-log__entry {
+  min-width: 0;
+}
+
+.dashboard-report-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: clamp(var(--spacing-16), 2vw, var(--spacing-32));
+  align-items: start;
+}
+
+.dashboard-report-layout--with-toc {
+  grid-template-columns: minmax(0, 12.5rem) minmax(0, 1fr);
+}
+
+.dashboard-report-toc {
+  position: sticky;
+  top: var(--spacing-24);
+  font-size: var(--text-caption);
+  padding: var(--spacing-16);
+  border-radius: var(--radius-cards);
+  border: 1px solid var(--color-stone-border);
+  background: var(--surface-canvas-fog);
+}
+
+.dashboard-report-markdown {
+  max-width: 72ch;
+  min-width: 0;
+}
+
+@media (max-width: 1024px) {
+  .dashboard-main-grid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-16);
+  }
+
+  .dashboard-run-card {
+    position: static;
+  }
+
+  .dashboard-report-layout--with-toc {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-report-toc {
+    position: static;
+  }
 }
 
 a {
@@ -53,10 +185,67 @@ code,
   }
 }
 
+/* History report hardening */
+.history-page {
+  width: min(100%, 90rem);
+  min-width: 0;
+}
+
+.history-page > * {
+  min-width: 0;
+}
+
+.history-detail-card {
+  min-width: 0;
+}
+
+.history-report-view {
+  min-width: 0;
+}
+
+.history-report-sections {
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.history-report-sections button {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.history-report-body-wrap {
+  min-width: 0;
+  border: 1px solid var(--color-stone-border);
+  border-radius: var(--radius-cards);
+  background: var(--surface-cloud-white);
+  padding: clamp(var(--spacing-12), 2vw, var(--spacing-24));
+}
+
+.history-report-body {
+  min-width: 0;
+}
+
+.history-runs-table {
+  line-height: 1.45;
+}
+
+.history-runs-table td,
+.history-runs-table th {
+  vertical-align: top;
+}
+
 /* Markdown content formatting */
 .markdown-body {
   line-height: 1.65;
   color: var(--color-slate-text);
+}
+
+.markdown-body p,
+.markdown-body li,
+.markdown-body dt,
+.markdown-body dd,
+.markdown-body td {
+  overflow-wrap: anywhere;
 }
 
 .markdown-body h1,
@@ -108,12 +297,24 @@ code,
   margin-top: 0.25em;
 }
 
+.markdown-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 1em;
+  max-width: 100%;
+}
+
 .markdown-body table {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: 1em;
   font-size: 0.95em;
   line-height: 1.5;
+}
+
+.markdown-table-wrap table {
+  margin-bottom: 0;
+  min-width: max-content;
 }
 
 .markdown-body th,

@@ -1,10 +1,11 @@
 # TradingAgents/graph/setup.py
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from tradingagents.agents import *
+from tradingagents.agents.dimensions_snapshot import create_dimensions_snapshot_node
 from tradingagents.agents.utils.agent_states import AgentState
 
 from .conditional_logic import ConditionalLogic
@@ -19,12 +20,14 @@ class GraphSetup:
         deep_thinking_llm: Any,
         tool_nodes: Dict[str, ToolNode],
         conditional_logic: ConditionalLogic,
+        config: Optional[Dict[str, Any]] = None,
     ):
         """Initialize with required components."""
         self.quick_thinking_llm = quick_thinking_llm
         self.deep_thinking_llm = deep_thinking_llm
         self.tool_nodes = tool_nodes
         self.conditional_logic = conditional_logic
+        self.config: Dict[str, Any] = dict(config or {})
 
     def setup_graph(
         self, selected_analysts=["market", "social", "news", "fundamentals"]
@@ -90,6 +93,10 @@ class GraphSetup:
         conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
         portfolio_manager_node = create_portfolio_manager(self.deep_thinking_llm)
 
+        dimensions_snapshot_node = create_dimensions_snapshot_node(
+            self.quick_thinking_llm, self.config
+        )
+
         # Create workflow
         workflow = StateGraph(AgentState)
 
@@ -110,6 +117,7 @@ class GraphSetup:
         workflow.add_node("Neutral Analyst", neutral_analyst)
         workflow.add_node("Conservative Analyst", conservative_analyst)
         workflow.add_node("Portfolio Manager", portfolio_manager_node)
+        workflow.add_node("Dimensions Snapshot", dimensions_snapshot_node)
 
         # Define edges
         # Start with the first analyst
@@ -135,7 +143,9 @@ class GraphSetup:
                 next_analyst = f"{selected_analysts[i+1].capitalize()} Analyst"
                 workflow.add_edge(current_clear, next_analyst)
             else:
-                workflow.add_edge(current_clear, "Bull Researcher")
+                workflow.add_edge(current_clear, "Dimensions Snapshot")
+
+        workflow.add_edge("Dimensions Snapshot", "Bull Researcher")
 
         # Add remaining edges
         workflow.add_conditional_edges(

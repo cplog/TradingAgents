@@ -10,6 +10,64 @@ from typing import Dict, Iterable, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
+# Synthetic industry token for "all tickers in this sector on this exchange/currency".
+LOCAL_SECTOR_WIDE_INDUSTRY = "SECTOR_WIDE"
+
+
+def sanitize_slug_part(value: str) -> str:
+    """Filesystem-safe segment for peer cache slugs (matches PeerCache._path rules)."""
+    return "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in value.strip())
+
+
+def market_bucket_from_exchange_currency(
+    exchange: Optional[str], currency: Optional[str],
+) -> Optional[str]:
+    """Market bucket like ``HKG.HKD`` from yfinance ``exchange`` + ``currency``."""
+    if not exchange or not currency:
+        return None
+    ex = exchange.strip().upper()
+    cur = currency.strip().upper()
+    if not ex or not cur:
+        return None
+    return f"{ex}.{cur}"
+
+
+def slug_for_local_industry_universe(
+    market_bucket: Optional[str], sector: Optional[str], industry: Optional[str],
+) -> Optional[str]:
+    if not market_bucket or not sector or not industry:
+        return None
+    return "__".join((
+        sanitize_slug_part(market_bucket),
+        sanitize_slug_part(sector),
+        sanitize_slug_part(industry),
+    ))
+
+
+def slug_for_local_sector_universe(
+    market_bucket: Optional[str], sector: Optional[str],
+) -> Optional[str]:
+    if not market_bucket or not sector:
+        return None
+    return "__".join((
+        sanitize_slug_part(market_bucket),
+        sanitize_slug_part(sector),
+        sanitize_slug_part(LOCAL_SECTOR_WIDE_INDUSTRY),
+    ))
+
+
+def peer_universe_label_local(
+    market_bucket: str, sector: str, industry: str,
+) -> str:
+    return f"market:{market_bucket}|sector:{sector}|industry:{industry}"
+
+
+def peer_universe_label_local_sector_group(market_bucket: str, sector: str) -> str:
+    return (
+        f"market:{market_bucket}|sector:{sector}|"
+        f"peer_group:{LOCAL_SECTOR_WIDE_INDUSTRY}"
+    )
+
 
 def percentile_rank(value: Optional[float], peers: Iterable[Optional[float]]) -> Optional[float]:
     """Return percentile rank (0..1) of `value` within `peers`. None if <3 usable peers.
@@ -83,7 +141,7 @@ class PeerCache:
         if not p.is_file():
             return None
         try:
-            data = json.loads(p.read_text())
+            data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
         return CachedPeers(
@@ -95,7 +153,10 @@ class PeerCache:
     def write(self, slug: str, tickers: List[str],
               facts: Dict[str, Dict[str, Optional[float]]]) -> None:
         payload = {"tickers": tickers, "facts": facts, "written_at": time.time()}
-        self._path(slug).write_text(json.dumps(payload, ensure_ascii=False))
+        self._path(slug).write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     def slug_for(self, sector: Optional[str], industry: Optional[str]) -> Optional[str]:
         if not sector or not industry:

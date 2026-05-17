@@ -69,14 +69,14 @@ def api_client(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_history_bad_date_filters(api_client: TestClient):
-    r = api_client.get("/history/runs?date_from=not-valid")
+    r = api_client.get("/api/history/runs?date_from=not-valid")
     assert r.status_code == 400
 
 
 @pytest.mark.unit
 def test_history_compare_not_found(api_client: TestClient):
     r = api_client.post(
-        "/history/compare",
+        "/api/history/compare",
         json={"run_id_a": "xxxxxxxx", "run_id_b": "yyyyyyyy"},
     )
     assert r.status_code == 404
@@ -95,17 +95,17 @@ def test_history_persist_list_detail_and_compare(api_client: TestClient):
     _wait_job(api_client, jid1)
     _wait_job(api_client, jid2)
 
-    listed = api_client.get("/history/runs").json()
+    listed = api_client.get("/api/history/runs").json()
     assert isinstance(listed, list)
     assert len(listed) >= 2
     ids_found = {row["run_id"] for row in listed}
     assert jid1 in ids_found and jid2 in ids_found
 
-    by_ticker = api_client.get("/history/runs?ticker=AAPL").json()
+    by_ticker = api_client.get("/api/history/runs?ticker=AAPL").json()
     assert all(str(row.get("ticker")) == "AAPL" for row in by_ticker)
 
     cmp = api_client.post(
-        "/history/compare",
+        "/api/history/compare",
         json={"run_id_a": jid1, "run_id_b": jid2},
     )
     assert cmp.status_code == 200
@@ -123,15 +123,15 @@ def test_history_delete_run(api_client: TestClient):
     run_id = r.json()["job_id"]
     _wait_job(api_client, run_id)
 
-    before = api_client.get("/history/runs").json()
+    before = api_client.get("/api/history/runs").json()
     assert any(row.get("run_id") == run_id for row in before)
 
-    deleted = api_client.delete(f"/history/runs/{run_id}")
+    deleted = api_client.delete(f"/api/history/runs/{run_id}")
     assert deleted.status_code == 200
     assert deleted.json().get("deleted") is True
 
-    detail = api_client.get(f"/history/runs/{run_id}")
+    detail = api_client.get(f"/api/history/runs/{run_id}")
     assert detail.status_code == 404
 
-    after = api_client.get("/history/runs").json()
+    after = api_client.get("/api/history/runs").json()
     assert all(row.get("run_id") != run_id for row in after)

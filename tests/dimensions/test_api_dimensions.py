@@ -61,7 +61,10 @@ def test_get_jobs_dimensions_returns_payload(client):
                               "rating": "Buy", "reports": {}})
     r = c.get(f"/jobs/{jid}/dimensions")
     assert r.status_code == 200
-    assert r.json()["ticker"] == "AAPL"
+    body = r.json()
+    assert body["dimensions"]["ticker"] == "AAPL"
+    assert body.get("commentary") is None
+    assert body.get("error") is None
 
 
 def test_cancel_endpoint_sets_flag(client):
@@ -93,6 +96,9 @@ def test_dimensions_by_ticker_facts_only(client, monkeypatch):
     r = c.get("/dimensions/MSFT")
     assert r.status_code == 200
     assert r.json()["source"] == "facts_only"
+    r_api = c.get("/api/dimensions/MSFT")
+    assert r_api.status_code == 200
+    assert r_api.json()["ticker"] == "MSFT"
 
 
 def test_admin_peer_cache_refresh_requires_key(client, monkeypatch):

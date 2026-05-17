@@ -48,6 +48,9 @@ export interface StockDimensions {
   facts: FactSnapshot; pillar_scores: PillarScores; factor_scores: FactorScores;
   dimensions_version: string;
   peer_universe_id?: string | null;
+  peer_scope?: 'local' | 'local_sector' | 'global_fallback' | 'unavailable' | null;
+  peer_universe_search_path?: string[];
+  peer_universe_resolved_slug?: string | null;
   data_quality_flags: string[];
   source: 'full_run' | 'facts_only';
 }

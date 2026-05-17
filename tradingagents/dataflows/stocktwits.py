@@ -26,6 +26,25 @@ logger = logging.getLogger(__name__)
 _API = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
 _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
 
+# Per-symbol streams are US-retail-centric; yfinance-style intl suffixes almost always 404.
+_STOCKTWITS_UNSUPPORTED_SUFFIXES = frozenset({
+    "HK", "L", "TO", "V", "AX", "DE", "PA", "AS", "MI", "SW", "ST", "OL", "CO", "IS",
+    "SS", "SZ", "NS", "BO", "SA", "JK", "KL", "T", "TW", "SI", "NZ", "LS", "MC", "BR", "MX",
+})
+
+
+def stocktwits_stream_likely_available(ticker: str) -> bool:
+    """False when StockTwits typically has no stream for this symbol (skip HTTP)."""
+    t = (ticker or "").strip().upper()
+    if "." not in t:
+        return True
+    suf = t.rsplit(".", 1)[-1]
+    return suf not in _STOCKTWITS_UNSUPPORTED_SUFFIXES
+
+
+def _http_status(exc: BaseException) -> Optional[int]:
+    return getattr(exc, "status", None) or getattr(exc, "code", None)
+
 
 def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.0) -> str:
     """Fetch recent StockTwits messages for ``ticker`` and return them as a
@@ -35,18 +54,34 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
     symbol has no messages, or the response shape is unexpected — the
     caller never has to special-case None or exceptions.
     """
-    url = _API.format(ticker=ticker.upper())
+    sym = (ticker or "").strip().upper() or "UNKNOWN"
+    if not stocktwits_stream_likely_available(sym):
+        return (
+            "<stocktwits skipped: StockTwits has no reliable stream for this exchange suffix "
+            f"({sym}); US-listed symbols work best — rely on Yahoo news and Reddit for this ticker>"
+        )
+    url = _API.format(ticker=sym)
     req = Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
     try:
         with urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
-    except (HTTPError, URLError, json.JSONDecodeError, TimeoutError) as exc:
+    except HTTPError as exc:
+        st = _http_status(exc)
+        if st == 404:
+            logger.info("StockTwits: symbol not found (404) for %s", ticker)
+            return (
+                "<stocktwits: symbol not on StockTwits (404). Many non-US tickers are unsupported; "
+                "use other sources in this prompt>"
+            )
+        logger.warning("StockTwits fetch failed for %s: %s", ticker, exc)
+        return f"<stocktwits unavailable: HTTP {st or type(exc).__name__}>"
+    except (URLError, json.JSONDecodeError, TimeoutError) as exc:
         logger.warning("StockTwits fetch failed for %s: %s", ticker, exc)
         return f"<stocktwits unavailable: {type(exc).__name__}>"
 
     messages = data.get("messages", []) if isinstance(data, dict) else []
     if not messages:
-        return f"<no StockTwits messages found for ${ticker.upper()}>"
+        return f"<no StockTwits messages found for ${sym}>"
 
     lines = []
     bullish = bearish = unlabeled = 0
@@ -93,13 +128,27 @@ def fetch_stocktwits_feed_items(
 
     Each dict: title, summary, publisher, link, pub_date (ISO or ""),
     sentiment_basic (``Bullish`` / ``Bearish`` / None).
+
+    Returns an empty list when the symbol is unsupported or StockTwits returns 404 —
+    callers should not treat that as a hard failure.
     """
-    url = _API.format(ticker=ticker.upper())
+    sym = (ticker or "").strip().upper() or "UNKNOWN"
+    if not stocktwits_stream_likely_available(sym):
+        logger.info("StockTwits feed skipped for %s (exchange not supported on StockTwits)", sym)
+        return []
+    url = _API.format(ticker=sym)
     req = Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
     try:
         with urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
-    except (HTTPError, URLError, json.JSONDecodeError, TimeoutError) as exc:
+    except HTTPError as exc:
+        st = _http_status(exc)
+        if st == 404:
+            logger.info("StockTwits structured fetch: symbol not found (404) for %s", sym)
+            return []
+        logger.warning("StockTwits structured fetch failed for %s: %s", ticker, exc)
+        raise
+    except (URLError, json.JSONDecodeError, TimeoutError) as exc:
         logger.warning("StockTwits structured fetch failed for %s: %s", ticker, exc)
         raise
 

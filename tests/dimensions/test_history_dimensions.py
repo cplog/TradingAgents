@@ -13,7 +13,9 @@ from api.state_store import LocalFileStateStore
 
 
 @pytest.fixture
-def store(tmp_path):
+def store(tmp_path, monkeypatch):
+    """Use an isolated file store; disable D1 so list_runs/persist use this store only."""
+    monkeypatch.setattr("api.history.d1_history_enabled", lambda: False)
     return LocalFileStateStore(path=tmp_path / "state.json")
 
 
@@ -185,7 +187,7 @@ def test_recompute_dimensions_endpoint(monkeypatch, store, tmp_path):
     monkeypatch.setattr("api.main._build_llm_for_dimensions", lambda cfg: MagicMock())
 
     client = TestClient(app)
-    r = client.post("/history/runs/job3/recompute-dimensions")
+    r = client.post("/api/history/runs/job3/recompute-dimensions")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["dimensions"]["factor_scores"]["value"]["score"] == 70.0

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional
 
+
 from pydantic import BaseModel, Field
 
 
@@ -124,7 +125,21 @@ class StockDimensions(BaseModel):
     pillar_scores: PillarScores
     factor_scores: FactorScores
     dimensions_version: str
-    peer_universe_id: Optional[str] = None
+    peer_universe_id: Optional[str] = Field(
+        default=None,
+        description="Primary peer-comparison label (resolved universe or best-effort intent).",
+    )
+    peer_scope: Optional[
+        Literal["local", "local_sector", "global_fallback", "unavailable"]
+    ] = None
+    peer_universe_search_path: List[str] = Field(
+        default_factory=list,
+        description="Ordered universe labels attempted (local-first, then global).",
+    )
+    peer_universe_resolved_slug: Optional[str] = Field(
+        default=None,
+        description="Filesystem/D1 slug of the universe actually used.",
+    )
     data_quality_flags: List[str] = Field(default_factory=list)
     source: Literal["full_run", "facts_only"] = "full_run"
 

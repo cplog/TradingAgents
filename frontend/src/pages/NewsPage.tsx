@@ -12,6 +12,9 @@ function sentimentColor(s: NewsItem["sentiment"]) {
 const SOURCE_LABEL: Record<NewsSource, string> = {
   yfinance: "Yahoo ticker",
   yfinance_macro: "Yahoo macro",
+  finnhub: "Finnhub",
+  google_rss: "Google RSS",
+  akshare: "AKShare",
   reddit: "Reddit",
   stocktwits: "StockTwits",
   alpha_vantage: "Alpha Vantage",
@@ -20,6 +23,9 @@ const SOURCE_LABEL: Record<NewsSource, string> = {
 const SOURCE_STYLE: Record<NewsSource, { bg: string; fg: string }> = {
   yfinance: { bg: "#e0f2fe", fg: "#0369a1" },
   yfinance_macro: { bg: "#fef3c7", fg: "#b45309" },
+  finnhub: { bg: "#eef2ff", fg: "#3730a3" },
+  google_rss: { bg: "#f0fdf4", fg: "#166534" },
+  akshare: { bg: "#fdf2f8", fg: "#9d174d" },
   reddit: { bg: "#ffedd5", fg: "#c2410c" },
   stocktwits: { bg: "#ede9fe", fg: "#5b21b6" },
   alpha_vantage: { bg: "#ecfdf5", fg: "#047857" },
@@ -55,6 +61,9 @@ export function NewsPage() {
     const c: Record<NewsSource, number> = {
       yfinance: 0,
       yfinance_macro: 0,
+      finnhub: 0,
+      google_rss: 0,
+      akshare: 0,
       reddit: 0,
       stocktwits: 0,
       alpha_vantage: 0,
@@ -71,7 +80,8 @@ export function NewsPage() {
       <h1 style={{ marginTop: 0 }}>News and sentiment</h1>
       <p style={{ margin: "0 0 var(--spacing-12)", color: "var(--color-ash-gray)", fontSize: 15 }}>
         Raw streams merged: <strong>Yahoo ticker news</strong>, <strong>Yahoo macro search</strong> (same queries as the
-        CLI global-news tool), <strong>Alpha Vantage</strong> NEWS_SENTIMENT when{" "}
+        CLI global-news tool), <strong>Finnhub</strong>, <strong>Google RSS</strong>, <strong>AKShare</strong>,{" "}
+        <strong>Alpha Vantage</strong> NEWS_SENTIMENT when{" "}
         <span className="mono">ALPHA_VANTAGE_API_KEY</span> is set, plus <strong>Reddit</strong> (WSB / stocks / investing
         search) and <strong>StockTwits</strong>. Sentiment uses keywords for text, AV labels when present, and StockTwits
         bull/bear tags — not an LLM.
@@ -114,6 +124,9 @@ export function NewsPage() {
             "all",
             "yfinance",
             "yfinance_macro",
+            "finnhub",
+            "google_rss",
+            "akshare",
             "reddit",
             "stocktwits",
             "alpha_vantage",

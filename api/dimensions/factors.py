@@ -42,6 +42,49 @@ def _inv_score(pillar_score: int) -> float:
     return scale_1_5_to_0_100(pillar_score)
 
 
+def compute_factors_sentiment_only(
+    pillars: PillarScores,
+) -> Tuple[FactorScores, List[str]]:
+    """Factors 0–100 with only the sentiment-related blend; other factors are blank.
+
+    Used when peer percentiles are unavailable so value/growth/quality/momentum/low_risk are
+    not synthesized from pillars alone (misleading vs peers).
+    """
+    blank = FactorScore(score=None, inputs={})
+    sentiment_score, sentiment_inputs = _weighted([
+        ("retail_sentiment_pillar",
+         scale_1_5_to_0_100(pillars.sentiment.retail_sentiment.score), 0.25),
+        ("social_buzz_pillar",
+         scale_1_5_to_0_100(pillars.sentiment.social_buzz.score), 0.20),
+        ("consensus_pillar",
+         scale_1_5_to_0_100(pillars.sentiment.consensus_quality.score), 0.20),
+        ("narrative_pillar",
+         scale_1_5_to_0_100(pillars.sentiment.narrative_strength.score), 0.15),
+        ("catalyst_pillar",
+         scale_1_5_to_0_100(pillars.news.catalyst_strength.score), 0.20),
+    ])
+    flags = [
+        "factor_value_missing_peer_percentiles",
+        "factor_growth_missing_peer_percentiles",
+        "factor_quality_missing_peer_percentiles",
+        "factor_momentum_missing_peer_percentiles",
+        "factor_low_risk_missing_peer_percentiles",
+    ]
+    if sentiment_score is None:
+        flags.append("factor_sentiment_no_inputs")
+    return (
+        FactorScores(
+            value=blank,
+            growth=blank,
+            quality=blank,
+            momentum=blank,
+            low_risk=blank,
+            sentiment=FactorScore(score=sentiment_score, inputs=sentiment_inputs),
+        ),
+        flags,
+    )
+
+
 def compute_factors(
     pillars: PillarScores,
     facts: Dict[str, Optional[float]],
@@ -56,6 +99,8 @@ def compute_factors_with_flags(
     pillars: PillarScores,
     facts: Dict[str, Optional[float]],
     peer_pct: Dict[str, Optional[float]],
+    *,
+    enforce_peer_pct_for_style_factors: bool = False,
 ) -> Tuple[FactorScores, List[str]]:
     flags: List[str] = []
 
@@ -64,12 +109,24 @@ def compute_factors_with_flags(
         ("pe_pct", _pct_to_100(peer_pct.get("pe_ttm")), 0.3),
         ("pb_pct", _pct_to_100(peer_pct.get("pb")), 0.2),
     ])
+    if enforce_peer_pct_for_style_factors and (
+        peer_pct.get("pe_ttm") is None and peer_pct.get("pb") is None
+    ):
+        value_score = None
+        value_inputs = {}
+        flags.append("factor_value_missing_peer_percentiles")
 
     growth_score, growth_inputs = _weighted([
         ("growth_pillar", scale_1_5_to_0_100(pillars.fundamentals.growth.score), 0.5),
         ("eps_growth_pct", _pct_to_100(peer_pct.get("eps_growth_yoy")), 0.25),
         ("revenue_growth_pct", _pct_to_100(peer_pct.get("revenue_growth_yoy")), 0.25),
     ])
+    if enforce_peer_pct_for_style_factors and (
+        peer_pct.get("eps_growth_yoy") is None and peer_pct.get("revenue_growth_yoy") is None
+    ):
+        growth_score = None
+        growth_inputs = {}
+        flags.append("factor_growth_missing_peer_percentiles")
 
     quality_score, quality_inputs = _weighted([
         ("profitability_pillar",
@@ -79,6 +136,12 @@ def compute_factors_with_flags(
         ("roe_pct", _pct_to_100(peer_pct.get("roe")), 0.25),
         ("interest_coverage_pct", _pct_to_100(peer_pct.get("interest_coverage")), 0.15),
     ])
+    if enforce_peer_pct_for_style_factors and (
+        peer_pct.get("roe") is None and peer_pct.get("interest_coverage") is None
+    ):
+        quality_score = None
+        quality_inputs = {}
+        flags.append("factor_quality_missing_peer_percentiles")
 
     momentum_score, momentum_inputs = _weighted([
         ("trend_pillar", scale_1_5_to_0_100(pillars.market.trend.score), 0.30),
@@ -86,12 +149,22 @@ def compute_factors_with_flags(
         ("return_3m_pct", _pct_to_100(peer_pct.get("return_3m")), 0.20),
         ("return_12m_pct", _pct_to_100(peer_pct.get("return_12m")), 0.20),
     ])
+    if enforce_peer_pct_for_style_factors and (
+        peer_pct.get("return_3m") is None and peer_pct.get("return_12m") is None
+    ):
+        momentum_score = None
+        momentum_inputs = {}
+        flags.append("factor_momentum_missing_peer_percentiles")
 
     low_risk_score, low_risk_inputs = _weighted([
         ("volatility_risk_pillar", _inv_score(pillars.market.volatility_risk.score), 0.40),
         ("surprise_risk_pillar", _inv_score(pillars.news.surprise_risk.score), 0.30),
         ("beta_pct", _pct_to_100(peer_pct.get("beta")), 0.30),
     ])
+    if enforce_peer_pct_for_style_factors and peer_pct.get("beta") is None:
+        low_risk_score = None
+        low_risk_inputs = {}
+        flags.append("factor_low_risk_missing_peer_percentiles")
 
     sentiment_score, sentiment_inputs = _weighted([
         ("retail_sentiment_pillar",
@@ -112,6 +185,9 @@ def compute_factors_with_flags(
         ("sentiment", sentiment_score),
     ]:
         if score is None:
+            peer_miss = f"factor_{name}_missing_peer_percentiles"
+            if peer_miss in flags:
+                continue
             flags.append(f"factor_{name}_no_inputs")
 
     return (

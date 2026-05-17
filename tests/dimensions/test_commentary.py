@@ -66,3 +66,17 @@ def test_build_commentary_raises_on_llm_error():
     fake_llm.with_structured_output = MagicMock(return_value=Boom())
     with pytest.raises(CommentaryError):
         build_commentary(dimensions=_dims(), pm_decision_text="x", llm=fake_llm)
+
+
+def test_build_commentary_logs_and_raises_when_invoke_returns_none(caplog):
+    class ReturnsNone:
+        def invoke(self, _m):
+            return None
+
+    fake_llm = MagicMock()
+    fake_llm.with_structured_output = MagicMock(return_value=ReturnsNone())
+    with caplog.at_level("WARNING", logger="api.dimensions.commentary"):
+        with pytest.raises(CommentaryError, match="Unexpected commentary type: NoneType"):
+            build_commentary(dimensions=_dims(), pm_decision_text="Hold.", llm=fake_llm)
+    assert "AAPL" in caplog.text
+    assert "NoneType" in caplog.text

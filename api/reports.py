@@ -38,6 +38,9 @@ def build_result(
 ) -> Dict[str, Any]:
     """Build the API result payload and write artifacts to disk."""
 
+    snap_raw = (final_state.get("dimensions_snapshot_json") or "").strip()
+    dimensions_in_graph = bool(snap_raw)
+
     # Extract individual report sections
     reports: Dict[str, str] = {}
     if final_state.get("market_report"):
@@ -82,6 +85,7 @@ def build_result(
         "structured": structured if structured else None,
         "artifacts_path": str(artifact_path),
         "completed_at": datetime.utcnow().isoformat() + "Z",
+        "dimensions_in_graph": dimensions_in_graph,
     }
 
 
@@ -107,6 +111,19 @@ def _write_markdown_artifact(
     if analyst_parts:
         content = "\n\n".join(f"### {name}\n{text}" for name, text in analyst_parts)
         sections.append(f"## I. Analyst Team Reports\n\n{content}")
+
+    if (final_state.get("dimensions_summary") or "").strip():
+        sections.append(
+            "## Standardized dimensions snapshot\n\n"
+            "_Generated after analysts, before the research debate "
+            "(same snapshot fed to Trader and Portfolio Manager)._ \n\n"
+            f"{final_state['dimensions_summary']}"
+        )
+    elif (final_state.get("dimensions_error") or "").strip():
+        sections.append(
+            "## Standardized dimensions snapshot\n\n"
+            f"_Build failed:_ {final_state['dimensions_error']}"
+        )
 
     # 2. Research
     debate = final_state.get("investment_debate_state", {})

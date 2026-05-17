@@ -112,9 +112,9 @@ export function BatchPage() {
     if (!toFetch.length) return;
     toFetch.forEach((j) => {
       void getJobDimensions(j.job_id)
-        .then((d) => {
+        .then((b) => {
           if (cancelled) return;
-          setDimsByJob((prev) => ({ ...prev, [j.job_id]: d }));
+          setDimsByJob((prev) => ({ ...prev, [j.job_id]: b.dimensions }));
         })
         .catch(() => {
           if (cancelled) return;
@@ -179,12 +179,14 @@ export function BatchPage() {
   }, [batch?.jobs, filters, dimsByJob, sortKey, sortDir]);
 
   return (
-    <div style={{ maxWidth: "1200px" }}>
-      <h1 style={{ marginTop: 0 }}>Batch analysis</h1>
-      <p style={{ color: "var(--color-ash-gray)" }}>
-        Comma or newline separated tickers. Parallelism follows server{" "}
-        <span className="mono">max_concurrency</span>.
-      </p>
+    <div style={{ display: "grid", gap: "var(--spacing-24)", maxWidth: "1200px" }}>
+      <header>
+        <h1 style={{ margin: 0, fontSize: "var(--text-heading-lg)" }}>Batch analysis</h1>
+        <p style={{ margin: "var(--spacing-8) 0 0", color: "var(--color-ash-gray)", maxWidth: "62ch" }}>
+          Comma or newline separated tickers. Parallelism follows server{" "}
+          <span className="mono">max_concurrency</span>.
+        </p>
+      </header>
       <textarea
         value={rawTickers}
         onChange={(e) => setRawTickers(e.target.value)}
@@ -244,12 +246,30 @@ export function BatchPage() {
 
       {batch && (
         <>
-          <p>
-            <strong>Summary:</strong>{" "}
-            {Object.entries(batch.summary)
-              .map(([k, v]) => `${k}: ${v}`)
-              .join(", ")}
-          </p>
+          <section aria-label="Batch summary" style={{ display: "grid", gap: "var(--spacing-8)" }}>
+            <h2 style={{ margin: 0, fontSize: "var(--text-heading-sm)" }}>Summary</h2>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-8)" }}>
+              {Object.entries(batch.summary).map(([k, v]) => (
+                <span
+                  key={k}
+                  className="mono"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: "6px 12px",
+                    borderRadius: "var(--radius-cards)",
+                    border: "1px solid var(--color-stone-border)",
+                    background: "var(--surface-cloud-white)",
+                    fontSize: "var(--text-caption)",
+                    color: "var(--color-slate-text)",
+                  }}
+                >
+                  <span style={{ color: "var(--color-ash-gray)", marginRight: 6 }}>{k}</span>
+                  {v}
+                </span>
+              ))}
+            </div>
+          </section>
 
           <div
             style={{

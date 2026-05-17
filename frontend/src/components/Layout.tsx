@@ -7,6 +7,7 @@ const nav: { to: string; label: string }[] = [
   { to: "/history", label: "History" },
   { to: "/batch", label: "Batch" },
   { to: "/screener", label: "Screener" },
+  { to: "/sectors", label: "Sectors" },
   { to: "/news", label: "News" },
   { to: "/system", label: "System" },
   { to: "/admin", label: "Admin links" },
@@ -19,11 +20,10 @@ export function Layout() {
   const routeMotion = useRouteTransitionMotion();
 
   return (
-    <div style={{ display: "flex", minHeight: "100%" }}>
+    <div className="app-shell">
       <aside
+        className="app-shell__nav"
         style={{
-          width: 220,
-          flexShrink: 0,
           background: "var(--surface-cloud-white)",
           borderRight: "1px solid var(--color-stone-border)",
           padding: "var(--spacing-24) var(--spacing-16)",
@@ -67,11 +67,9 @@ export function Layout() {
         </nav>
       </aside>
       <main
+        className="app-shell__main"
         style={{
-          flex: 1,
           padding: "var(--spacing-32)",
-          maxWidth: "calc(100vw - 220px)",
-          overflow: "auto",
         }}
       >
         <AnimatePresence mode="wait" initial={false}>

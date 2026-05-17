@@ -57,6 +57,55 @@ class StateStore:
         self.put_str(key, json.dumps(value, ensure_ascii=False))
 
 
+class FallbackStateStore(StateStore):
+    """Primary store with local fallback for cloud-rate-limit resilience."""
+
+    def __init__(
+        self,
+        primary: StateStore,
+        fallback: StateStore,
+        *,
+        mirror_writes: bool = False,
+    ) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self._mirror_writes = mirror_writes
+
+    def get_str(self, key: str) -> Optional[str]:
+        primary_val: Optional[str] = None
+        try:
+            primary_val = self._primary.get_str(key)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Primary state get failed for %s: %s", key, exc)
+        if primary_val not in (None, ""):
+            return primary_val
+        try:
+            return self._fallback.get_str(key)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Fallback state get failed for %s: %s", key, exc)
+            return primary_val
+
+    def put_str(self, key: str, value: str) -> None:
+        primary_exc: Optional[Exception] = None
+        try:
+            self._primary.put_str(key, value)
+        except Exception as exc:
+            primary_exc = exc
+            logger.warning("Primary state put failed for %s: %s", key, exc)
+
+        fallback_exc: Optional[Exception] = None
+        should_write_fallback = self._mirror_writes or primary_exc is not None
+        if should_write_fallback:
+            try:
+                self._fallback.put_str(key, value)
+            except Exception as exc:
+                fallback_exc = exc
+                logger.warning("Fallback state put failed for %s: %s", key, exc)
+
+        if primary_exc is not None and fallback_exc is not None:
+            raise primary_exc
+
+
 class LocalFileStateStore(StateStore):
     """JSON object stored at ~/.tradingagents/api_state.json — keys map to JSON values."""
 
@@ -144,6 +193,13 @@ class CloudflareKVStore(StateStore):
 _store: Optional[StateStore] = None
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 def get_state_store() -> StateStore:
     """Singleton state store: Cloudflare KV if configured, else local file."""
     global _store
@@ -153,8 +209,12 @@ def get_state_store() -> StateStore:
     ns = os.getenv("CLOUDFLARE_KV_NAMESPACE_ID", "").strip()
     token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
     if account and ns and token:
-        _store = CloudflareKVStore(account, ns, token)
-        logger.info("State store: Cloudflare KV namespace_id=%s", ns)
+        primary = CloudflareKVStore(account, ns, token)
+        fallback = LocalFileStateStore()
+        mirror = _env_bool("TRADINGAGENTS_KV_MIRROR_LOCAL", default=False)
+        _store = FallbackStateStore(primary, fallback, mirror_writes=mirror)
+        mode = "Cloudflare KV + local mirror" if mirror else "Cloudflare KV + local fallback"
+        logger.info("State store: %s namespace_id=%s", mode, ns)
     else:
         _store = LocalFileStateStore()
         logger.info("State store: local file")

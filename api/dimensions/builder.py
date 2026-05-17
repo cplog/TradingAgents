@@ -3,19 +3,30 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from api.dimensions.commentary import CommentaryError, build_commentary as _bc
 from api.dimensions.facts import FactExtractionError, extract_facts
 from api.dimensions.factors import (
-    INVERTED_PEER_FIELDS, compute_factors_with_flags,
+    INVERTED_PEER_FIELDS,
+    compute_factors_sentiment_only,
+    compute_factors_with_flags,
 )
-from api.dimensions.peers import (
-    PeerCache, build_peer_pct_table, peer_universe_id, slug_for_sector,
+from api.dimensions.peer_resolver import (
+    peer_universe_display_label,
+    resolve_peer_facts_for_snapshot,
 )
+from api.dimensions.peers import build_peer_pct_table
 from api.dimensions.schemas import (
-    DimensionsCommentary, FactSnapshot, FundamentalsPillar, MarketPillar,
-    NewsPillar, PillarScore, PillarScores, SentimentPillar, StockDimensions,
+    DimensionsCommentary,
+    FactSnapshot,
+    FundamentalsPillar,
+    MarketPillar,
+    NewsPillar,
+    PillarScore,
+    PillarScores,
+    SentimentPillar,
+    StockDimensions,
 )
 from api.dimensions.scoring import PillarScoringError, score_pillars
 from api.dimensions.version import DIMENSIONS_VERSION
@@ -33,20 +44,27 @@ def _get_peer_cache_dir(config: Optional[Dict[str, Any]]) -> Path:
     return base / "peer_facts"
 
 
-def _load_or_refresh_peers(
-    sector: Optional[str], industry: Optional[str], cache_dir: Path,
-    ttl_hours: int = 24,
-) -> Tuple[List[str], Dict[str, Dict[str, Optional[float]]]]:
-    """v1: returns whatever is cached. Refresh is a separate operation
-    (scripts/warm_peer_cache.py or admin endpoint). Missing cache → empty."""
-    slug = slug_for_sector(sector, industry)
-    if not slug:
-        return [], {}
-    cache = PeerCache(base_dir=cache_dir)
-    rec = cache.read(slug)
-    if rec is None:
-        return [], {}
-    return rec.tickers, rec.facts
+_STYLE_PEER_PCT_KEYS = (
+    "pe_ttm",
+    "pb",
+    "eps_growth_yoy",
+    "revenue_growth_yoy",
+    "roe",
+    "interest_coverage",
+    "return_3m",
+    "return_12m",
+    "beta",
+)
+
+
+def _peer_pct_coverage_flags(peer_pct: Dict[str, Optional[float]]) -> List[str]:
+    """Surface when peer-relative ranks are thin so UI can label pillar-heavy blends."""
+    present = sum(1 for k in _STYLE_PEER_PCT_KEYS if peer_pct.get(k) is not None)
+    if present == 0:
+        return ["peer_style_percentiles_missing_using_pillar_blend"]
+    if present < 4:
+        return ["peer_style_percentiles_partial"]
+    return []
 
 
 def _facts_to_peer_dict(facts: FactSnapshot) -> Dict[str, Optional[float]]:
@@ -86,14 +104,55 @@ def _assemble(
     as_of_date: str,
     facts: FactSnapshot,
     pillars: PillarScores,
+    *,
+    peer_resolution_flags: List[str],
+    peer_resolution_scope: Optional[str],
+    peer_resolution_slug: Optional[str],
+    peer_resolution_paths: List[str],
+    peer_universe_visible_id: Optional[str],
     peer_pct: Dict[str, Optional[float]],
+    peer_row_count: int,
+    peer_usable: bool,
+    pillar_blend_when_no_peer_universe: bool,
     flags: List[str],
     source: str,
 ) -> StockDimensions:
-    factors, factor_flags = compute_factors_with_flags(
-        pillars, _facts_to_peer_dict(facts), peer_pct
+    if peer_usable:
+        # With ≥3 peers we still blend pillar scores + whatever peer percentiles exist.
+        # Strict “peer pct required” mode blanked factors for banks/HK names where yfinance
+        # peer ranks are often missing — radar looked “broken” despite valid pillars.
+        factors, factor_flags = compute_factors_with_flags(
+            pillars,
+            _facts_to_peer_dict(facts),
+            peer_pct,
+            enforce_peer_pct_for_style_factors=False,
+        )
+        cov_flags = _peer_pct_coverage_flags(peer_pct)
+    elif pillar_blend_when_no_peer_universe:
+        # Full analysis runs use analyst pillar scores even when peer cache is cold so the
+        # radar reflects the same narrative as “Pillar breakdown”. Facts-only snapshots keep
+        # sentiment-only factors (neutral pillars would imply fake precision).
+        factors, factor_flags = compute_factors_with_flags(
+            pillars,
+            _facts_to_peer_dict(facts),
+            {},
+            enforce_peer_pct_for_style_factors=False,
+        )
+        cov_flags = []
+    else:
+        factors, factor_flags = compute_factors_sentiment_only(pillars)
+        cov_flags = []
+
+    all_flags = (
+        list(flags)
+        + list(peer_resolution_flags)
+        + list(factor_flags)
+        + cov_flags
     )
-    all_flags = list(flags) + factor_flags
+
+    if not peer_usable and "peer_percentiles_unavailable" not in all_flags:
+        all_flags.append("peer_percentiles_unavailable")
+
     return StockDimensions(
         ticker=ticker,
         as_of_date=as_of_date,
@@ -101,7 +160,10 @@ def _assemble(
         pillar_scores=pillars,
         factor_scores=factors,
         dimensions_version=DIMENSIONS_VERSION,
-        peer_universe_id=peer_universe_id(facts.sector, facts.industry),
+        peer_universe_id=peer_universe_visible_id,
+        peer_scope=peer_resolution_scope,  # type: ignore[arg-type]
+        peer_universe_search_path=peer_resolution_paths,
+        peer_universe_resolved_slug=peer_resolution_slug,
         data_quality_flags=all_flags,
         source=source,  # type: ignore[arg-type]
     )
@@ -121,21 +183,43 @@ def build_dimensions(
         raise DimensionsBuildError(f"Fact extraction failed: {exc}") from exc
 
     cache_dir = _get_peer_cache_dir(config)
-    _peer_tickers, peer_facts_map = _load_or_refresh_peers(
-        facts.sector, facts.industry, cache_dir,
-    )
+    peer_res = resolve_peer_facts_for_snapshot(facts, cache_dir)
+    peer_row_count = peer_res.peer_row_count
     peer_pct = build_peer_pct_table(
         target_facts=_facts_to_peer_dict(facts),
-        peer_facts=list(peer_facts_map.values()),
+        peer_facts=list(peer_res.facts_by_ticker.values()),
         inverted_fields=INVERTED_PEER_FIELDS,
     )
 
+    peer_usable = peer_row_count >= 3 and peer_res.peer_scope != "unavailable"
+    display_label = peer_universe_display_label(peer_res)
+
+    source = "full_run"
     try:
         pillars = score_pillars(facts=facts, analyst_reports=analyst_reports, llm=llm)
     except PillarScoringError as exc:
-        raise DimensionsBuildError(f"Pillar scoring failed: {exc}") from exc
+        logger.warning("Pillar scoring unavailable for %s: %s", ticker, exc)
+        flags = list(flags) + [f"pillar_scoring_unavailable: {exc}"]
+        pillars = _neutral_pillars()
+        source = "facts_only"
 
-    return _assemble(ticker, as_of_date, facts, pillars, peer_pct, flags, "full_run")
+    return _assemble(
+        ticker,
+        as_of_date,
+        facts,
+        pillars,
+        peer_resolution_flags=peer_res.escalation_flags,
+        peer_resolution_scope=peer_res.peer_scope,
+        peer_resolution_slug=peer_res.slug_used,
+        peer_resolution_paths=peer_res.search_path_labels,
+        peer_universe_visible_id=display_label,
+        peer_pct=peer_pct,
+        peer_row_count=peer_row_count,
+        peer_usable=peer_usable,
+        pillar_blend_when_no_peer_universe=True,
+        flags=list(flags),
+        source=source,
+    )
 
 
 def build_dimensions_facts_only(
@@ -151,16 +235,32 @@ def build_dimensions_facts_only(
         raise DimensionsBuildError(f"Fact extraction failed: {exc}") from exc
 
     cache_dir = _get_peer_cache_dir(config)
-    _peer_tickers, peer_facts_map = _load_or_refresh_peers(
-        facts.sector, facts.industry, cache_dir,
-    )
+    peer_res = resolve_peer_facts_for_snapshot(facts, cache_dir)
+    peer_row_count = peer_res.peer_row_count
     peer_pct = build_peer_pct_table(
         target_facts=_facts_to_peer_dict(facts),
-        peer_facts=list(peer_facts_map.values()),
+        peer_facts=list(peer_res.facts_by_ticker.values()),
         inverted_fields=INVERTED_PEER_FIELDS,
     )
+    peer_usable = peer_row_count >= 3 and peer_res.peer_scope != "unavailable"
+    display_label = peer_universe_display_label(peer_res)
+
     return _assemble(
-        ticker, as_of_date, facts, _neutral_pillars(), peer_pct, flags, "facts_only"
+        ticker,
+        as_of_date,
+        facts,
+        _neutral_pillars(),
+        peer_resolution_flags=peer_res.escalation_flags,
+        peer_resolution_scope=peer_res.peer_scope,
+        peer_resolution_slug=peer_res.slug_used,
+        peer_resolution_paths=peer_res.search_path_labels,
+        peer_universe_visible_id=display_label,
+        peer_pct=peer_pct,
+        peer_row_count=peer_row_count,
+        peer_usable=peer_usable,
+        pillar_blend_when_no_peer_universe=False,
+        flags=list(flags),
+        source="facts_only",
     )
 
 

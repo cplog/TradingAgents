@@ -9,10 +9,14 @@ from typing import Dict, List
 
 import yfinance as yf
 
+from tradingagents.dataflows.akshare_news import get_news_akshare_em
 from tradingagents.dataflows.alpha_vantage_news import fetch_alpha_vantage_news_feed_items
+from tradingagents.dataflows.finnhub_data import get_news_finnhub
 from tradingagents.dataflows.reddit import fetch_reddit_feed_items
+from tradingagents.dataflows.rss_news import get_news_google_rss
 from tradingagents.dataflows.stockstats_utils import yf_retry
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_feed_items
+from tradingagents.dataflows.vendor_errors import DataVendorUnavailable
 from tradingagents.dataflows.yfinance_news import _extract_article_data, fetch_macro_news_feed_items
 
 from api.models import NewsFeedResponse, NewsItem
@@ -57,6 +61,70 @@ def _sentiment_from_alpha_vantage(label: str, score: float) -> tuple[str, float]
     if "bear" in lab:
         return "bearish", s if abs(s) > 0.02 else -0.42
     return "neutral", s
+
+
+def _parse_markdown_news_blocks(
+    raw: str,
+    *,
+    ticker: str,
+    source: str,
+    fallback_publisher: str,
+) -> List[NewsItem]:
+    """Parse markdown-style vendor news blocks into ``NewsItem`` rows."""
+    if not isinstance(raw, str) or "### " not in raw:
+        return []
+    chunks = [c.strip() for c in raw.split("### ") if c.strip()]
+    out: List[NewsItem] = []
+    for chunk in chunks:
+        lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        title_line = lines[0]
+        body_lines = lines[1:]
+
+        publisher = fallback_publisher
+        pub_date = None
+        title = title_line
+
+        # Finnhub format: "Headline (Source, YYYY-MM-DD)"
+        m = re.match(r"^(.*)\(([^,]+),\s*(\d{4}-\d{2}-\d{2})\)\s*$", title_line)
+        if m:
+            title = m.group(1).strip()
+            publisher = m.group(2).strip() or publisher
+            pub_date = m.group(3)
+
+        link = ""
+        summary_parts: List[str] = []
+        for ln in body_lines:
+            if ln.startswith("http://") or ln.startswith("https://"):
+                link = ln
+                continue
+            # RSS/AKShare date marker line: "_2026-05-15_" or "_2026-05-15 12:30_ (source)"
+            if ln.startswith("_") and ln.endswith("_"):
+                core = ln.strip("_")
+                dm = re.match(r"^(\d{4}-\d{2}-\d{2})", core)
+                if dm and pub_date is None:
+                    pub_date = dm.group(1)
+                continue
+            summary_parts.append(ln)
+
+        summary = "\n".join(summary_parts).strip()
+        label, score = _sentiment_from_text(title, summary)
+        out.append(
+            NewsItem(
+                title=title or "Untitled",
+                summary=summary,
+                publisher=publisher,
+                link=link,
+                pub_date=pub_date,
+                ticker=ticker,
+                sentiment=label,  # type: ignore[arg-type]
+                sentiment_score=score,
+                sector_tags=[],
+                source=source,  # type: ignore[arg-type]
+            )
+        )
+    return out
 
 
 def _items_yfinance(ticker: str, limit: int, days: int) -> List[NewsItem]:
@@ -109,7 +177,7 @@ def fetch_news_feed(
     limit: int = 50,
     days: int = 14,
 ) -> NewsFeedResponse:
-    """Merge Yahoo ticker headlines, Yahoo macro search, Alpha Vantage (if key set), Reddit, StockTwits."""
+    """Merge all UX news streams used by agent routing (where applicable)."""
     norm = normalize_ticker(ticker)
     source_errors: Dict[str, str] = {}
     per_source_cap = max(limit, 15)
@@ -152,6 +220,48 @@ def fetch_news_feed(
     except Exception as exc:
         logger.exception("Yahoo macro news failed for %s: %s", norm, exc)
         source_errors["yfinance_macro"] = str(exc)[:300]
+
+    try:
+        raw_fh = get_news_finnhub(norm, start_day, curr_day)
+        items.extend(
+            _parse_markdown_news_blocks(
+                raw_fh,
+                ticker=norm,
+                source="finnhub",
+                fallback_publisher="Finnhub",
+            )[: min(25, per_source_cap)]
+        )
+    except (DataVendorUnavailable, Exception) as exc:
+        logger.exception("Finnhub news failed for %s: %s", norm, exc)
+        source_errors["finnhub"] = str(exc)[:300]
+
+    try:
+        raw_rss = get_news_google_rss(norm, start_day, curr_day)
+        items.extend(
+            _parse_markdown_news_blocks(
+                raw_rss,
+                ticker=norm,
+                source="google_rss",
+                fallback_publisher="Google News RSS",
+            )[: min(25, per_source_cap)]
+        )
+    except (DataVendorUnavailable, Exception) as exc:
+        logger.exception("Google RSS news failed for %s: %s", norm, exc)
+        source_errors["google_rss"] = str(exc)[:300]
+
+    try:
+        raw_ak = get_news_akshare_em(norm, start_day, curr_day)
+        items.extend(
+            _parse_markdown_news_blocks(
+                raw_ak,
+                ticker=norm,
+                source="akshare",
+                fallback_publisher="AKShare",
+            )[: min(25, per_source_cap)]
+        )
+    except (DataVendorUnavailable, Exception) as exc:
+        logger.exception("AKShare news failed for %s: %s", norm, exc)
+        source_errors["akshare"] = str(exc)[:300]
 
     if os.getenv("ALPHA_VANTAGE_API_KEY"):
         try:

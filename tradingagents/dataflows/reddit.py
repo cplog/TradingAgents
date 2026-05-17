@@ -31,6 +31,19 @@ _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
 DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
 
 
+def _dedupe_reddit_posts(posts: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for p in posts:
+        pid = p.get("id") or p.get("permalink") or ""
+        pid = str(pid)
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append(p)
+    return out
+
+
 def _fetch_subreddit(
     ticker: str,
     sub: str,
@@ -62,25 +75,55 @@ def fetch_reddit_posts(
     limit_per_sub: int = 5,
     timeout: float = 10.0,
     inter_request_delay: float = 0.4,
+    additional_queries: Iterable[str] | None = None,
 ) -> str:
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
 
+    ``additional_queries`` adds alternate search strings (e.g. company name from
+    yfinance) so non-US tickers (``6060.HK``) can still match discussion that
+    omits the exchange-qualified symbol.
+
     ``inter_request_delay`` keeps us under Reddit's public rate limit
     (~10 req/min per IP) even if the caller queries many subreddits.
     """
+    queries: list[str] = [ticker.strip()]
+    if additional_queries:
+        seen_upper = {queries[0].upper()}
+        for q in additional_queries:
+            q = str(q).strip()
+            if not q or q.upper() in seen_upper:
+                continue
+            seen_upper.add(q.upper())
+            queries.append(q)
+
     blocks = []
     total_posts = 0
     for i, sub in enumerate(subreddits):
         if i > 0:
             time.sleep(inter_request_delay)
-        posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        collected: list[dict] = []
+        inner_first = True
+        for q in queries:
+            if not inner_first:
+                time.sleep(inter_request_delay)
+            inner_first = False
+            posts = _fetch_subreddit(q, sub, limit_per_sub, timeout)
+            collected.extend(posts)
+            collected = _dedupe_reddit_posts(collected)
+            if len(collected) >= limit_per_sub:
+                collected = collected[:limit_per_sub]
+                break
+        posts = collected
         total_posts += len(posts)
         if not posts:
-            blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
+            blocks.append(
+                f"r/{sub}: <no posts found mentioning any of {queries!r} in the past 7 days>"
+            )
             continue
 
-        lines = [f"r/{sub} — {len(posts)} recent posts mentioning {ticker.upper()}:"]
+        qstr = ", ".join(queries)
+        lines = [f"r/{sub} — {len(posts)} recent posts (search terms: {qstr}):"]
         for p in posts:
             title = (p.get("title") or "").replace("\n", " ").strip()
             score = p.get("score", 0)
@@ -100,7 +143,7 @@ def fetch_reddit_posts(
 
     if total_posts == 0:
         return (
-            f"<no Reddit posts found mentioning {ticker.upper()} across "
+            f"<no Reddit posts found for search terms {queries!r} across "
             f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"
         )
     return "\n\n".join(blocks)
@@ -126,17 +169,39 @@ def fetch_reddit_feed_items(
     limit_per_sub: int = 5,
     timeout: float = 10.0,
     inter_request_delay: float = 0.4,
+    additional_queries: Iterable[str] | None = None,
 ) -> list[dict]:
     """Structured posts for the API news feed (one dict per post).
 
     Keys: title, summary, publisher, link, pub_date (ISO or None).
     """
+    queries: list[str] = [ticker.strip()]
+    if additional_queries:
+        seen_upper = {queries[0].upper()}
+        for q in additional_queries:
+            q = str(q).strip()
+            if not q or q.upper() in seen_upper:
+                continue
+            seen_upper.add(q.upper())
+            queries.append(q)
+
     out: list[dict] = []
     for i, sub in enumerate(subreddits):
         if i > 0:
             time.sleep(inter_request_delay)
-        posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
-        for p in posts:
+        collected: list[dict] = []
+        inner_first = True
+        for q in queries:
+            if not inner_first:
+                time.sleep(inter_request_delay)
+            inner_first = False
+            posts = _fetch_subreddit(q, sub, limit_per_sub, timeout)
+            collected.extend(posts)
+            collected = _dedupe_reddit_posts(collected)
+            if len(collected) >= limit_per_sub:
+                collected = collected[:limit_per_sub]
+                break
+        for p in collected:
             title = (p.get("title") or "").replace("\n", " ").strip() or "(no title)"
             selftext = (p.get("selftext") or "").replace("\n", " ").strip()
             if len(selftext) > 500:

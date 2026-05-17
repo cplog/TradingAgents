@@ -32,6 +32,22 @@ def create_portfolio_manager(llm):
         research_plan = state["investment_plan"]
         trader_plan = state["trader_investment_plan"]
 
+        summary = (state.get("dimensions_summary") or "").strip()
+        dim_err = (state.get("dimensions_error") or "").strip()
+        dim_block = ""
+        if summary:
+            dim_block = (
+                "\n\n**Standardized dimensions snapshot** "
+                "(same analyst reports as above, plus yfinance facts and sector/industry peer ranks; "
+                "computed before the bull/bear debate begins):\n"
+                f"{summary}\n"
+            )
+        elif dim_err:
+            dim_block = (
+                f"\n\n**Standardized dimensions snapshot:** unavailable ({dim_err}). "
+                "Proceed using narrative and debate evidence only.\n"
+            )
+
         past_context = state.get("past_context", "")
         lessons_line = (
             f"- Lessons from prior decisions and outcomes:\n{past_context}\n"
@@ -55,13 +71,18 @@ def create_portfolio_manager(llm):
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
+{dim_block}
 {lessons_line}
 **Risk Analysts Debate History:**
 {history}
 
 ---
 
-Be decisive and ground every conclusion in specific evidence from the analysts.{get_language_instruction()}"""
+Be decisive and ground every conclusion in specific evidence from the analysts.
+If a standardized dimensions snapshot is present, include a dedicated short paragraph stating
+whether those signals **align with**, **partially align with**, or **conflict with** your final rating,
+citing concrete factor or pillar items from the snapshot (not vague language).
+If the snapshot is missing, do not invent quantitative scores.{get_language_instruction()}"""
 
         final_trade_decision = invoke_structured_or_freetext(
             structured_llm,

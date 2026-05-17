@@ -41,21 +41,58 @@ export function SystemPage() {
       >
         <h2 style={{ marginTop: 0 }}>Service health</h2>
         {health ? (
-          <ul style={{ margin: 0, paddingLeft: 20 }}>
-            <li>
-              LLM API key:{" "}
-              {health.api_key_configured ? (
-                <span style={{ color: "#166534" }}>configured</span>
-              ) : (
-                <span style={{ color: "#b91c1c" }}>missing</span>
-              )}
-            </li>
-            <li>Provider: {health.llm_provider}</li>
-            <li>State store: {health.state_store}</li>
-            <li>Cloudflare KV: {health.cloudflare_kv_configured ? "yes" : "no"}</li>
-            <li>Data cache: {health.data_cache_dir}</li>
-            <li>Results: {health.results_dir}</li>
-          </ul>
+          <>
+            <ul style={{ margin: 0, paddingLeft: 20 }}>
+              <li>
+                LLM API key:{" "}
+                {health.api_key_configured ? (
+                  <span style={{ color: "#166534" }}>configured</span>
+                ) : (
+                  <span style={{ color: "#b91c1c" }}>missing</span>
+                )}
+              </li>
+              <li>Provider: {health.llm_provider}</li>
+              <li>State store: {health.state_store}</li>
+              <li>Cloudflare KV: {health.cloudflare_kv_configured ? "yes" : "no"}</li>
+              <li>Data cache: {health.data_cache_dir}</li>
+              <li>Results: {health.results_dir}</li>
+            </ul>
+            <h3 style={{ margin: "16px 0 8px" }}>Data source checks</h3>
+            {health.data_source_checks && Object.keys(health.data_source_checks).length ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: "6px 8px", borderBottom: "1px solid var(--color-stone-border)" }}>Source</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px", borderBottom: "1px solid var(--color-stone-border)" }}>Configured</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px", borderBottom: "1px solid var(--color-stone-border)" }}>Status</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px", borderBottom: "1px solid var(--color-stone-border)" }}>Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(health.data_source_checks).map(([name, check]) => (
+                      <tr key={name}>
+                        <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--color-canvas-fog)" }}>{name}</td>
+                        <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--color-canvas-fog)" }}>
+                          {check.configured ? "yes" : "no"}
+                        </td>
+                        <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--color-canvas-fog)" }}>
+                          <span style={{ color: check.ok ? "#166534" : "#b91c1c" }}>
+                            {check.ok ? "ok" : "down"}
+                          </span>
+                        </td>
+                        <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--color-canvas-fog)" }}>
+                          {check.detail || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p style={{ margin: "8px 0 0" }}>No data source checks reported.</p>
+            )}
+          </>
         ) : (
           <p>Could not load /api/health</p>
         )}

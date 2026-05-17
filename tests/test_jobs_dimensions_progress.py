@@ -75,6 +75,6 @@ async def test_dimensions_phase_emits_six_progress_events(monkeypatch):
     dim_events = [e for e in rec.progress_events if e.get("stage") == "dimensions"]
     assert len(dim_events) >= 6
     messages = " | ".join(e["message"] for e in dim_events)
-    assert "extracting facts" in messages
+    assert "quantitative inputs" in messages
     assert "scoring 16 pillars" in messages
     assert "commentary" in messages

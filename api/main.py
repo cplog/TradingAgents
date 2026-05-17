@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, Field
+
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +32,7 @@ from api.history import (
     d1_history_enabled,
     delete_run,
     get_run,
+    list_history_coverage,
     list_runs,
     persist_completed_run,
 )
@@ -37,7 +40,9 @@ from api.dimensions.builder import (
     DimensionsBuildError,
     build_commentary as build_commentary_orchestrator,
     build_dimensions,
+    build_dimensions_facts_only,
 )
+from api.dimensions.schemas import DimensionsCommentary, StockDimensions
 from api.models import (
     AnalysisResult,
     AnalyzeRequest,
@@ -45,11 +50,15 @@ from api.models import (
     BatchAnalyzeRequest,
     BatchAnalyzeResponse,
     BatchStatusResponse,
+    DataSourceCheck,
     HealthResponse,
     HistoryCompareRequest,
     HistoryCompareResponse,
+    HistoryCoverageRow,
+    IndustryConstituentRow,
     HistoryRunDetail,
     HistoryRunRef,
+    JobDimensionsResponse,
     JobStatusResponse,
     RuntimeConfigUpdateRequest,
 )
@@ -61,9 +70,26 @@ logger = logging.getLogger(__name__)
 # Global state managed by lifespan
 _service_config: Dict[str, Any] = {}
 _worker: Worker | None = None
+_data_source_health_cache: Dict[str, DataSourceCheck] = {}
+_data_source_health_cached_at: Optional[datetime] = None
 
 STATE_SERVICE_OVERRIDES = "service_overrides"
 STATE_PERSISTED_SECRETS = "persisted_secrets"
+
+
+class PeerCacheRefreshRequest(BaseModel):
+    """Admin payload for documenting a peer-universe intent (full warm stays CLI-first)."""
+
+    sector: str
+    industry: Optional[str] = None
+    tickers: List[str] = Field(default_factory=list)
+    mode: str = Field(
+        default="global",
+        description="global | local | sector — matches scripts/warm_peer_cache.py",
+    )
+    exchange: Optional[str] = None
+    currency: Optional[str] = None
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
@@ -104,6 +130,257 @@ def _record_to_status(rec) -> JobStatusResponse:
         progress_events=list(rec.progress_events or []),
         batch_id=rec.batch_id,
     )
+
+
+def _utc_iso_now() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _check_yfinance() -> DataSourceCheck:
+    now = _utc_iso_now()
+    try:
+        import yfinance as yf
+
+        data = yf.Ticker("AAPL").history(period="1d")
+        if data is None or data.empty:
+            return DataSourceCheck(
+                ok=False,
+                configured=True,
+                checked_at=now,
+                detail="yfinance returned empty data",
+            )
+        return DataSourceCheck(ok=True, configured=True, checked_at=now)
+    except Exception as exc:
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail=str(exc),
+        )
+
+
+def _check_finnhub() -> DataSourceCheck:
+    now = _utc_iso_now()
+    token = os.getenv("FINNHUB_API_KEY", "").strip()
+    if not token:
+        return DataSourceCheck(
+            ok=False,
+            configured=False,
+            checked_at=now,
+            detail="FINNHUB_API_KEY not set",
+        )
+    try:
+        r = requests.get(
+            "https://finnhub.io/api/v1/quote",
+            params={"symbol": "AAPL", "token": token},
+            timeout=8,
+        )
+        if r.status_code == 429:
+            return DataSourceCheck(
+                ok=False,
+                configured=True,
+                checked_at=now,
+                detail="rate limited (429)",
+            )
+        if r.status_code >= 400:
+            return DataSourceCheck(
+                ok=False,
+                configured=True,
+                checked_at=now,
+                detail=f"HTTP {r.status_code}",
+            )
+        payload = r.json()
+        price = payload.get("c")
+        ok = isinstance(price, (int, float))
+        return DataSourceCheck(
+            ok=ok,
+            configured=True,
+            checked_at=now,
+            detail=None if ok else "missing quote price in response",
+        )
+    except Exception as exc:
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail=str(exc),
+        )
+
+
+def _check_alpha_vantage() -> DataSourceCheck:
+    now = _utc_iso_now()
+    token = os.getenv("ALPHA_VANTAGE_API_KEY", "").strip()
+    if not token:
+        return DataSourceCheck(
+            ok=False,
+            configured=False,
+            checked_at=now,
+            detail="ALPHA_VANTAGE_API_KEY not set",
+        )
+    try:
+        r = requests.get(
+            "https://www.alphavantage.co/query",
+            params={"function": "GLOBAL_QUOTE", "symbol": "IBM", "apikey": token},
+            timeout=8,
+        )
+        if r.status_code == 429:
+            return DataSourceCheck(
+                ok=False,
+                configured=True,
+                checked_at=now,
+                detail="rate limited (429)",
+            )
+        if r.status_code >= 400:
+            return DataSourceCheck(
+                ok=False,
+                configured=True,
+                checked_at=now,
+                detail=f"HTTP {r.status_code}",
+            )
+        payload = r.json()
+        if isinstance(payload, dict):
+            if payload.get("Note"):
+                return DataSourceCheck(
+                    ok=False,
+                    configured=True,
+                    checked_at=now,
+                    detail="rate limited (Note)",
+                )
+            quote = payload.get("Global Quote")
+            if isinstance(quote, dict) and quote.get("05. price"):
+                return DataSourceCheck(ok=True, configured=True, checked_at=now)
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail="unexpected response shape",
+        )
+    except Exception as exc:
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail=str(exc),
+        )
+
+
+def _check_google_rss() -> DataSourceCheck:
+    now = _utc_iso_now()
+    try:
+        r = requests.get(
+            "https://news.google.com/rss/search",
+            params={"q": "AAPL stock", "hl": "en", "gl": "US", "ceid": "US:en"},
+            headers={"User-Agent": "TradingAgents/healthcheck"},
+            timeout=8,
+        )
+        if r.status_code >= 400:
+            return DataSourceCheck(
+                ok=False,
+                configured=True,
+                checked_at=now,
+                detail=f"HTTP {r.status_code}",
+            )
+        body = r.text.lstrip()
+        ok = "<rss" in body[:400] or body.startswith("<?xml")
+        return DataSourceCheck(
+            ok=ok,
+            configured=True,
+            checked_at=now,
+            detail=None if ok else "non-RSS response",
+        )
+    except Exception as exc:
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail=str(exc),
+        )
+
+
+def _check_akshare() -> DataSourceCheck:
+    now = _utc_iso_now()
+    try:
+        import akshare as ak  # type: ignore[import-untyped]
+
+        # Lightweight probe: metadata-style endpoint, avoids large dataframe pulls.
+        symbols = ak.stock_us_famous_spot_em()
+        if symbols is None or getattr(symbols, "empty", True):
+            return DataSourceCheck(
+                ok=False,
+                configured=True,
+                checked_at=now,
+                detail="akshare returned empty dataset",
+            )
+        return DataSourceCheck(ok=True, configured=True, checked_at=now)
+    except ImportError:
+        return DataSourceCheck(
+            ok=False,
+            configured=False,
+            checked_at=now,
+            detail="akshare package not installed",
+        )
+    except Exception as exc:
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail=str(exc),
+        )
+
+
+def _check_baostock() -> DataSourceCheck:
+    now = _utc_iso_now()
+    try:
+        import baostock as bs  # type: ignore[import-untyped]
+
+        lg = bs.login()
+        if lg.error_code != "0":
+            return DataSourceCheck(
+                ok=False,
+                configured=True,
+                checked_at=now,
+                detail=f"login failed: {lg.error_msg}",
+            )
+        bs.logout()
+        return DataSourceCheck(ok=True, configured=True, checked_at=now)
+    except ImportError:
+        return DataSourceCheck(
+            ok=False,
+            configured=False,
+            checked_at=now,
+            detail="baostock package not installed",
+        )
+    except Exception as exc:
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail=str(exc),
+        )
+
+
+def _build_data_source_checks() -> Dict[str, DataSourceCheck]:
+    return {
+        "yfinance": _check_yfinance(),
+        "finnhub": _check_finnhub(),
+        "alpha_vantage": _check_alpha_vantage(),
+        "google_rss": _check_google_rss(),
+        "akshare": _check_akshare(),
+        "baostock": _check_baostock(),
+    }
+
+
+def _get_data_source_checks_cached(ttl_seconds: int = 180) -> Dict[str, DataSourceCheck]:
+    global _data_source_health_cached_at, _data_source_health_cache
+    now = datetime.utcnow()
+    if (
+        _data_source_health_cached_at is None
+        or (now - _data_source_health_cached_at).total_seconds() > ttl_seconds
+        or not _data_source_health_cache
+    ):
+        _data_source_health_cache = _build_data_source_checks()
+        _data_source_health_cached_at = now
+    return _data_source_health_cache
 
 
 def _normalize_ollama_base(base_url: Optional[str]) -> str:
@@ -245,7 +522,11 @@ async def lifespan(app: FastAPI):
 
     max_concurrency = int(_service_config.get("max_concurrency", 3))
     ttl_hours = int(_service_config.get("job_ttl_hours", 24))
-    _worker = Worker(max_concurrency=max_concurrency, ttl_hours=ttl_hours)
+    _worker = Worker(
+        max_concurrency=max_concurrency,
+        ttl_hours=ttl_hours,
+        state_store=get_state_store(),
+    )
 
     logger.info(
         "TradingAgents API started | provider=%s | deep=%s | quick=%s | concurrency=%d",
@@ -343,6 +624,7 @@ async def api_health() -> HealthResponse:
         yf_ok = True
     except Exception:
         yf_ok = False
+    source_checks = _get_data_source_checks_cached()
     store = get_state_store()
     if d1 and cf:
         store_kind = "cloudflare_d1+kv"
@@ -362,6 +644,7 @@ async def api_health() -> HealthResponse:
         data_cache_dir=str(_service_config.get("data_cache_dir", "")),
         results_dir=str(_service_config.get("results_dir", "")),
         yfinance_reachable=yf_ok,
+        data_source_checks=source_checks,
     )
 
 
@@ -482,6 +765,16 @@ async def get_job(job_id: str) -> JobStatusResponse:
     return _record_to_status(record)
 
 
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> Dict[str, Any]:
+    """Request cooperative cancellation before the worker reaches the next graph boundary."""
+    if _worker is None:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+    if not _worker.store.request_cancellation(job_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"cancellation_requested": True}
+
+
 @app.get("/jobs/{job_id}/events")
 async def job_events(job_id: str) -> StreamingResponse:
     """Server-Sent Events stream of progress log lines."""
@@ -541,15 +834,106 @@ async def get_report(job_id: str) -> FileResponse:
     )
 
 
-@app.get("/history/runs", response_model=List[HistoryRunRef])
+def _job_dimensions_from_result(result: Optional[Dict[str, Any]]) -> JobDimensionsResponse:
+    """Parse dimensions + commentary from a completed job's raw result dict."""
+    if not result:
+        return JobDimensionsResponse()
+    raw_d = result.get("dimensions")
+    raw_c = result.get("dimensions_commentary")
+    err = result.get("dimensions_error")
+    dimensions = None
+    commentary = None
+    if isinstance(raw_d, dict):
+        try:
+            dimensions = StockDimensions.model_validate(raw_d)
+        except Exception:
+            dimensions = None
+    if isinstance(raw_c, dict):
+        try:
+            commentary = DimensionsCommentary.model_validate(raw_c)
+        except Exception:
+            commentary = None
+    err_str: Optional[str] = None
+    if err is not None and str(err).strip():
+        err_str = str(err).strip()
+    return JobDimensionsResponse(dimensions=dimensions, commentary=commentary, error=err_str)
+
+
+@app.get("/jobs/{job_id}/dimensions", response_model=JobDimensionsResponse)
+async def get_job_dimensions(job_id: str) -> JobDimensionsResponse:
+    record = _worker.store.get(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if record.status != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is {record.status}; dimensions are available when the job completes",
+        )
+    return _job_dimensions_from_result(record.result)
+
+
+@app.get("/dimensions/{ticker}", response_model=StockDimensions)
+@app.get("/api/dimensions/{ticker}", response_model=StockDimensions)
+async def get_dimensions_preview(
+    ticker: str,
+    as_of_date: Optional[str] = Query(
+        None,
+        description="YYYY-MM-DD (optional); defaults to today UTC",
+    ),
+) -> StockDimensions:
+    """Facts-only dimensions snapshot for screening (no analyst reports, no LLM)."""
+    from api.tickers import normalize_ticker, validate_date
+
+    try:
+        sym = normalize_ticker(ticker)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid ticker: {exc}")
+
+    day = (as_of_date or "").strip() or datetime.utcnow().strftime("%Y-%m-%d")
+    if not validate_date(day):
+        raise HTTPException(status_code=400, detail="as_of_date must be YYYY-MM-DD")
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(
+            None,
+            lambda: build_dimensions_facts_only(
+                ticker=sym, as_of_date=day, config=_service_config
+            ),
+        )
+    except DimensionsBuildError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/history/runs", response_model=List[HistoryRunRef])
 async def history_list_runs(
     ticker: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    sector: Optional[str] = Query(
+        None,
+        description="Filter by dimensions facts sector (requires D1-backed history).",
+    ),
+    industry: Optional[str] = Query(
+        None,
+        description="Filter by dimensions facts industry (requires D1-backed history).",
+    ),
 ) -> List[HistoryRunRef]:
     """List persisted analysis runs from state store (newest-first per index)."""
     from api.tickers import validate_date
+
+    sect = sector.strip() if sector and sector.strip() else None
+    ind = industry.strip() if industry and industry.strip() else None
+
+    if (sect or ind) and not d1_history_enabled():
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "sector/industry filters require Cloudflare D1 history "
+                "(CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID, CLOUDFLARE_API_TOKEN)."
+            ),
+        )
 
     if date_from is not None and not validate_date(date_from):
         raise HTTPException(status_code=400, detail="date_from must be YYYY-MM-DD")
@@ -561,6 +945,8 @@ async def history_list_runs(
         limit=limit,
         date_from=date_from,
         date_to=date_to,
+        sector=sect,
+        industry=ind,
     )
     out: List[HistoryRunRef] = []
     for r in rows:
@@ -578,7 +964,37 @@ async def history_list_runs(
     return out
 
 
-@app.get("/history/runs/{run_id}", response_model=HistoryRunDetail)
+@app.get("/api/history/coverage", response_model=List[HistoryCoverageRow])
+async def history_sector_industry_coverage() -> List[HistoryCoverageRow]:
+    """Sector/industry run counts aggregated from persisted dimensions facts (D1 only)."""
+    try:
+        raw = list_history_coverage()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return [HistoryCoverageRow.model_validate(r) for r in raw]
+
+
+@app.get("/api/catalog/industry-constituents", response_model=List[IndustryConstituentRow])
+@app.get("/api/history/constituents", response_model=List[IndustryConstituentRow])
+async def history_industry_constituents(
+    sector: str = Query(..., min_length=1),
+    industry: str = Query(..., min_length=1),
+    market: Optional[str] = Query(None, description="US, HK, or omit for all markets"),
+) -> List[IndustryConstituentRow]:
+    """Catalog constituents for a sector/industry bucket with per-ticker analysis coverage.
+
+    Exposed at ``/api/catalog/industry-constituents`` (preferred) and ``/api/history/constituents`` (legacy).
+    """
+    from api.dimensions.sector_industry_catalog import list_industry_constituents
+
+    try:
+        raw = list_industry_constituents(sector, industry, market=market)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return [IndustryConstituentRow.model_validate(r) for r in raw]
+
+
+@app.get("/api/history/runs/{run_id}", response_model=HistoryRunDetail)
 async def history_get_run(run_id: str) -> HistoryRunDetail:
     raw = get_run(get_state_store(), run_id)
     if not raw:
@@ -586,7 +1002,7 @@ async def history_get_run(run_id: str) -> HistoryRunDetail:
     return HistoryRunDetail.model_validate(raw)
 
 
-@app.delete("/history/runs/{run_id}")
+@app.delete("/api/history/runs/{run_id}")
 async def history_delete_run(run_id: str) -> Dict[str, Any]:
     rid = run_id.strip()
     if not rid:
@@ -597,7 +1013,7 @@ async def history_delete_run(run_id: str) -> Dict[str, Any]:
     return {"deleted": True, "run_id": rid}
 
 
-@app.post("/history/compare", response_model=HistoryCompareResponse)
+@app.post("/api/history/compare", response_model=HistoryCompareResponse)
 async def history_compare(body: HistoryCompareRequest) -> HistoryCompareResponse:
     payload = compare_runs(get_state_store(), body.run_id_a.strip(), body.run_id_b.strip())
     if payload is None:
@@ -617,7 +1033,7 @@ def _build_llm_for_dimensions(cfg: Dict[str, Any]):
     return client.get_llm()
 
 
-@app.post("/history/runs/{run_id}/recompute-dimensions", response_model=HistoryRunDetail)
+@app.post("/api/history/runs/{run_id}/recompute-dimensions", response_model=HistoryRunDetail)
 async def recompute_dimensions(run_id: str) -> Dict[str, Any]:
     """Recompute dimensions + commentary for an existing run and patch the record."""
     store = get_state_store()
@@ -754,6 +1170,52 @@ async def clear_cache(
                 except OSError:
                     pass
     return {"cleared": True, "mode": mode, "files": cleared}
+
+
+@app.post("/admin/jobs/clear")
+async def clear_jobs_admin(
+    body: Optional[Dict[str, Any]] = None,
+    _admin: None = Depends(_admin_key_dep),
+) -> Dict[str, Any]:
+    """Clear API job state in memory and/or persisted snapshots."""
+    if _worker is None:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+    mode = str((body or {}).get("mode", "all")).strip().lower()
+    if mode not in ("memory", "persisted", "all"):
+        raise HTTPException(
+            status_code=400,
+            detail="mode must be one of: memory, persisted, all",
+        )
+    if mode == "memory":
+        removed = _worker.store.clear(clear_memory=True, clear_persisted=False)
+    elif mode == "persisted":
+        _worker.store.clear(clear_memory=False, clear_persisted=True)
+        removed = 0
+    else:
+        removed = _worker.store.clear(clear_memory=True, clear_persisted=True)
+    return {"cleared": True, "mode": mode, "jobs_removed": removed}
+
+
+@app.post("/admin/dimensions/peer-cache/refresh")
+async def refresh_peer_cache_admin(
+    body: PeerCacheRefreshRequest,
+    _admin: None = Depends(_admin_key_dep),
+) -> Dict[str, Any]:
+    """Accept peer-universe parameters for operators; full cache build remains CLI-first.
+
+    Use ``scripts/warm_peer_cache.py`` to materialize JSON + optional D1 rows.
+    """
+    return {
+        "status": "accepted",
+        "tickers_written": 0,
+        "message": (
+            "Peer cache warming is intentionally manual: run scripts/warm_peer_cache.py "
+            "`global`, `local`, or `sector` with a ticker list. When Cloudflare D1 is "
+            "configured with TRADINGAGENTS_ADMIN_KEY, warmed universes still mirror "
+            "through that script unless --no-d1 is passed."
+        ),
+        "request": body.model_dump(),
+    }
 
 
 # --- Static SPA (production build) ---

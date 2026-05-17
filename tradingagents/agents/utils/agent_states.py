@@ -1,5 +1,5 @@
 from typing import Annotated
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 from langgraph.graph import MessagesState
 
 
@@ -71,3 +71,8 @@ class AgentState(MessagesState):
     ]
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]
+
+    # Standardized dimensions snapshot (after analysts, before bull/bear debate)
+    dimensions_summary: NotRequired[str]
+    dimensions_error: NotRequired[str]
+    dimensions_snapshot_json: NotRequired[str]

@@ -1,5 +1,6 @@
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -17,7 +18,21 @@ import {
 import { DimensionsPanel } from "../components/dimensions/DimensionsPanel";
 import { DimensionsRadar } from "../components/dimensions/DimensionsRadar";
 import { FactorBar } from "../components/dimensions/FactorBar";
-import type { FactorScores, StockDimensions } from "../dimensions-types";
+import type { DimensionsCommentary, FactorScores, StockDimensions } from "../dimensions-types";
+import type { Components } from "react-markdown";
+import {
+  orderedReportSectionKeys,
+  prepareReportMarkdown,
+  REPORT_SECTION_LABELS,
+} from "../utils/reportMarkdown";
+
+const REPORT_MD_COMPONENTS: Components = {
+  table: ({ children, ...rest }) => (
+    <div className="markdown-table-wrap">
+      <table {...rest}>{children}</table>
+    </div>
+  ),
+};
 
 const FACTOR_KEYS: (keyof FactorScores)[] = [
   "value",
@@ -35,13 +50,37 @@ function pct(conf: number | null | undefined): string {
   return `${Math.round(conf * 100)}%`;
 }
 
-function mdFromReports(reports: Record<string, string>, section?: string): string {
-  if (section && reports[section]) {
-    return `## ${section}\n\n${reports[section]}`;
+type RowFactorSource = "run_snapshot" | "live_preview" | "loading" | "unavailable";
+
+function pickRowFactorScore(
+  run: HistoryRunRef,
+  tickerPreview: StockDimensions | null | undefined,
+  key: keyof FactorScores,
+): number | null {
+  const runScore = run.factor_scores?.[key];
+  if (typeof runScore === "number" && Number.isFinite(runScore)) {
+    return runScore;
   }
-  return Object.entries(reports || {})
-    .map(([k, v]) => `## ${k}\n\n${String(v)}`)
-    .join("\n\n---\n\n");
+  const previewScore = tickerPreview?.factor_scores[key]?.score;
+  if (typeof previewScore === "number" && Number.isFinite(previewScore)) {
+    return previewScore;
+  }
+  return null;
+}
+
+function inferRowFactorSource(
+  run: HistoryRunRef,
+  tickerPreview: StockDimensions | null | undefined,
+): RowFactorSource {
+  const hasRunSnapshot = FACTOR_KEYS.some((k) => {
+    const v = run.factor_scores?.[k];
+    return typeof v === "number" && Number.isFinite(v);
+  });
+  if (hasRunSnapshot) return "run_snapshot";
+  if (!run.ticker) return "unavailable";
+  if (tickerPreview === undefined) return "loading";
+  if (tickerPreview?.factor_scores) return "live_preview";
+  return "unavailable";
 }
 
 export function HistoryPage() {
@@ -65,12 +104,16 @@ export function HistoryPage() {
   const [detail, setDetail] = useState<HistoryRunDetail | null>(null);
   const [showFullPm, setShowFullPm] = useState(false);
   const compareResultsRef = useRef<HTMLElement | null>(null);
+  const detailSectionRef = useRef<HTMLElement | null>(null);
+  const detailFetchGen = useRef(0);
 
   // Lazy-fetched per-row factor scores (facts-only preview) keyed by ticker
   const [thumbDims, setThumbDims] = useState<Record<string, StockDimensions | null>>({});
   // Detail-view tab + dimensions for the currently-opened run
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("report");
+  const [reportSectionKey, setReportSectionKey] = useState<string | null>(null);
   const [detailDimensions, setDetailDimensions] = useState<StockDimensions | null>(null);
+  const [detailDimensionsCommentary, setDetailDimensionsCommentary] = useState<DimensionsCommentary | null>(null);
   const [detailDimensionsError, setDetailDimensionsError] = useState<string | null>(null);
   const [recomputing, setRecomputing] = useState(false);
   // Compare-side dimensions, fetched by ticker for each side
@@ -84,9 +127,19 @@ export function HistoryPage() {
   useEffect(() => {
     if (!runs.length) return;
     let cancelled = false;
-    const uniqueTickers = Array.from(
-      new Set(runs.map((r) => r.ticker).filter((t): t is string => Boolean(t)))
-    );
+    const uniqueTickers = Array.from(new Set(
+      runs
+        .filter((r) => {
+          if (!r.ticker) return false;
+          const hasRunSnapshot = FACTOR_KEYS.some((k) => {
+            const v = r.factor_scores?.[k];
+            return typeof v === "number" && Number.isFinite(v);
+          });
+          return !hasRunSnapshot;
+        })
+        .map((r) => r.ticker)
+        .filter((t): t is string => Boolean(t))
+    ));
     const missing = uniqueTickers.filter((t) => !(t in thumbDims));
     if (!missing.length) return;
     missing.forEach((t) => {
@@ -109,24 +162,61 @@ export function HistoryPage() {
   useEffect(() => {
     if (!detail) {
       setDetailDimensions(null);
+      setDetailDimensionsCommentary(null);
       setDetailDimensionsError(null);
+      return;
+    }
+    if (detail.dimensions !== undefined || detail.dimensions_error !== undefined) {
+      setDetailDimensions(detail.dimensions ?? null);
+      setDetailDimensionsCommentary(detail.dimensions_commentary ?? null);
+      setDetailDimensionsError(
+        detail.dimensions_error && !detail.dimensions ? detail.dimensions_error : null
+      );
       return;
     }
     let cancelled = false;
     setDetailDimensionsError(null);
     void getJobDimensions(detail.job_id)
-      .then((d) => {
-        if (!cancelled) setDetailDimensions(d);
+      .then((b) => {
+        if (cancelled) return;
+        setDetailDimensions(b.dimensions);
+        setDetailDimensionsCommentary(b.commentary);
+        setDetailDimensionsError(b.error && !b.dimensions ? b.error : null);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
         setDetailDimensions(null);
+        setDetailDimensionsCommentary(null);
         setDetailDimensionsError(e instanceof Error ? e.message : String(e));
       });
     return () => {
       cancelled = true;
     };
   }, [detail]);
+
+  useEffect(() => {
+    if (!detail?.reports) {
+      setReportSectionKey(null);
+      return;
+    }
+    const keys = orderedReportSectionKeys(detail.reports);
+    setReportSectionKey((prev) => {
+      if (prev && keys.includes(prev)) return prev;
+      return keys[0] ?? null;
+    });
+  }, [detail?.run_id, detail?.reports]);
+
+  const reportMarkdown = useMemo(() => {
+    if (!detail?.reports || !reportSectionKey) return "";
+    const raw = detail.reports[reportSectionKey];
+    if (!raw?.trim()) return "";
+    return prepareReportMarkdown(reportSectionKey, raw);
+  }, [detail?.reports, reportSectionKey]);
+
+  const reportSectionKeys = useMemo(
+    () => orderedReportSectionKeys(detail?.reports),
+    [detail?.reports],
+  );
 
   // Fetch compare-side dimensions (by ticker) when a compare response loads
   useEffect(() => {
@@ -169,6 +259,17 @@ export function HistoryPage() {
       }
     }
   }, [compare]);
+
+  useEffect(() => {
+    if (!detailRunId) return;
+    const id = window.requestAnimationFrame(() => {
+      const el = detailSectionRef.current;
+      if (el && typeof el.scrollIntoView === "function") {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [detailRunId, detailLoading, detail, detailError]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -260,8 +361,11 @@ export function HistoryPage() {
         setCompare(null);
       }
       if (detailRunId === runId) {
+        detailFetchGen.current += 1;
         setDetailRunId(null);
         setDetail(null);
+        setDetailLoading(false);
+        setDetailError(null);
       }
     } catch (e: unknown) {
       setDeleteError(e instanceof Error ? e.message : String(e));
@@ -270,22 +374,48 @@ export function HistoryPage() {
     }
   }
 
+  function closeRunDetail() {
+    detailFetchGen.current += 1;
+    setDetailRunId(null);
+    setDetail(null);
+    setDetailError(null);
+    setDetailLoading(false);
+  }
+
   async function onViewRun(runId: string) {
     if (detailRunId === runId && detail) return;
+    const gen = ++detailFetchGen.current;
     setDetailError(null);
     setDetailLoading(true);
     setDetailRunId(runId);
     setActiveDetailTab("report");
     try {
       const payload = await fetchHistoryRun(runId);
+      if (detailFetchGen.current !== gen) return;
       setDetail(payload);
     } catch (e: unknown) {
+      if (detailFetchGen.current !== gen) return;
       setDetail(null);
       setDetailError(e instanceof Error ? e.message : String(e));
     } finally {
-      setDetailLoading(false);
+      if (detailFetchGen.current === gen) setDetailLoading(false);
     }
   }
+
+  const [searchParams] = useSearchParams();
+  const urlRunHandled = useRef(false);
+
+  useEffect(() => {
+    const ticker = searchParams.get("ticker")?.trim();
+    if (ticker) setTickerFilter(ticker);
+  }, [searchParams]);
+
+  useEffect(() => {
+    const run = searchParams.get("run")?.trim();
+    if (!run || urlRunHandled.current) return;
+    urlRunHandled.current = true;
+    void onViewRun(run);
+  }, [searchParams]);
 
   async function onRecomputeDimensions() {
     if (!detail) return;
@@ -294,8 +424,9 @@ export function HistoryPage() {
     try {
       await recomputeDimensions(detail.run_id);
       // Refetch dimensions for the current detail run
-      const d = await getJobDimensions(detail.job_id);
-      setDetailDimensions(d);
+      const b = await getJobDimensions(detail.job_id);
+      setDetailDimensions(b.dimensions);
+      setDetailDimensionsCommentary(b.commentary);
     } catch (e: unknown) {
       setDetailDimensionsError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -304,16 +435,16 @@ export function HistoryPage() {
   }
 
   return (
-    <div style={{ display: "grid", gap: "var(--spacing-24)", maxWidth: "90rem" }}>
+    <div className="history-page" style={{ display: "grid", gap: "var(--spacing-24)" }}>
       <header>
         <h1 style={{ fontSize: "var(--text-heading-lg)", margin: "0 0 8px" }}>
           History &amp; compare
         </h1>
-        <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>
-          Durable runs from the API state store (Cloudflare KV when configured). Same ticker across dates
-          or cross-ticker — choose two runs, then{" "}
-          <strong>Use A / Use B</strong> in the table or the dropdowns. After Compare, the view scrolls to
-          the pair below.
+        <p style={{ margin: 0, color: "var(--color-ash-gray)", maxWidth: "70ch", lineHeight: 1.55 }}>
+          Durable runs from the API state store (Cloudflare KV when configured).{" "}
+          <strong>Open a run</strong> to read reports and dimensions in the panel <strong>directly below filters</strong>, so
+          a long table never sits above your content. Pick two runs with <strong>A / B</strong> or the Compare
+          dropdowns; results open under Compare and the page scrolls there.
         </p>
       </header>
 
@@ -386,6 +517,334 @@ export function HistoryPage() {
         )}
       </section>
 
+      {(detail || detailError || detailLoading) && (
+        <section
+          className="history-detail-card"
+          ref={detailSectionRef}
+          id="ta-history-run-detail"
+          style={{
+            display: "grid",
+            gap: "var(--spacing-24)",
+            background: "var(--surface-cloud-white)",
+            padding: "clamp(var(--spacing-24), 3vw, var(--card-padding))",
+            borderRadius: "var(--radius-largecard)",
+            border: "1px solid var(--color-stone-border)",
+            boxShadow: "var(--shadow-subtle)",
+          }}
+        >
+          <header
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: "var(--spacing-12)",
+            }}
+          >
+            <div style={{ display: "grid", gap: "var(--spacing-8)", minWidth: 0, flex: "1 1 16rem" }}>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: "var(--text-caption)",
+                  fontWeight: 600,
+                  letterSpacing: "0.02em",
+                  textTransform: "uppercase",
+                  color: "var(--color-steel-gray)",
+                }}
+              >
+                Selected run
+              </p>
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: "var(--text-heading-sm)",
+                  fontWeight: 600,
+                  color: "var(--color-slate-text)",
+                }}
+              >
+                Run detail
+                {detailRunId ? (
+                  <span
+                    className="mono"
+                    style={{
+                      fontWeight: 500,
+                      color: "var(--color-steel-gray)",
+                      fontSize: "var(--text-caption)",
+                    }}
+                  >
+                    {" "}
+                    · {detailRunId}
+                  </span>
+                ) : null}
+              </h2>
+            </div>
+            {detailRunId ? (
+              <button
+                type="button"
+                onClick={closeRunDetail}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: "var(--radius-buttons)",
+                  border: "1px solid var(--color-stone-border)",
+                  background: "var(--surface-canvas-fog)",
+                  fontWeight: 600,
+                  fontSize: "var(--text-caption)",
+                  cursor: "pointer",
+                  color: "var(--color-slate-text)",
+                }}
+              >
+                Close
+              </button>
+            ) : null}
+          </header>
+          {detailLoading && <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>Loading run detail…</p>}
+          {detailError && <p style={{ margin: 0, color: "#991b1b" }}>{detailError}</p>}
+          {detail && (
+            <>
+              <section
+                style={{
+                  display: "grid",
+                  gap: "var(--spacing-16)",
+                  paddingBottom: "var(--spacing-24)",
+                  borderBottom: "1px solid var(--color-stone-border)",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "var(--text-heading)",
+                    fontWeight: 600,
+                    letterSpacing: "-0.02em",
+                    lineHeight: 1.2,
+                    color: "var(--color-slate-text)",
+                  }}
+                >
+                  {detail.rating || "—"}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "baseline",
+                    gap: "var(--spacing-8) var(--spacing-16)",
+                    fontSize: "var(--text-caption)",
+                    color: "var(--color-steel-gray)",
+                  }}
+                >
+                  <span className="mono" style={{ color: "var(--color-slate-text)", fontWeight: 600 }}>
+                    {detail.ticker}
+                  </span>
+                  <span>As of {detail.date}</span>
+                  <span>
+                    Conviction <span style={{ color: "var(--color-ash-gray)" }}>(heuristic)</span>:{" "}
+                    {pct(detail.confidence ?? undefined)}
+                  </span>
+                  {detail.job_id ? (
+                    <span className="mono" style={{ color: "var(--color-steel-gray)" }}>
+                      job {detail.job_id}
+                    </span>
+                  ) : null}
+                  {detail.completed_at ? <span>Completed {detail.completed_at}</span> : null}
+                </div>
+                {detail.dimensions_in_graph === true && (
+                  <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "#166534" }}>
+                    Dimensional snapshot was included in Trader and Portfolio Manager prompts for this run.
+                  </p>
+                )}
+                {detail.dimensions_in_graph === false && (
+                  <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
+                    No in-graph dimensions snapshot on this persisted run. The Dimensions tab still shows scores from
+                    storage or recompute when available.
+                  </p>
+                )}
+              </section>
+
+              <div
+                role="tablist"
+                aria-label="Run detail views"
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  padding: 6,
+                  background: "var(--surface-canvas-fog)",
+                  borderRadius: "var(--radius-cards)",
+                  border: "1px solid var(--color-stone-border)",
+                }}
+              >
+                {(
+                  [
+                    { id: "report" as const, label: "Agent reports" },
+                    { id: "dimensions" as const, label: "Dimensional study" },
+                  ] as const
+                ).map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeDetailTab === t.id}
+                    onClick={() => setActiveDetailTab(t.id)}
+                    style={{
+                      padding: "10px 16px",
+                      borderRadius: "var(--radius-buttons)",
+                      border:
+                        activeDetailTab === t.id
+                          ? "1px solid var(--color-chartwell-blue)"
+                          : "1px solid transparent",
+                      background: activeDetailTab === t.id ? "var(--color-sky-tint)" : "transparent",
+                      cursor: "pointer",
+                      fontWeight: activeDetailTab === t.id ? 600 : 500,
+                      color: "var(--color-slate-text)",
+                      fontSize: "var(--text-caption)",
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {activeDetailTab === "report" && (
+                <div className="history-report-view" style={{ display: "grid", gap: "var(--spacing-24)", minWidth: 0 }}>
+                  <header style={{ display: "grid", gap: "var(--spacing-8)" }}>
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: "var(--text-caption)",
+                        fontWeight: 600,
+                        letterSpacing: "0.02em",
+                        textTransform: "uppercase",
+                        color: "var(--color-steel-gray)",
+                      }}
+                    >
+                      Sections
+                    </p>
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: "var(--text-caption)",
+                        color: "var(--color-ash-gray)",
+                        maxWidth: "65ch",
+                      }}
+                    >
+                      Research artifacts only, not financial advice. Pick a section to read; wide tables scroll
+                      horizontally inside the content area.
+                    </p>
+                  </header>
+                  <div
+                    style={{
+                      padding: "var(--spacing-16)",
+                      borderRadius: "var(--radius-cards)",
+                      border: "1px solid var(--color-stone-border)",
+                      background: "var(--surface-canvas-fog)",
+                      fontSize: "var(--text-caption)",
+                      lineHeight: 1.55,
+                      color: "var(--color-steel-gray)",
+                    }}
+                  >
+                    Agent sections are LLM-generated from tools and public data; they can contain errors, repetition, or
+                    off-topic padding (especially macro/news). Use fundamentals and tool-grounded facts when something
+                    conflicts. HK/ADR names may appear with exchange suffixes; verify critical figures in primary sources.
+                  </div>
+                  {reportSectionKeys.length > 0 ? (
+                    <div
+                      className="history-report-sections"
+                      role="tablist"
+                      aria-label="Report sections"
+                      style={{
+                        display: "flex",
+                        flexWrap: "nowrap",
+                        gap: 8,
+                        padding: 6,
+                        background: "var(--surface-cloud-white)",
+                        borderRadius: "var(--radius-cards)",
+                        border: "1px solid var(--color-stone-border)",
+                        overflowX: "auto",
+                      }}
+                    >
+                      {reportSectionKeys.map((key) => (
+                        <button
+                          key={key}
+                          type="button"
+                          role="tab"
+                          aria-selected={reportSectionKey === key}
+                          onClick={() => setReportSectionKey(key)}
+                          style={{
+                            padding: "8px 14px",
+                            borderRadius: "var(--radius-buttons)",
+                            border:
+                              reportSectionKey === key
+                                ? "1px solid var(--color-chartwell-blue)"
+                                : "1px solid var(--color-stone-border)",
+                            background:
+                              reportSectionKey === key ? "var(--color-sky-tint)" : "var(--surface-canvas-fog)",
+                            fontSize: "var(--text-caption)",
+                            fontWeight: reportSectionKey === key ? 600 : 500,
+                            cursor: "pointer",
+                            color: "var(--color-slate-text)",
+                          }}
+                        >
+                          {REPORT_SECTION_LABELS[key] ?? key.replace(/_/g, " ")}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>No report sections stored.</p>
+                  )}
+                  <div className="history-report-body-wrap">
+                    <div className="markdown-body history-report-body" style={{ maxWidth: "72ch", minWidth: 0 }}>
+                      {reportMarkdown ? (
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={REPORT_MD_COMPONENTS}
+                        >
+                          {reportMarkdown}
+                        </ReactMarkdown>
+                      ) : (
+                        <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>Select a section above.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {activeDetailTab === "dimensions" && (
+                <div style={{ display: "grid", gap: "var(--spacing-16)" }}>
+                  {!detailDimensions && !detailDimensionsError && (
+                    <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>Loading dimensions…</p>
+                  )}
+                  {!detailDimensions && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => void onRecomputeDimensions()}
+                        disabled={recomputing}
+                        style={{
+                          padding: "10px 16px",
+                          borderRadius: "var(--radius-buttons)",
+                          border: "none",
+                          background: recomputing
+                            ? "var(--color-platinum-outline)"
+                            : "var(--color-chartwell-blue)",
+                          color: "white",
+                          cursor: recomputing ? "not-allowed" : "pointer",
+                          fontWeight: 600,
+                          fontSize: "var(--text-caption)",
+                        }}
+                      >
+                        {recomputing ? "Recomputing…" : "Recompute dimensions"}
+                      </button>
+                    </div>
+                  )}
+                  <DimensionsPanel
+                    dimensions={detailDimensions}
+                    commentary={detailDimensionsCommentary}
+                    error={detailDimensionsError}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
       <section
         style={{
           background: "var(--surface-cloud-white)",
@@ -396,21 +855,62 @@ export function HistoryPage() {
         }}
       >
         <h2 style={{ marginTop: 0 }}>Recent runs</h2>
+        <p
+          style={{
+            margin: "0 0 var(--spacing-8)",
+            fontSize: "var(--text-caption)",
+            color: "var(--color-steel-gray)",
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>View</strong> loads that row into the <strong>Selected run</strong> panel <strong>above</strong> this table (scrolls there automatically).
+        </p>
+        <p
+          style={{
+            margin: "0 0 var(--spacing-12)",
+            fontSize: "var(--text-caption)",
+            color: "var(--color-ash-gray)",
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>Confidence</strong> is a shorthand tied to the final rating tier (for example Buy
+          maps higher than Hold or Sell); it is not statistical certainty or “how good the data is.”
+          <strong style={{ marginLeft: "0.35em" }}>Factors</strong> are six standardized scores
+          (Value, Growth, Quality, Momentum, Low risk, Sentiment). The table now prefers each run&apos;s
+          <em> persisted snapshot</em>; only rows missing stored factors fall back to a fresh
+          facts-only ticker preview.
+          Comparison is <strong>market-local peers first</strong> (exchange + currency + sector +
+          industry), then sector-wide peers on the same listing, then a legacy global Yahoo
+          sector/industry bucket (these broadening steps are surfaced as flags when they happen).
+          Warm universes via{' '}
+          <code style={{ fontSize: "0.95em" }}>scripts/warm_peer_cache.py global|local|sector</code>; when Cloudflare D1 env vars are set, warmed rows also mirror into D1.{' '}
+          <strong>Why factors may show “—”:</strong> without enough cached peers relative scores are withheld to avoid pillar-only guesses; sentiment may still populate.
+        </p>
         {runs.length === 0 && !loading ? (
           <p style={{ color: "var(--color-ash-gray)" }}>
             No history yet. Complete an analysis from the dashboard; runs are persisted when jobs finish.
           </p>
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-caption)" }}>
+            <table className="history-runs-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
               <thead>
                 <tr style={{ textAlign: "left", borderBottom: "1px solid var(--color-stone-border)" }}>
                   <th style={{ padding: "8px 6px" }}>Run ID</th>
                   <th style={{ padding: "8px 6px" }}>Ticker</th>
                   <th style={{ padding: "8px 6px" }}>Date</th>
                   <th style={{ padding: "8px 6px" }}>Rating</th>
-                  <th style={{ padding: "8px 6px" }}>Confidence</th>
-                  <th style={{ padding: "8px 6px" }}>Factors</th>
+                  <th
+                    style={{ padding: "8px 6px" }}
+                    title="Heuristic from final rating tier (e.g. Buy vs Hold vs Sell), not model uncertainty. See note above."
+                  >
+                    Confidence
+                  </th>
+                  <th
+                    style={{ padding: "8px 6px" }}
+                    title="Mini bars: six 0–100 factor scores. Source priority is persisted run snapshot first; if unavailable, the UI uses a current facts-only ticker preview and labels it."
+                  >
+                    Factors
+                  </th>
                   <th style={{ padding: "8px 6px" }}>Completed</th>
                   <th style={{ padding: "8px 6px", textAlign: "right" }} aria-label="Open run detail">
                     Detail
@@ -439,14 +939,53 @@ export function HistoryPage() {
                           <FactorBar
                             key={k}
                             label=""
-                            score={
-                              r.ticker
-                                ? thumbDims[r.ticker]?.factor_scores[k]?.score ?? null
-                                : null
-                            }
+                            score={pickRowFactorScore(r, r.ticker ? thumbDims[r.ticker] : null, k)}
                             width={36}
                           />
                         ))}
+                        {(() => {
+                          const source = inferRowFactorSource(
+                            r,
+                            r.ticker ? thumbDims[r.ticker] : null,
+                          );
+                          const label =
+                            source === "run_snapshot"
+                              ? "run"
+                              : source === "live_preview"
+                                ? "live"
+                                : source === "loading"
+                                  ? "loading"
+                                  : "n/a";
+                          return (
+                            <span
+                              style={{
+                                marginTop: 2,
+                                fontSize: 10,
+                                lineHeight: 1.2,
+                                color:
+                                  source === "run_snapshot"
+                                    ? "#166534"
+                                    : source === "live_preview"
+                                      ? "var(--color-steel-gray)"
+                                      : "var(--color-ash-gray)",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.03em",
+                                fontWeight: 600,
+                              }}
+                              title={
+                                source === "run_snapshot"
+                                  ? "Using persisted factor scores captured with this run."
+                                  : source === "live_preview"
+                                    ? "Using current facts-only ticker preview because this run has no stored factors."
+                                    : source === "loading"
+                                      ? "Loading ticker preview factors."
+                                      : "No factors available from run snapshot or ticker preview."
+                              }
+                            >
+                              {label}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </td>
                     <td style={{ padding: "8px 6px" }} className="mono">
@@ -548,129 +1087,46 @@ export function HistoryPage() {
         )}
       </section>
 
-      {(detail || detailError || detailLoading) && (
-        <section
-          style={{
-            display: "grid",
-            gap: "var(--spacing-16)",
-            background: "var(--surface-cloud-white)",
-            padding: "var(--card-padding)",
-            borderRadius: "var(--radius-cards)",
-            border: "1px solid var(--color-stone-border)",
-            boxShadow: "var(--shadow-subtle)",
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>
-            Run detail{detailRunId ? <span className="mono"> · {detailRunId}</span> : ""}
-          </h2>
-          {detailLoading && <p style={{ margin: 0 }}>Loading run detail…</p>}
-          {detailError && <p style={{ margin: 0, color: "#991b1b" }}>{detailError}</p>}
-          {detail && (
-            <>
-              <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
-                {detail.ticker} · {detail.date} · {detail.rating}
-                {detail.confidence != null ? ` · ${pct(detail.confidence)}` : ""}
-              </div>
-              <div
-                role="tablist"
-                aria-label="Run detail sections"
-                style={{
-                  display: "flex",
-                  gap: 4,
-                  borderBottom: "1px solid var(--color-stone-border)",
-                  marginBottom: "var(--spacing-8)",
-                }}
-              >
-                {(["report", "dimensions"] as DetailTab[]).map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeDetailTab === t}
-                    onClick={() => setActiveDetailTab(t)}
-                    style={{
-                      padding: "6px 12px",
-                      border: "none",
-                      borderBottom:
-                        activeDetailTab === t
-                          ? "2px solid var(--color-chartwell-blue)"
-                          : "2px solid transparent",
-                      background: "transparent",
-                      fontWeight: activeDetailTab === t ? 600 : 500,
-                      cursor: "pointer",
-                      textTransform: "capitalize",
-                    }}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-              {activeDetailTab === "report" && (
-                <div className="markdown-body" style={{ maxWidth: "72ch" }}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {mdFromReports(detail.reports || {})}
-                  </ReactMarkdown>
-                </div>
-              )}
-              {activeDetailTab === "dimensions" && (
-                <div style={{ display: "grid", gap: 12 }}>
-                  {!detailDimensions && !detailDimensionsError && (
-                    <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>
-                      Loading dimensions…
-                    </p>
-                  )}
-                  {!detailDimensions && (
-                    <div>
-                      <button
-                        type="button"
-                        onClick={() => void onRecomputeDimensions()}
-                        disabled={recomputing}
-                        style={{
-                          padding: "8px 14px",
-                          borderRadius: "var(--radius-buttons)",
-                          border: "1px solid var(--color-stone-border)",
-                          background: recomputing
-                            ? "var(--color-platinum-outline)"
-                            : "var(--color-chartwell-blue)",
-                          color: "white",
-                          cursor: recomputing ? "not-allowed" : "pointer",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {recomputing ? "Recomputing…" : "Recompute dimensions"}
-                      </button>
-                    </div>
-                  )}
-                  <DimensionsPanel
-                    dimensions={detailDimensions}
-                    error={detailDimensionsError}
-                  />
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      )}
-
       <section
         style={{
           display: "grid",
-          gap: "var(--spacing-16)",
+          gap: "var(--spacing-24)",
           background: "var(--surface-cloud-white)",
-          padding: "var(--card-padding)",
-          borderRadius: "var(--radius-cards)",
+          padding: "clamp(var(--spacing-24), 3vw, var(--card-padding))",
+          borderRadius: "var(--radius-largecard)",
           border: "1px solid var(--color-stone-border)",
           boxShadow: "var(--shadow-subtle)",
         }}
       >
-        <h2 style={{ marginTop: 0 }}>Compare two runs</h2>
-        <div style={{ display: "grid", gap: "var(--spacing-12)", maxWidth: 720 }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <span style={{ fontWeight: 600 }}>Run A</span>
+        <header style={{ display: "grid", gap: "var(--spacing-8)" }}>
+          <p
+            style={{
+              margin: 0,
+              fontSize: "var(--text-caption)",
+              fontWeight: 600,
+              letterSpacing: "0.02em",
+              textTransform: "uppercase",
+              color: "var(--color-steel-gray)",
+            }}
+          >
+            Tools
+          </p>
+          <h2 style={{ margin: 0, fontSize: "var(--text-heading-sm)", fontWeight: 600, color: "var(--color-slate-text)" }}>
+            Compare two runs
+          </h2>
+          <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", maxWidth: "65ch" }}>
+            Choose sides from the table (A/B) or dropdowns, then load a structured pair view below.
+          </p>
+        </header>
+        <div style={{ display: "grid", gap: "var(--spacing-16)", maxWidth: 720 }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-8)" }}>
+            <span style={{ fontWeight: 600, fontSize: "var(--text-caption)", color: "var(--color-slate-text)" }}>
+              Run A
+            </span>
             <select
               value={runIdA}
               onChange={(e) => setRunIdA(e.target.value)}
-              style={{ padding: 8 }}
+              style={{ padding: "var(--spacing-12)", borderRadius: "var(--radius-inputs)", border: "1px solid var(--color-stone-border)" }}
             >
               <option value="">Select…</option>
               {runSelectOptions.map((o) => (
@@ -680,12 +1136,14 @@ export function HistoryPage() {
               ))}
             </select>
           </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <span style={{ fontWeight: 600 }}>Run B</span>
+          <label style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-8)" }}>
+            <span style={{ fontWeight: 600, fontSize: "var(--text-caption)", color: "var(--color-slate-text)" }}>
+              Run B
+            </span>
             <select
               value={runIdB}
               onChange={(e) => setRunIdB(e.target.value)}
-              style={{ padding: 8 }}
+              style={{ padding: "var(--spacing-12)", borderRadius: "var(--radius-inputs)", border: "1px solid var(--color-stone-border)" }}
             >
               <option value="">Select…</option>
               {runSelectOptions.map((o) => (
@@ -761,16 +1219,42 @@ export function HistoryPage() {
         )}
 
         {compare && (
-          <div ref={compareResultsRef} style={{ paddingTop: "var(--spacing-16)" }}>
-            <h3 style={{ margin: "0 0 var(--spacing-12)", fontSize: "var(--text-heading-sm)" }}>
-              Side-by-side (A left · B right)
-            </h3>
+          <div
+            ref={compareResultsRef}
+            style={{
+              display: "grid",
+              gap: "var(--spacing-24)",
+              paddingTop: "var(--spacing-8)",
+              borderTop: "1px solid var(--color-stone-border)",
+            }}
+          >
+            <header style={{ display: "grid", gap: "var(--spacing-8)" }}>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: "var(--text-caption)",
+                  fontWeight: 600,
+                  letterSpacing: "0.02em",
+                  textTransform: "uppercase",
+                  color: "var(--color-steel-gray)",
+                }}
+              >
+                Comparison
+              </p>
+              <h3 style={{ margin: 0, fontSize: "var(--text-heading-sm)", fontWeight: 600, color: "var(--color-slate-text)" }}>
+                Side-by-side · A left · B right
+              </h3>
+              <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", maxWidth: "62ch" }}>
+                Radar facets use a live facts-only fetch by ticker when available, not necessarily each run&apos;s as-of
+                date. Read PM and trader excerpts in context.
+              </p>
+            </header>
+
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 16,
-                marginBottom: "var(--spacing-16)",
+                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))",
+                gap: "var(--spacing-16)",
               }}
             >
               {(["a", "b"] as const).map((side) => {
@@ -780,16 +1264,18 @@ export function HistoryPage() {
                     key={`radar-${side}`}
                     style={{
                       background: "var(--surface-canvas-fog)",
-                      borderRadius: "var(--radius-md)",
+                      borderRadius: "var(--radius-cards)",
                       border: "1px solid var(--color-stone-border)",
-                      padding: 12,
+                      padding: "var(--spacing-16)",
+                      display: "grid",
+                      gap: "var(--spacing-12)",
                     }}
                   >
                     <div
                       style={{
                         fontSize: "var(--text-caption)",
                         fontWeight: 600,
-                        marginBottom: 6,
+                        color: "var(--color-slate-text)",
                       }}
                     >
                       {side === "a" ? "Run A · Dimensions" : "Run B · Dimensions"}
@@ -804,7 +1290,9 @@ export function HistoryPage() {
                           alignItems: "center",
                           justifyContent: "center",
                           color: "var(--color-ash-gray)",
-                          fontSize: 12,
+                          fontSize: "var(--text-caption)",
+                          textAlign: "center",
+                          padding: "var(--spacing-16)",
                         }}
                       >
                         Dimensions unavailable for this side.
@@ -814,78 +1302,167 @@ export function HistoryPage() {
                 );
               })}
             </div>
+
             <div className="compare-two-col">
               {[compare.a, compare.b].map((side, idx) => (
                 <article
                   key={side.run_id ?? String(idx)}
                   style={{
-                    background: "var(--surface-canvas-fog)",
-                    padding: "var(--spacing-24)",
+                    background: "var(--surface-cloud-white)",
+                    padding: "clamp(var(--spacing-16), 3vw, var(--spacing-24))",
                     borderRadius: "var(--radius-largecard)",
                     border: "1px solid var(--color-stone-border)",
-                    boxShadow: "var(--shadow-subtle)",
+                    boxShadow: "var(--shadow-md)",
                     minWidth: 0,
+                    display: "grid",
+                    gap: "var(--spacing-24)",
                   }}
                 >
-                  <div style={{ marginBottom: "var(--spacing-16)" }}>
-                    <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
-                      {idx === 0 ? "Run A (left)" : "Run B (right)"}
-                    </div>
-                    <div style={{ fontSize: "var(--text-heading)", fontWeight: 600 }}>
+                  <section
+                    style={{
+                      display: "grid",
+                      gap: "var(--spacing-16)",
+                      paddingBottom: "var(--spacing-24)",
+                      borderBottom: "1px solid var(--color-stone-border)",
+                    }}
+                  >
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: "var(--text-caption)",
+                        fontWeight: 600,
+                        letterSpacing: "0.02em",
+                        textTransform: "uppercase",
+                        color: "var(--color-steel-gray)",
+                      }}
+                    >
+                      {idx === 0 ? "Run A" : "Run B"}
+                    </p>
+                    <div
+                      style={{
+                        fontSize: "var(--text-heading)",
+                        fontWeight: 600,
+                        letterSpacing: "-0.02em",
+                        lineHeight: 1.2,
+                        color: "var(--color-slate-text)",
+                      }}
+                    >
                       {side.rating ?? "—"}
                     </div>
-                    <div className="mono" style={{ marginTop: 8, fontSize: "var(--text-caption)" }}>
-                      {side.ticker ?? "—"} · {side.date ?? "—"}
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "baseline",
+                        gap: "var(--spacing-8) var(--spacing-16)",
+                        fontSize: "var(--text-caption)",
+                        color: "var(--color-steel-gray)",
+                      }}
+                    >
+                      <span className="mono" style={{ color: "var(--color-slate-text)", fontWeight: 600 }}>
+                        {side.ticker ?? "—"}
+                      </span>
+                      <span>{side.date ? `As of ${side.date}` : "—"}</span>
+                      <span>
+                        Conviction <span style={{ color: "var(--color-ash-gray)" }}>(heuristic)</span>:{" "}
+                        {pct(side.confidence ?? undefined)}
+                      </span>
                     </div>
-                    <div style={{ marginTop: 6, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
-                      Confidence: {pct(side.confidence ?? undefined)}
-                    </div>
-                    {side.run_id && (
-                      <div className="mono" style={{ marginTop: 4, fontSize: 11, color: "var(--color-steel-gray)" }}>
+                    {side.run_id ? (
+                      <div className="mono" style={{ fontSize: "var(--text-caption)", color: "var(--color-steel-gray)" }}>
                         {side.run_id}
                       </div>
-                    )}
-                    {side.config_snapshot && typeof side.config_snapshot.llm_provider === "string" && (
-                      <div style={{ marginTop: 12, fontSize: 11, color: "var(--color-steel-gray)" }}>
+                    ) : null}
+                    {side.config_snapshot && typeof side.config_snapshot.llm_provider === "string" ? (
+                      <div style={{ fontSize: "var(--text-caption)", color: "var(--color-steel-gray)" }}>
                         Provider:{" "}
-                        <span className="mono">{String(side.config_snapshot.llm_provider)}</span>
+                        <span className="mono" style={{ color: "var(--color-slate-text)" }}>
+                          {String(side.config_snapshot.llm_provider)}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 8 }}>Trader plan (excerpt)</div>
+                    ) : null}
+                  </section>
+
+                  <section style={{ display: "grid", gap: "var(--spacing-12)", minWidth: 0 }}>
+                    <h4
+                      style={{
+                        margin: 0,
+                        fontSize: "var(--text-heading-sm)",
+                        fontWeight: 600,
+                        color: "var(--color-slate-text)",
+                      }}
+                    >
+                      Trader plan (excerpt)
+                    </h4>
                     <pre
                       className="mono"
                       style={{
+                        margin: 0,
                         whiteSpace: "pre-wrap",
-                        fontSize: 12,
-                        background: "var(--surface-cloud-white)",
-                        padding: 12,
-                        borderRadius: "var(--radius-md)",
+                        fontSize: "var(--text-caption)",
+                        lineHeight: 1.55,
+                        background: "var(--surface-canvas-fog)",
+                        border: "1px solid var(--color-stone-border)",
+                        padding: "var(--spacing-16)",
+                        borderRadius: "var(--radius-cards)",
                         maxHeight: 220,
                         overflow: "auto",
                       }}
                     >
                       {side.excerpt_trader_plan || "—"}
                     </pre>
-                  </div>
-                  <div style={{ marginTop: "var(--spacing-16)" }}>
-                    <div style={{ fontWeight: 600, marginBottom: 8 }}>Portfolio decision</div>
+                  </section>
+
+                  <section style={{ display: "grid", gap: "var(--spacing-12)", minWidth: 0 }}>
+                    <h4
+                      style={{
+                        margin: 0,
+                        fontSize: "var(--text-heading-sm)",
+                        fontWeight: 600,
+                        color: "var(--color-slate-text)",
+                      }}
+                    >
+                      Portfolio decision
+                    </h4>
                     {showFullPm ? (
-                      <div className="markdown-body" style={{ fontSize: 14 }}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {mdFromReports(side.reports || {}, "portfolio_decision")}
-                        </ReactMarkdown>
+                      <div
+                        className="markdown-body"
+                        style={{
+                          fontSize: "var(--text-caption)",
+                          padding: "var(--spacing-16)",
+                          background: "var(--surface-canvas-fog)",
+                          border: "1px solid var(--color-stone-border)",
+                          borderRadius: "var(--radius-cards)",
+                          maxHeight: 360,
+                          overflow: "auto",
+                        }}
+                      >
+                        {side.reports?.portfolio_decision?.trim() ? (
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={REPORT_MD_COMPONENTS}
+                          >
+                            {prepareReportMarkdown(
+                              "portfolio_decision",
+                              side.reports.portfolio_decision,
+                            )}
+                          </ReactMarkdown>
+                        ) : (
+                          <span style={{ color: "var(--color-ash-gray)" }}>—</span>
+                        )}
                       </div>
                     ) : (
                       <pre
                         className="mono"
                         style={{
+                          margin: 0,
                           whiteSpace: "pre-wrap",
-                          fontSize: 12,
-                          background: "var(--surface-cloud-white)",
-                          padding: 12,
-                          borderRadius: "var(--radius-md)",
+                          fontSize: "var(--text-caption)",
+                          lineHeight: 1.55,
+                          background: "var(--surface-canvas-fog)",
+                          border: "1px solid var(--color-stone-border)",
+                          padding: "var(--spacing-16)",
+                          borderRadius: "var(--radius-cards)",
                           maxHeight: 280,
                           overflow: "auto",
                         }}
@@ -893,7 +1470,7 @@ export function HistoryPage() {
                         {side.excerpt_portfolio_decision || "—"}
                       </pre>
                     )}
-                  </div>
+                  </section>
                 </article>
               ))}
             </div>

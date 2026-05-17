@@ -1,12 +1,13 @@
-"""In-memory job store + semaphore-protected background worker.
+"""Job store + semaphore-protected background worker.
 
-For v1 we use an in-memory dict + asyncio tasks. If you need persistence
-across restarts, swap JobStore for Redis / RQ / Celery later without touching
-the graph logic.
+JobStore keeps an in-memory map for fast runtime access and can optionally
+mirror snapshots to ``StateStore`` so job status/progress survives process
+restarts (best-effort).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -20,14 +21,109 @@ from api.models import DEFAULT_ANALYST_ORDER, VALID_ANALYST_IDS
 from api.dimensions.builder import (
     DimensionsBuildError, build_commentary, build_dimensions,
 )
+from api.state_store import StateStore
 
 logger = logging.getLogger(__name__)
 
 _MAX_PROGRESS_EVENTS = 500
+_JOBS_PERSIST_INDEX_KEY = "jobs:index"
+_JOBS_PERSIST_PREFIX = "jobs:record:"
+_MAX_PERSISTED_JOB_IDS = 1000
 
 # graph.propagate() uses tradingagents.dataflows.config set_config() (process-global).
 # Serialize synchronous propagation so concurrent API jobs cannot clobber vendor routing.
 _propagate_sync_lock = threading.Lock()
+
+# Style factors from graph snapshots: if a full_run snapshot has none of these scores,
+# rerun the expensive dimensions pipeline instead of commentary-only reuse.
+_GRAPH_STYLE_FACTOR_KEYS = ("value", "growth", "quality", "momentum", "low_risk")
+
+
+def _should_rebuild_graph_dimensions_snapshot(snapshot: Dict[str, Any]) -> bool:
+    """Return True when a LangGraph dimensions snapshot should be discarded (full rebuild).
+
+    ``facts_only`` snapshots intentionally omit style scores; keep them for commentary-only.
+    ``full_run`` snapshots with all style factor scores missing/None are treated as incomplete.
+    """
+    if not isinstance(snapshot, dict):
+        return True
+    source = snapshot.get("source") or "full_run"
+    if source == "facts_only":
+        return False
+    raw_factors = snapshot.get("factor_scores")
+    if not isinstance(raw_factors, dict):
+        return True
+    for key in _GRAPH_STYLE_FACTOR_KEYS:
+        entry = raw_factors.get(key)
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("score") is not None:
+            return False
+    return True
+
+
+def _format_data_routing(config: Dict[str, Any]) -> str:
+    """Short description of market-data vendor routing (mirrors dataflows/interface)."""
+    dv_raw = config.get("data_vendors") or {}
+    tv_raw = config.get("tool_vendors") or {}
+    dv: Dict[str, Any] = dv_raw if isinstance(dv_raw, dict) else {}
+    tv: Dict[str, Any] = tv_raw if isinstance(tv_raw, dict) else {}
+
+    labels = {
+        "core_stock_apis": "OHLCV",
+        "technical_indicators": "indicators",
+        "fundamental_data": "fundamentals",
+        "news_data": "news",
+    }
+    ordered_keys = (
+        "core_stock_apis",
+        "technical_indicators",
+        "fundamental_data",
+        "news_data",
+    )
+    parts: list[str] = []
+    for key in ordered_keys:
+        if key in dv and dv[key] is not None and str(dv[key]).strip():
+            parts.append(f"{labels[key]}→{dv[key]}")
+
+    if not parts:
+        base = "data routing: (category defaults)"
+    else:
+        vals = {str(v).strip() for v in dv.values() if v is not None and str(v).strip()}
+        if len(vals) == 1 and not tv:
+            (single,) = vals
+            base = f"data routing: all pillars → {single}"
+        else:
+            base = "data routing: " + ", ".join(parts)
+
+    if tv:
+        if len(tv) <= 2:
+            overrides = ", ".join(f"{k}→{v}" for k, v in sorted(tv.items()))
+            return f"{base}; tool overrides: {overrides}"
+        return f"{base}; tool overrides: {len(tv)} tools"
+
+    return base
+
+
+def _runtime_summary(config: Dict[str, Any]) -> str:
+    """Compact, non-secret runtime summary for progress logs."""
+    provider = str(config.get("llm_provider") or "openai")
+    deep = str(config.get("deep_think_llm") or "")
+    quick = str(config.get("quick_think_llm") or "")
+    backend = config.get("backend_url")
+    backend_label = str(backend).strip() if backend is not None else ""
+    if not backend_label:
+        backend_label = "default"
+    ckpt = "on" if config.get("checkpoint_enabled") else "off"
+    dims = "on" if config.get("dimensions_enabled", True) else "off"
+    in_graph = config.get("dimensions_in_graph", True)
+    dims_detail = f"{dims}" + (", precomputed in graph" if in_graph else ", post-pass only")
+    routing = _format_data_routing(config)
+    return (
+        f"Runtime: LLM={provider}, models deep={deep} / quick={quick}, "
+        f"backend={backend_label}, checkpoint={ckpt}, dimensions={dims_detail}. "
+        f"{routing}"
+    )
 
 
 def _coerce_analyst_ids(analysts: Optional[list]) -> list:
@@ -62,12 +158,119 @@ class JobRecord:
 
 
 class JobStore:
-    """In-memory store with TTL pruning."""
+    """In-memory store with optional durable snapshots in StateStore."""
 
-    def __init__(self, ttl_hours: int = 24):
+    def __init__(self, ttl_hours: int = 24, state_store: Optional[StateStore] = None):
         self._jobs: Dict[str, JobRecord] = {}
         self._ttl = timedelta(hours=ttl_hours)
         self._lock = threading.Lock()
+        self._state_store = state_store
+        if self._state_store is not None:
+            self._load_from_state()
+
+    def _record_to_json(self, rec: JobRecord) -> Dict[str, Any]:
+        return {
+            "job_id": rec.job_id,
+            "ticker": rec.ticker,
+            "date": rec.date,
+            "status": rec.status,
+            "created_at": rec.created_at.isoformat() + "Z",
+            "result": rec.result,
+            "error": rec.error,
+            "config_snapshot": rec.config_snapshot,
+            "progress_events": rec.progress_events,
+            "batch_id": rec.batch_id,
+            "cancellation_requested": rec.cancellation_requested,
+        }
+
+    def _json_to_record(self, raw: Dict[str, Any]) -> Optional[JobRecord]:
+        try:
+            created_raw = str(raw.get("created_at") or "").strip()
+            if not created_raw:
+                return None
+            created_at = datetime.fromisoformat(created_raw.replace("Z", ""))
+            return JobRecord(
+                job_id=str(raw.get("job_id") or "").strip(),
+                ticker=str(raw.get("ticker") or "").strip(),
+                date=str(raw.get("date") or "").strip(),
+                status=str(raw.get("status") or "queued"),
+                created_at=created_at,
+                result=raw.get("result") if isinstance(raw.get("result"), dict) else None,
+                error=str(raw.get("error")) if raw.get("error") is not None else None,
+                config_snapshot=raw.get("config_snapshot")
+                if isinstance(raw.get("config_snapshot"), dict)
+                else {},
+                progress_events=raw.get("progress_events")
+                if isinstance(raw.get("progress_events"), list)
+                else [],
+                batch_id=str(raw.get("batch_id")).strip()
+                if raw.get("batch_id") is not None
+                else None,
+                cancellation_requested=bool(raw.get("cancellation_requested")),
+            )
+        except Exception:
+            return None
+
+    def _persist_locked(self, job_id: str, *, touch_index: bool = False) -> None:
+        if self._state_store is None:
+            return
+        rec = self._jobs.get(job_id)
+        if rec is None:
+            return
+        try:
+            self._state_store.put_json(
+                f"{_JOBS_PERSIST_PREFIX}{job_id}",
+                self._record_to_json(rec),
+            )
+            if touch_index:
+                ids = self._state_store.get_json(_JOBS_PERSIST_INDEX_KEY) or []
+                if not isinstance(ids, list):
+                    ids = []
+                new_ids = [job_id] + [str(x) for x in ids if str(x) != job_id]
+                self._state_store.put_json(
+                    _JOBS_PERSIST_INDEX_KEY,
+                    new_ids[:_MAX_PERSISTED_JOB_IDS],
+                )
+        except Exception:
+            logger.exception("Could not persist job snapshot for %s", job_id)
+
+    def _load_from_state(self) -> None:
+        assert self._state_store is not None
+        try:
+            ids = self._state_store.get_json(_JOBS_PERSIST_INDEX_KEY) or []
+            if not isinstance(ids, list):
+                return
+            loaded = 0
+            for raw_id in ids[:_MAX_PERSISTED_JOB_IDS]:
+                job_id = str(raw_id).strip()
+                if not job_id:
+                    continue
+                payload = self._state_store.get_json(f"{_JOBS_PERSIST_PREFIX}{job_id}")
+                if not isinstance(payload, dict):
+                    continue
+                rec = self._json_to_record(payload)
+                if rec is None or not rec.job_id:
+                    continue
+                if rec.status in ("queued", "running"):
+                    rec.status = "failed"
+                    rec.error = (
+                        rec.error
+                        or "Service restarted before this job finished."
+                    )
+                    rec.progress_events.append(
+                        {
+                            "ts": datetime.utcnow().isoformat() + "Z",
+                            "stage": "failed",
+                            "message": "Service restarted before this job finished.",
+                        }
+                    )
+                self._jobs[rec.job_id] = rec
+                loaded += 1
+            if loaded:
+                logger.info("Restored %d jobs from state store", loaded)
+            self._prune()
+        except Exception:
+            logger.exception("Could not restore persisted jobs from state store")
 
     def create(
         self,
@@ -88,6 +291,7 @@ class JobStore:
                 config_snapshot={k: v for k, v in config.items() if "key" not in k.lower()},
                 batch_id=batch_id,
             )
+            self._persist_locked(job_id, touch_index=True)
         return job_id
 
     def get(self, job_id: str) -> Optional[JobRecord]:
@@ -119,6 +323,7 @@ class JobStore:
             rec = self._jobs.get(job_id)
             if rec:
                 rec.status = status
+                self._persist_locked(job_id)
 
     def set_result(self, job_id: str, result: Dict[str, Any]) -> None:
         with self._lock:
@@ -126,6 +331,7 @@ class JobStore:
             if rec:
                 rec.status = "completed"
                 rec.result = result
+                self._persist_locked(job_id)
 
     def set_error(self, job_id: str, error: str) -> None:
         with self._lock:
@@ -133,6 +339,7 @@ class JobStore:
             if rec:
                 rec.status = "failed"
                 rec.error = error
+                self._persist_locked(job_id)
 
     def request_cancellation(self, job_id: str) -> bool:
         with self._lock:
@@ -140,6 +347,7 @@ class JobStore:
             if not rec:
                 return False
             rec.cancellation_requested = True
+            self._persist_locked(job_id)
             return True
 
     def is_cancellation_requested(self, job_id: str) -> bool:
@@ -152,6 +360,7 @@ class JobStore:
             rec = self._jobs.get(job_id)
             if rec:
                 rec.status = "cancelled"
+                self._persist_locked(job_id)
 
     def append_progress(
         self,
@@ -175,6 +384,7 @@ class JobStore:
             rec.progress_events.append(evt)
             if len(rec.progress_events) > _MAX_PROGRESS_EVENTS:
                 rec.progress_events = rec.progress_events[-_MAX_PROGRESS_EVENTS:]
+            self._persist_locked(job_id)
 
     def list_ids(self) -> List[str]:
         self._prune()
@@ -203,20 +413,67 @@ class JobStore:
         with self._lock:
             return sum(1 for r in self._jobs.values() if r.status == "running")
 
+    def clear(
+        self,
+        *,
+        clear_memory: bool = True,
+        clear_persisted: bool = False,
+    ) -> int:
+        """Clear in-memory jobs and/or persisted snapshots/index."""
+        with self._lock:
+            removed = 0
+            if clear_memory:
+                removed = len(self._jobs)
+                self._jobs.clear()
+            if clear_persisted and self._state_store is not None:
+                try:
+                    ids = self._state_store.get_json(_JOBS_PERSIST_INDEX_KEY) or []
+                    if isinstance(ids, list):
+                        for raw_id in ids[:_MAX_PERSISTED_JOB_IDS]:
+                            jid = str(raw_id).strip()
+                            if jid:
+                                # No delete API in StateStore; clear payload and drop index.
+                                self._state_store.put_json(
+                                    f"{_JOBS_PERSIST_PREFIX}{jid}",
+                                    None,
+                                )
+                    self._state_store.put_json(_JOBS_PERSIST_INDEX_KEY, [])
+                except Exception:
+                    logger.exception("Could not clear persisted jobs")
+            return removed
+
     def _prune(self) -> None:
         cutoff = datetime.utcnow() - self._ttl
         with self._lock:
             stale = [jid for jid, rec in self._jobs.items() if rec.created_at < cutoff]
             for jid in stale:
                 self._jobs.pop(jid, None)
+            if self._state_store is not None:
+                try:
+                    ids = self._state_store.get_json(_JOBS_PERSIST_INDEX_KEY) or []
+                    if isinstance(ids, list):
+                        alive = set(self._jobs.keys())
+                        new_ids = [
+                            str(x) for x in ids if str(x) in alive
+                        ][:_MAX_PERSISTED_JOB_IDS]
+                        old_ids = [str(x) for x in ids][:_MAX_PERSISTED_JOB_IDS]
+                        if new_ids != old_ids:
+                            self._state_store.put_json(_JOBS_PERSIST_INDEX_KEY, new_ids)
+                except Exception:
+                    logger.exception("Could not update persisted jobs index during prune")
 
 
 class Worker:
     """Runs TradingAgentsGraph.propagate under a concurrency semaphore."""
 
-    def __init__(self, max_concurrency: int = 3, ttl_hours: int = 24):
+    def __init__(
+        self,
+        max_concurrency: int = 3,
+        ttl_hours: int = 24,
+        state_store: Optional[StateStore] = None,
+    ):
         self.semaphore = asyncio.Semaphore(max_concurrency)
-        self.store = JobStore(ttl_hours=ttl_hours)
+        self.store = JobStore(ttl_hours=ttl_hours, state_store=state_store)
 
     async def submit(
         self,
@@ -245,32 +502,54 @@ class Worker:
     ) -> None:
         async with self.semaphore:
             self.store.update_status(job_id, "running")
+            selected_analysts = _coerce_analyst_ids(analysts)
             self.store.append_progress(
                 job_id,
                 "Starting multi-agent analysis pipeline (analysts → research → trader → risk → PM)…",
+                stage="running",
+            )
+            self.store.append_progress(
+                job_id,
+                f"Parallel analyst nodes: {', '.join(selected_analysts)}",
+                stage="running",
+            )
+            self.store.append_progress(
+                job_id,
+                _runtime_summary(config),
                 stage="running",
             )
             try:
                 loop = asyncio.get_running_loop()
                 self.store.append_progress(
                     job_id,
-                    "Executing LangGraph propagate() … (this may take several minutes)",
+                    "Running LangGraph propagate(): debates and tool calls "
+                    "(hold tight — often several minutes on local / remote LLMs)…",
                     stage="running",
                 )
                 stop_hb = asyncio.Event()
 
                 async def _heartbeat() -> None:
                     start = time.monotonic()
+                    provider = str(config.get("llm_provider") or "unknown")
+                    routing_short = _format_data_routing(config)
                     while True:
                         try:
                             await asyncio.wait_for(stop_hb.wait(), timeout=45.0)
                             break
                         except asyncio.TimeoutError:
                             elapsed = int(time.monotonic() - start)
+                            hints: list[str] = []
+                            if provider == "openrouter":
+                                hints.append("OpenRouter free-tier can be slower.")
+                            if provider in ("ollama", "ollama-remote"):
+                                hints.append(
+                                    "Local/remote Ollama throughput varies with model size."
+                                )
+                            hint_tail = (" " + " ".join(hints)) if hints else ""
                             self.store.append_progress(
                                 job_id,
-                                f"Still running propagate() — ~{elapsed}s elapsed "
-                                "(LLM + yfinance tools; OpenRouter can be slow on free tier).",
+                                f"Still in LangGraph (~{elapsed}s elapsed): LLM nodes + analyst "
+                                f"market-data tools ({routing_short}).{hint_tail}",
                                 stage="running",
                             )
 
@@ -309,68 +588,130 @@ class Worker:
 
                 # --- Dimensions post-pass (failure-isolated) ---
                 dimensions_enabled = bool(config.get("dimensions_enabled", True))
+                dimensions_in_graph_cfg = bool(config.get("dimensions_in_graph", True))
+                graph_json_raw = (final_state.get("dimensions_snapshot_json") or "").strip()
+                graph_dims: Optional[Dict[str, Any]] = None
+                if graph_json_raw:
+                    try:
+                        graph_dims = json.loads(graph_json_raw)
+                    except json.JSONDecodeError:
+                        graph_dims = None
+
+                reuse_snapshot = (
+                    dimensions_enabled
+                    and dimensions_in_graph_cfg
+                    and graph_dims is not None
+                )
+
                 if dimensions_enabled and not self.store.is_cancellation_requested(job_id):
                     try:
-                        self.store.append_progress(
-                            job_id, "Building dimensions: extracting facts (yfinance)…",
-                            stage="dimensions",
-                        )
-                        self.store.append_progress(
-                            job_id,
-                            "Building dimensions: loading sector peers…",
-                            stage="dimensions",
-                        )
-                        self.store.append_progress(
-                            job_id,
-                            "Building dimensions: scoring 16 pillars (1 LLM call)…",
-                            stage="dimensions",
-                        )
                         from tradingagents.llm_clients import create_llm_client
+                        from api.dimensions.schemas import StockDimensions
+
                         llm_client = create_llm_client(
                             provider=config.get("llm_provider", "openai"),
                             model=config.get("quick_think_llm", "gpt-4o-mini"),
                             base_url=config.get("backend_url"),
                         )
                         llm = llm_client.get_llm()
-                        analyst_reports = {
-                            "market": final_state.get("market_report") or "",
-                            "social": final_state.get("sentiment_report") or "",
-                            "news": final_state.get("news_report") or "",
-                            "fundamentals": final_state.get("fundamentals_report") or "",
-                        }
-                        dimensions = await loop.run_in_executor(
-                            None,
-                            lambda: build_dimensions(
-                                ticker=ticker, as_of_date=date,
-                                analyst_reports=analyst_reports, llm=llm, config=config,
-                            ),
-                        )
-                        self.store.append_progress(
-                            job_id,
-                            "Building dimensions: computing 6 factor scores…",
-                            stage="dimensions",
-                        )
-                        if not self.store.is_cancellation_requested(job_id):
+
+                        validated: Optional[StockDimensions] = None
+                        if reuse_snapshot:
+                            try:
+                                validated = StockDimensions.model_validate(graph_dims)
+                                if validated is not None and _should_rebuild_graph_dimensions_snapshot(
+                                    validated.model_dump(mode="python")
+                                ):
+                                    validated = None
+                            except Exception as exc:
+                                logger.warning(
+                                    "Invalid graph dimensions snapshot; rebuilding: %s", exc
+                                )
+                                validated = None
+
+                        if validated is not None:
                             self.store.append_progress(
                                 job_id,
-                                "Building dimensions: writing commentary (1 LLM call)…",
+                                "Dimensions: reusing LangGraph snapshot (commentary only)…",
                                 stage="dimensions",
                             )
-                            commentary = await loop.run_in_executor(
+                            result["dimensions"] = validated.model_dump()
+                            if not self.store.is_cancellation_requested(job_id):
+                                self.store.append_progress(
+                                    job_id,
+                                    "Building dimensions: writing commentary (1 LLM call)…",
+                                    stage="dimensions",
+                                )
+                                commentary = await loop.run_in_executor(
+                                    None,
+                                    lambda: build_commentary(
+                                        dimensions=validated,
+                                        pm_decision_text=final_state.get("final_trade_decision") or "",
+                                        llm=llm,
+                                    ),
+                                )
+                                result["dimensions_commentary"] = commentary.model_dump()
+                            self.store.append_progress(
+                                job_id,
+                                f"Dimensions reused (version {validated.dimensions_version}). Persisting…",
+                                stage="dimensions",
+                            )
+                        else:
+                            self.store.append_progress(
+                                job_id,
+                                "Building dimensions: extracting quantitative inputs "
+                                "(same routed market-data tools as analysts)…",
+                                stage="dimensions",
+                            )
+                            self.store.append_progress(
+                                job_id,
+                                "Building dimensions: loading sector peers…",
+                                stage="dimensions",
+                            )
+                            self.store.append_progress(
+                                job_id,
+                                "Building dimensions: scoring 16 pillars (1 LLM call)…",
+                                stage="dimensions",
+                            )
+                            analyst_reports = {
+                                "market": final_state.get("market_report") or "",
+                                "social": final_state.get("sentiment_report") or "",
+                                "news": final_state.get("news_report") or "",
+                                "fundamentals": final_state.get("fundamentals_report") or "",
+                            }
+                            dimensions = await loop.run_in_executor(
                                 None,
-                                lambda: build_commentary(
-                                    dimensions=dimensions,
-                                    pm_decision_text=final_state.get("final_trade_decision") or "",
-                                    llm=llm,
+                                lambda: build_dimensions(
+                                    ticker=ticker, as_of_date=date,
+                                    analyst_reports=analyst_reports, llm=llm, config=config,
                                 ),
                             )
-                            result["dimensions_commentary"] = commentary.model_dump()
-                        result["dimensions"] = dimensions.model_dump()
-                        self.store.append_progress(
-                            job_id,
-                            f"Dimensions built (version {dimensions.dimensions_version}). Persisting…",
-                            stage="dimensions",
-                        )
+                            self.store.append_progress(
+                                job_id,
+                                "Building dimensions: computing 6 factor scores…",
+                                stage="dimensions",
+                            )
+                            if not self.store.is_cancellation_requested(job_id):
+                                self.store.append_progress(
+                                    job_id,
+                                    "Building dimensions: writing commentary (1 LLM call)…",
+                                    stage="dimensions",
+                                )
+                                commentary = await loop.run_in_executor(
+                                    None,
+                                    lambda: build_commentary(
+                                        dimensions=dimensions,
+                                        pm_decision_text=final_state.get("final_trade_decision") or "",
+                                        llm=llm,
+                                    ),
+                                )
+                                result["dimensions_commentary"] = commentary.model_dump()
+                            result["dimensions"] = dimensions.model_dump()
+                            self.store.append_progress(
+                                job_id,
+                                f"Dimensions built (version {dimensions.dimensions_version}). Persisting…",
+                                stage="dimensions",
+                            )
                     except DimensionsBuildError as exc:
                         logger.warning("Dimensions build failed for %s: %s", job_id, exc)
                         result["dimensions"] = None
@@ -416,6 +757,7 @@ class Worker:
                         )
                 except Exception:
                     logger.exception("History persistence failed for job %s", job_id)
+                    raise
                 self.store.append_progress(
                     job_id,
                     f"Completed. Rating: {rating}",

@@ -1,8 +1,10 @@
 """Durable analysis history.
 
-Storage strategy (auto-selected):
-1) Cloudflare D1 (scalable querying) when configured.
-2) StateStore fallback (Cloudflare KV or local JSON file).
+One history backend per deployment (see ``api/cloudflare_storage``):
+
+- **D1** when ``CLOUDFLARE_D1_DATABASE_ID`` is set — all history reads/writes; errors propagate.
+- **KV / local StateStore** when D1 is not set — history blobs + indexes only.
+- **Sector/industry catalog** (Yahoo) is never stored in D1/KV.
 """
 from __future__ import annotations
 
@@ -40,7 +42,9 @@ def _d1_config() -> Optional[dict[str, str]]:
 
 def d1_history_enabled() -> bool:
     """True when history should use Cloudflare D1 as primary backend."""
-    return _d1_config() is not None
+    from api.cloudflare_storage import cloudflare_d1_enabled
+
+    return cloudflare_d1_enabled() and _d1_config() is not None
 
 
 def _d1_query(sql: str, params: Optional[list[Any]] = None) -> list[dict[str, Any]]:
@@ -117,6 +121,77 @@ def _ensure_d1_schema() -> None:
         _d1_query("ALTER TABLE analysis_runs ADD COLUMN dimensions_error TEXT")
     except Exception:
         pass
+    # Dimensions peer-universe persistence (distinct from peer JSON caches on disk).
+    _d1_query(
+        """
+        CREATE TABLE IF NOT EXISTS dimension_peer_universes (
+            slug TEXT PRIMARY KEY,
+            scope TEXT NOT NULL,
+            exchange TEXT,
+            currency TEXT,
+            sector TEXT NOT NULL,
+            industry TEXT NOT NULL,
+            peer_count INTEGER NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+    _d1_query(
+        "CREATE INDEX IF NOT EXISTS idx_dimension_peer_univ_scope "
+        "ON dimension_peer_universes (scope)"
+    )
+    _d1_query(
+        """
+        CREATE TABLE IF NOT EXISTS dimension_peer_members (
+            slug TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            facts_json TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (slug, ticker)
+        )
+        """
+    )
+    _d1_query(
+        "CREATE INDEX IF NOT EXISTS idx_dimension_peer_members_slug "
+        "ON dimension_peer_members (slug)"
+    )
+    _d1_query(
+        """
+        CREATE TABLE IF NOT EXISTS yahoo_sector_industry_buckets (
+            sector TEXT NOT NULL,
+            industry TEXT NOT NULL,
+            industry_key TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (sector, industry)
+        )
+        """
+    )
+    _d1_query(
+        """
+        CREATE TABLE IF NOT EXISTS yahoo_industry_constituents (
+            sector TEXT NOT NULL,
+            industry TEXT NOT NULL,
+            industry_key TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (sector, industry, ticker)
+        )
+        """
+    )
+    _d1_query(
+        "CREATE INDEX IF NOT EXISTS idx_yahoo_industry_constituents_bucket "
+        "ON yahoo_industry_constituents (sector, industry)"
+    )
+    try:
+        _d1_query(
+            "ALTER TABLE yahoo_industry_constituents ADD COLUMN market TEXT NOT NULL DEFAULT 'US'"
+        )
+    except Exception:
+        pass
+    _d1_query(
+        "CREATE INDEX IF NOT EXISTS idx_yahoo_industry_constituents_market "
+        "ON yahoo_industry_constituents (market, sector, industry)"
+    )
     _d1_initialized = True
 
 
@@ -142,6 +217,18 @@ def _ref_from_record(rec: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": rec.get("created_at"),
         "batch_id": rec.get("batch_id"),
     }
+    hd = rec.get("has_dimensions")
+    hc = rec.get("has_commentary")
+    if hd is not None:
+        ref["has_dimensions"] = bool(hd)
+    if hc is not None:
+        ref["has_commentary"] = bool(hc)
+    fs_sec = rec.get("facts_sector")
+    fs_ind = rec.get("facts_industry")
+    if isinstance(fs_sec, str) and fs_sec.strip():
+        ref["facts_sector"] = fs_sec.strip()
+    if isinstance(fs_ind, str) and fs_ind.strip():
+        ref["facts_industry"] = fs_ind.strip()
     dims = rec.get("dimensions") or {}
     fs = dims.get("factor_scores") if isinstance(dims, dict) else None
     if isinstance(fs, dict):
@@ -214,17 +301,22 @@ def persist_completed_run(
         "dimensions": result.get("dimensions"),
         "dimensions_commentary": result.get("dimensions_commentary"),
         "dimensions_error": result.get("dimensions_error"),
+        "dimensions_in_graph": result.get("dimensions_in_graph"),
     }
 
     if d1_history_enabled():
-        try:
-            _persist_d1(full)
-            return
-        except Exception:
-            logger.exception("D1 persist failed; falling back to state store")
+        _persist_d1(full)
+        return
 
+    _persist_kv_run_and_indexes(store, full, norm_ticker)
+
+
+def _persist_kv_run_and_indexes(
+    store: StateStore, full: Dict[str, Any], norm_ticker: str
+) -> None:
+    """Write full run blob + list indexes to KV/local StateStore."""
+    job_id = str(full.get("job_id") or full.get("run_id") or "")
     store.put_json(_run_key(job_id), full)
-
     ref = _ref_from_record(full)
     _prepend_ref(store, _ticker_index_key(norm_ticker), ref, MAX_TICKER_INDEX)
     _prepend_ref(store, KEY_GLOBAL_INDEX, ref, MAX_GLOBAL_INDEX)
@@ -295,12 +387,7 @@ def _prepend_ref(store: StateStore, index_key: str, ref: Dict[str, Any], max_len
 
 def get_run(store: StateStore, run_id: str) -> Optional[Dict[str, Any]]:
     if d1_history_enabled():
-        try:
-            row = _get_run_d1(run_id)
-            if row:
-                return row
-        except Exception:
-            logger.exception("D1 get_run failed; falling back to state store")
+        return _get_run_d1(run_id)
     raw = store.get_json(_run_key(run_id))
     return raw if isinstance(raw, dict) else None
 
@@ -375,28 +462,15 @@ def _in_date_range(d: str, date_from: Optional[str], date_to: Optional[str]) -> 
     return True
 
 
-def list_runs(
+def _list_runs_kv_index(
     store: StateStore,
     *,
-    ticker: Optional[str] = None,
-    limit: int = 50,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
+    ticker: Optional[str],
+    limit: int,
+    date_from: Optional[str],
+    date_to: Optional[str],
 ) -> List[Dict[str, Any]]:
-    """Return compact refs, newest-first."""
-    lim = max(1, min(limit, 200))
-
-    if d1_history_enabled():
-        try:
-            return _list_runs_d1(
-                ticker=ticker,
-                limit=lim,
-                date_from=date_from,
-                date_to=date_to,
-            )
-        except Exception:
-            logger.exception("D1 list_runs failed; falling back to state store")
-
+    """List runs from KV/local indexes (no sector/industry filter)."""
     if ticker:
         try:
             norm = normalize_ticker(ticker)
@@ -419,9 +493,45 @@ def list_runs(
             if not _in_date_range(d, date_from, date_to):
                 continue
         out.append(r)
-        if len(out) >= lim:
+        if len(out) >= limit:
             break
     return out
+
+
+def list_runs(
+    store: StateStore,
+    *,
+    ticker: Optional[str] = None,
+    limit: int = 50,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    sector: Optional[str] = None,
+    industry: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return compact refs, newest-first."""
+    lim = max(1, min(limit, 200))
+    sect = (sector or "").strip()
+    ind = (industry or "").strip()
+    if (sect or ind) and not d1_history_enabled():
+        raise RuntimeError("sector_industry_filters_require_d1")
+
+    if d1_history_enabled():
+        return _list_runs_d1(
+            ticker=ticker,
+            limit=lim,
+            date_from=date_from,
+            date_to=date_to,
+            sector=sect or None,
+            industry=ind or None,
+        )
+
+    return _list_runs_kv_index(
+        store,
+        ticker=ticker,
+        limit=lim,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 def _list_runs_d1(
@@ -430,6 +540,8 @@ def _list_runs_d1(
     limit: int,
     date_from: Optional[str],
     date_to: Optional[str],
+    sector: Optional[str],
+    industry: Optional[str],
 ) -> List[Dict[str, Any]]:
     _ensure_d1_schema()
     where: list[str] = []
@@ -443,10 +555,17 @@ def _list_runs_d1(
     if date_to:
         where.append("trade_date <= ?")
         params.append(date_to)
+    if sector:
+        where.append("json_extract(dimensions_json, '$.facts.sector') = ?")
+        params.append(sector)
+    if industry:
+        where.append("json_extract(dimensions_json, '$.facts.industry') = ?")
+        params.append(industry)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     sql = f"""
         SELECT run_id, job_id, ticker, trade_date, rating, confidence,
-               completed_at, created_at, batch_id, dimensions_json
+               completed_at, created_at, batch_id, dimensions_json,
+               dimensions_commentary_json
         FROM analysis_runs
         {where_sql}
         ORDER BY completed_at DESC, created_at DESC
@@ -457,10 +576,28 @@ def _list_runs_d1(
     out: list[dict[str, Any]] = []
     for row in rows:
         dims_raw = row.get("dimensions_json")
+        comm_raw = row.get("dimensions_commentary_json")
         dimensions = (
             json.loads(dims_raw) if isinstance(dims_raw, str) and dims_raw else None
         )
-        base = {
+        has_dimensions = bool(
+            isinstance(dims_raw, str) and dims_raw.strip() not in ("", "null", "{}")
+        )
+        has_commentary = bool(
+            isinstance(comm_raw, str) and comm_raw.strip() not in ("", "null", "{}")
+        )
+        facts_sector: Optional[str] = None
+        facts_industry: Optional[str] = None
+        if isinstance(dimensions, dict):
+            facts = dimensions.get("facts")
+            if isinstance(facts, dict):
+                s = facts.get("sector")
+                i = facts.get("industry")
+                if isinstance(s, str) and s.strip():
+                    facts_sector = s.strip()
+                if isinstance(i, str) and i.strip():
+                    facts_industry = i.strip()
+        base: Dict[str, Any] = {
             "run_id": row.get("run_id"),
             "job_id": row.get("job_id"),
             "ticker": row.get("ticker"),
@@ -471,9 +608,81 @@ def _list_runs_d1(
             "created_at": row.get("created_at"),
             "batch_id": row.get("batch_id"),
             "dimensions": dimensions if isinstance(dimensions, dict) else None,
+            "has_dimensions": has_dimensions,
+            "has_commentary": has_commentary,
         }
+        if facts_sector:
+            base["facts_sector"] = facts_sector
+        if facts_industry:
+            base["facts_industry"] = facts_industry
         out.append(_ref_from_record(base))
     return out
+
+
+def _list_history_coverage_aggregates() -> List[Dict[str, Any]]:
+    """D1 GROUP BY sector/industry from persisted dimensions facts."""
+    _ensure_d1_schema()
+    sql = """
+        SELECT
+            COALESCE(
+                NULLIF(trim(CAST(json_extract(dimensions_json, '$.facts.sector') AS TEXT)), ''),
+                '(unknown)'
+            ) AS sector,
+            COALESCE(
+                NULLIF(trim(CAST(json_extract(dimensions_json, '$.facts.industry') AS TEXT)), ''),
+                '(unknown)'
+            ) AS industry,
+            COUNT(*) AS run_count,
+            SUM(CASE WHEN dimensions_json IS NOT NULL AND
+                    trim(COALESCE(dimensions_json, '')) NOT IN ('', '{}', 'null')
+                THEN 1 ELSE 0 END) AS with_dimensions_count,
+            SUM(CASE WHEN dimensions_commentary_json IS NOT NULL AND
+                    trim(COALESCE(dimensions_commentary_json, '')) NOT IN ('', '{}', 'null')
+                THEN 1 ELSE 0 END) AS with_commentary_count,
+            MAX(completed_at) AS latest_completed_at
+        FROM analysis_runs
+        GROUP BY
+            COALESCE(
+                NULLIF(trim(CAST(json_extract(dimensions_json, '$.facts.sector') AS TEXT)), ''),
+                '(unknown)'
+            ),
+            COALESCE(
+                NULLIF(trim(CAST(json_extract(dimensions_json, '$.facts.industry') AS TEXT)), ''),
+                '(unknown)'
+            )
+        ORDER BY sector, industry
+    """
+    rows = _d1_query(sql, None)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "sector": row.get("sector"),
+                "industry": row.get("industry"),
+                "run_count": int(row.get("run_count") or 0),
+                "with_dimensions_count": int(row.get("with_dimensions_count") or 0),
+                "with_commentary_count": int(row.get("with_commentary_count") or 0),
+                "latest_completed_at": row.get("latest_completed_at"),
+            }
+        )
+    return out
+
+
+def list_history_coverage() -> List[Dict[str, Any]]:
+    """Full Yahoo sector/industry grid merged with D1 aggregates when D1 is configured."""
+    from api.dimensions.sector_industry_catalog import (
+        load_sector_industry_catalog,
+        merge_coverage_with_catalog,
+    )
+
+    catalog = load_sector_industry_catalog()
+    aggregates = (
+        _list_history_coverage_aggregates() if d1_history_enabled() else []
+    )
+
+    if not catalog:
+        return aggregates
+    return merge_coverage_with_catalog(catalog, aggregates)
 
 
 def build_compare_payload(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
@@ -522,10 +731,7 @@ def delete_run(store: StateStore, run_id: str) -> bool:
         return False
 
     if d1_history_enabled():
-        try:
-            return _delete_run_d1(rid)
-        except Exception:
-            logger.exception("D1 delete_run failed; falling back to state store")
+        return _delete_run_d1(rid)
 
     rec = get_run(store, rid)
     if not rec:

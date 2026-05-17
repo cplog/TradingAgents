@@ -52,6 +52,9 @@ class Propagator:
             "fundamentals_report": "",
             "sentiment_report": "",
             "news_report": "",
+            "dimensions_summary": "",
+            "dimensions_error": "",
+            "dimensions_snapshot_json": "",
         }
 
     def get_graph_args(self, callbacks: Optional[List] = None) -> Dict[str, Any]:

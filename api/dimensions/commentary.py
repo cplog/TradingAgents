@@ -51,5 +51,12 @@ def build_commentary(
     except Exception as exc:
         raise CommentaryError(f"Commentary generation failed: {exc}") from exc
     if not isinstance(result, DimensionsCommentary):
+        logger.warning(
+            "Dimensions commentary structured output returned %s for ticker=%s as_of_date=%s "
+            "(expected DimensionsCommentary; often means the LLM/json parser returned empty or invalid output)",
+            type(result).__name__,
+            dimensions.ticker,
+            dimensions.as_of_date,
+        )
         raise CommentaryError(f"Unexpected commentary type: {type(result).__name__}")
     return result

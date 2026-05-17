@@ -231,13 +231,22 @@ Surfaced via:
 
 Toggle off per-job via `config_overrides.dimensions_enabled = false` (adds ~2 LLM calls per run otherwise).
 
-Pre-warm the peer cache for cross-stock percentile ranking:
+Pre-warm the peer cache for cross-stock percentile ranking (local market first, legacy global fallback):
 
 ```bash
-python scripts/warm_peer_cache.py --sector Technology \
+# Global Yahoo sector + industry (fallback when no local cache hits)
+python scripts/warm_peer_cache.py global \
+  --sector Technology \
   --industry "Consumer Electronics" \
   --tickers AAPL MSFT GOOGL META AMZN NVDA AMD
+
+# Same exchange + currency + sector + industry (recommended for HK/US/JP/etc.)
+python scripts/warm_peer_cache.py local --exchange HKG --currency HKD \
+  --sector "Financial Services" --industry "Insurance - Life" \
+  --tickers 1299.HK 2318.HK 2628.HK
 ```
+
+When Cloudflare D1 credentials are configured for history, warmed universes also upsert into ``dimension_peer_*`` tables unless you pass ``--no-d1``.
 
 See `docs/superpowers/specs/2026-05-13-standardized-stock-dimensions-design.md` for the full design.
 

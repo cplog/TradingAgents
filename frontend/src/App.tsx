@@ -6,6 +6,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { NewsPage } from "./pages/NewsPage";
 import { ScreenerPage } from "./pages/ScreenerPage";
+import { SectorIndustryPage } from "./pages/SectorIndustryPage";
 import { SystemPage } from "./pages/SystemPage";
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/batch" element={<BatchPage />} />
         <Route path="/screener" element={<ScreenerPage />} />
+        <Route path="/sectors" element={<SectorIndustryPage />} />
         <Route path="/news" element={<NewsPage />} />
         <Route path="/system" element={<SystemPage />} />
         <Route path="/admin" element={<AdminPage />} />

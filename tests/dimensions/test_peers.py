@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from api.dimensions.peers import (
-    PeerCache, percentile_rank, build_peer_pct_table, peer_universe_id,
+    PeerCache,
+    build_peer_pct_table,
+    market_bucket_from_exchange_currency,
+    percentile_rank,
+    peer_universe_id,
+    slug_for_local_industry_universe,
+    slug_for_local_sector_universe,
 )
 
 
@@ -69,3 +75,15 @@ def test_build_peer_pct_table_inverted_for_value_metrics():
     # pe_ttm 15 ranks 2nd lowest out of 6 → low PE is good → inverted percentile high
     assert table["pe_ttm"] > 0.6
     assert table["pb"] > 0.6
+
+
+def test_market_bucket_formats_exchange_currency():
+    assert market_bucket_from_exchange_currency("HKG", "hkd") == "HKG.HKD"
+
+
+def test_local_peer_slugs_sanitize_market_dots():
+    slug_i = slug_for_local_industry_universe("HKG.HKD", "Financial Services", "Insurance")
+    slug_s = slug_for_local_sector_universe("NMS.USD", "Technology")
+    assert "HKG_HKD" in slug_i or "HKG" in slug_i
+    assert "NMS_USD" in slug_s or "NMS" in slug_s
+    assert "SECTOR_WIDE" in slug_s

@@ -87,6 +87,10 @@ class AnalysisResult(BaseModel):
     dimensions: Optional[StockDimensions] = None
     dimensions_commentary: Optional[DimensionsCommentary] = None
     dimensions_error: Optional[str] = None
+    dimensions_in_graph: Optional[bool] = Field(
+        default=None,
+        description="True when LangGraph serialized a dimensions snapshot before the PM step.",
+    )
 
 
 class AnalyzeResponse(BaseModel):
@@ -95,6 +99,17 @@ class AnalyzeResponse(BaseModel):
     job_id: str
     status: Literal["queued", "running", "completed", "failed"]
     created_at: datetime
+
+
+class JobDimensionsResponse(BaseModel):
+    """GET /jobs/{job_id}/dimensions — snapshot from the completed job result."""
+
+    dimensions: Optional[StockDimensions] = None
+    commentary: Optional[DimensionsCommentary] = None
+    error: Optional[str] = Field(
+        default=None,
+        description="Populated when the dimensions post-pass failed but the job still completed.",
+    )
 
 
 class JobStatusResponse(AnalyzeResponse):
@@ -166,6 +181,9 @@ class BatchStatusResponse(BaseModel):
 NewsSourceId = Literal[
     "yfinance",
     "yfinance_macro",
+    "finnhub",
+    "google_rss",
+    "akshare",
     "reddit",
     "stocktwits",
     "alpha_vantage",
@@ -204,6 +222,15 @@ class RuntimeConfigUpdateRequest(BaseModel):
     secrets: Optional[Dict[str, str]] = None
 
 
+class DataSourceCheck(BaseModel):
+    """Best-effort health probe status for a single data source/vendor."""
+
+    ok: bool
+    configured: bool
+    checked_at: str
+    detail: Optional[str] = None
+
+
 class HealthResponse(BaseModel):
     ok: bool
     llm_provider: str
@@ -214,6 +241,7 @@ class HealthResponse(BaseModel):
     data_cache_dir: str
     results_dir: str
     yfinance_reachable: Optional[bool] = None
+    data_source_checks: Dict[str, DataSourceCheck] = Field(default_factory=dict)
 
 
 class HistoryRunRef(BaseModel):
@@ -232,6 +260,46 @@ class HistoryRunRef(BaseModel):
         default=None,
         description="Compact 6-factor summary for list views (value/growth/quality/momentum/low_risk/sentiment).",
     )
+    facts_sector: Optional[str] = Field(
+        default=None,
+        description="From dimensions snapshot facts (when list comes from D1).",
+    )
+    facts_industry: Optional[str] = Field(default=None)
+    has_dimensions: Optional[bool] = Field(
+        default=None,
+        description="True when persisted row includes a non-empty dimensions JSON.",
+    )
+    has_commentary: Optional[bool] = Field(
+        default=None,
+        description="True when persisted row includes commentary JSON.",
+    )
+
+
+class HistoryCoverageRow(BaseModel):
+    """Aggregated persisted-run counts by sector/industry (D1 history only)."""
+
+    sector: str
+    industry: str
+    run_count: int = Field(..., ge=0)
+    with_dimensions_count: int = Field(..., ge=0)
+    with_commentary_count: int = Field(..., ge=0)
+    latest_completed_at: Optional[str] = None
+
+
+class IndustryConstituentRow(BaseModel):
+    """Catalog constituent ticker with optional latest persisted analysis coverage."""
+
+    ticker: str
+    market: str = Field(description="US or HK from cold-start catalog.")
+    run_count: int = Field(0, ge=0)
+    has_report: bool = False
+    has_dimensions: bool = False
+    has_commentary: bool = False
+    latest_rating: Optional[str] = None
+    latest_date: Optional[str] = None
+    latest_run_id: Optional[str] = None
+    latest_completed_at: Optional[str] = None
+
 
 
 class HistoryRunDetail(BaseModel):
@@ -253,6 +321,7 @@ class HistoryRunDetail(BaseModel):
     dimensions: Optional[StockDimensions] = None
     dimensions_commentary: Optional[DimensionsCommentary] = None
     dimensions_error: Optional[str] = None
+    dimensions_in_graph: Optional[bool] = None
 
 
 class HistoryCompareRequest(BaseModel):
@@ -293,5 +362,7 @@ __all__ = [
     "PillarScore",
     "PillarScores",
     "StockDimensions",
+    "HistoryCoverageRow",
+    "IndustryConstituentRow",
 ]
 

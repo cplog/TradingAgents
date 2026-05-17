@@ -132,7 +132,7 @@ describe("HistoryPage", () => {
     });
 
     expect(api.postHistoryCompare).toHaveBeenCalledWith("r1", "r2");
-    expect(el.innerHTML).toContain("Side-by-side (A left · B right)");
+    expect(el.innerHTML).toContain("Side-by-side · A left · B right");
   });
 
   it("deletes a run from the table", async () => {

@@ -1,6 +1,4 @@
-from typing import Annotated
-
-# Import from vendor-specific modules
+from .config import get_config
 from .y_finance import (
     get_YFin_data_online,
     get_stock_stats_indicators_window,
@@ -23,9 +21,17 @@ from .alpha_vantage import (
     get_global_news as get_alpha_vantage_global_news,
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
-
-# Configuration and routing logic
-from .config import get_config
+from .vendor_errors import DataVendorUnavailable
+from .finnhub_data import (
+    get_stock_finnhub,
+    get_news_finnhub,
+    get_global_news_finnhub,
+)
+from .china_akshare import get_stock_akshare
+from .china_baostock import get_stock_baostock
+from .rss_news import get_global_news_google_rss, get_news_google_rss
+from .akshare_news import get_news_akshare_em
+from .akshare_macro import get_macro_akshare, list_akshare_endpoints
 
 # Tools organized by category
 TOOLS_CATEGORIES = {
@@ -57,20 +63,38 @@ TOOLS_CATEGORIES = {
             "get_global_news",
             "get_insider_transactions",
         ]
+    },
+    "macro_data": {
+        "description": "Macro and market datasets (AKShare dynamic bridge)",
+        "tools": [
+            "list_akshare_endpoints",
+            "get_macro_data",
+        ],
     }
 }
 
-VENDOR_LIST = [
+# Order used when merging configured primaries with fallbacks. Per-method entries
+# in VENDOR_METHODS that are missing for a tool are skipped when building the chain.
+VENDOR_TRY_ORDER: tuple[str, ...] = (
     "yfinance",
+    "finnhub",
+    "google_rss",
+    "akshare",
     "alpha_vantage",
-]
+    "baostock",
+)
+
+VENDOR_LIST = list(VENDOR_TRY_ORDER)
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
-        "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
+        "finnhub": get_stock_finnhub,
+        "alpha_vantage": get_alpha_vantage_stock,
+        "akshare": get_stock_akshare,
+        "baostock": get_stock_baostock,
     },
     # technical_indicators
     "get_indicators": {
@@ -96,16 +120,28 @@ VENDOR_METHODS = {
     },
     # news_data
     "get_news": {
-        "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
+        "finnhub": get_news_finnhub,
+        "google_rss": get_news_google_rss,
+        "akshare": get_news_akshare_em,
+        "alpha_vantage": get_alpha_vantage_news,
     },
     "get_global_news": {
         "yfinance": get_global_news_yfinance,
+        "finnhub": get_global_news_finnhub,
+        "google_rss": get_global_news_google_rss,
         "alpha_vantage": get_alpha_vantage_global_news,
     },
     "get_insider_transactions": {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
+    },
+    # macro_data
+    "list_akshare_endpoints": {
+        "akshare": list_akshare_endpoints,
+    },
+    "get_macro_data": {
+        "akshare": get_macro_akshare,
     },
 }
 
@@ -131,21 +167,82 @@ def get_vendor(category: str, method: str = None) -> str:
     # Fall back to category-level configuration
     return config.get("data_vendors", {}).get(category, "default")
 
+
+def _build_vendor_fallback_chain(method: str, primary_vendors: list[str]) -> list[str]:
+    """Dedupe and order vendors for a tool. When ``prefer_free_data_vendors`` is true
+    (default), yfinance is always tried before alpha_vantage so no-key / free paths
+    run first; remaining configured primaries and unknown vendors follow.
+    """
+    cfg = get_config()
+    prefer_free = cfg.get("prefer_free_data_vendors", True)
+    available = VENDOR_METHODS[method]
+    primaries = [v for v in (p.strip() for p in primary_vendors) if v and v in available]
+
+    if prefer_free:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for v in VENDOR_TRY_ORDER:
+            if v in available and v not in seen:
+                ordered.append(v)
+                seen.add(v)
+        for v in primaries:
+            if v not in seen:
+                ordered.append(v)
+                seen.add(v)
+        for v in available:
+            if v not in seen:
+                ordered.append(v)
+                seen.add(v)
+        return ordered
+
+    seen = set()
+    ordered: list[str] = []
+    for v in primaries:
+        if v not in seen:
+            ordered.append(v)
+            seen.add(v)
+    for v in VENDOR_TRY_ORDER:
+        if v in available and v not in seen:
+            ordered.append(v)
+            seen.add(v)
+    for v in available:
+        if v not in seen:
+            ordered.append(v)
+            seen.add(v)
+    return ordered
+
+
+def _is_yfinance_style_no_ohlcv(result: object) -> bool:
+    """Detect yfinance's plain-text empty-series message so we try the next vendor."""
+    if not isinstance(result, str):
+        return False
+    return result.lstrip().startswith("No data found for symbol")
+
+
+def _is_yfinance_style_no_news(result: object) -> bool:
+    if not isinstance(result, str):
+        return False
+    s = result.lstrip()
+    return s.startswith("No news found for ") or s.startswith("Error fetching news for ")
+
+
+def _is_yfinance_style_no_global_news(result: object) -> bool:
+    if not isinstance(result, str):
+        return False
+    s = result.lstrip()
+    return s.startswith("No global news found for ") or s.startswith("Error fetching global news")
+
+
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
-    primary_vendors = [v.strip() for v in vendor_config.split(',')]
+    primary_vendors = [v.strip() for v in vendor_config.split(",") if v.strip()]
 
     if method not in VENDOR_METHODS:
         raise ValueError(f"Method '{method}' not supported")
 
-    # Build fallback chain: primary vendors first, then remaining available vendors
-    all_available_vendors = list(VENDOR_METHODS[method].keys())
-    fallback_vendors = primary_vendors.copy()
-    for vendor in all_available_vendors:
-        if vendor not in fallback_vendors:
-            fallback_vendors.append(vendor)
+    fallback_vendors = _build_vendor_fallback_chain(method, primary_vendors)
 
     for vendor in fallback_vendors:
         if vendor not in VENDOR_METHODS[method]:
@@ -155,8 +252,15 @@ def route_to_vendor(method: str, *args, **kwargs):
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
         try:
-            return impl_func(*args, **kwargs)
-        except AlphaVantageRateLimitError:
-            continue  # Only rate limits trigger fallback
+            out = impl_func(*args, **kwargs)
+            if method == "get_stock_data" and _is_yfinance_style_no_ohlcv(out):
+                continue
+            if method == "get_news" and _is_yfinance_style_no_news(out):
+                continue
+            if method == "get_global_news" and _is_yfinance_style_no_global_news(out):
+                continue
+            return out
+        except (AlphaVantageRateLimitError, DataVendorUnavailable):
+            continue
 
     raise RuntimeError(f"No available vendor for '{method}'")

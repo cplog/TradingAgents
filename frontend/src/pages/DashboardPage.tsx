@@ -1,9 +1,11 @@
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Pressable } from "../components/Pressable";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Components } from "react-markdown";
 import {
   fetchConfig,
   fetchProviderModels,
@@ -11,11 +13,12 @@ import {
   getJobDimensions,
   openJobEvents,
   submitAnalyze,
+  type JobResultPayload,
   type JobStatus,
   type ProviderModel,
 } from "../api";
 import { DimensionsPanel } from "../components/dimensions/DimensionsPanel";
-import type { StockDimensions } from "../dimensions-types";
+import type { DimensionsCommentary, StockDimensions } from "../dimensions-types";
 
 const PROVIDERS = [
   "openai",
@@ -254,7 +257,9 @@ function hydrateFromServerConfig(
 }
 
 export function DashboardPage() {
-  const [ticker, setTicker] = useState("AAPL");
+  const [searchParams] = useSearchParams();
+  const tickerFromQs = searchParams.get("ticker")?.trim() ?? "";
+  const [ticker, setTicker] = useState(() => tickerFromQs || "AAPL");
   const [date, setDate] = useState("");
   const [provider, setProvider] = useState<string>("openai");
   const [deepModel, setDeepModel] = useState("gpt-5.4");
@@ -287,17 +292,26 @@ export function DashboardPage() {
   const [deepCustomMode, setDeepCustomMode] = useState(false);
   const [quickCustomMode, setQuickCustomMode] = useState(false);
   const [jobNotice, setJobNotice] = useState<string | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
   const [eventsLogRef] = useAutoAnimate();
   const esRef = useRef<EventSource | null>(null);
   const providerPreset = MODEL_PRESETS[provider] ?? MODEL_PRESETS.openai;
   const [dimensions, setDimensions] = useState<StockDimensions | null>(null);
+  const [dimensionsCommentary, setDimensionsCommentary] = useState<DimensionsCommentary | null>(null);
   const [dimensionsError, setDimensionsError] = useState<string | null>(null);
+  const [analysisTab, setAnalysisTab] = useState<"study" | "reports">("reports");
+  const analysisInitializedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (tickerFromQs) setTicker(tickerFromQs);
+  }, [tickerFromQs]);
 
   const clearStaleJob = useCallback((message: string) => {
     const store = globalThis.localStorage;
     if (store && typeof store.removeItem === "function") {
       store.removeItem("ta:lastJobId");
     }
+    activeJobIdRef.current = null;
     esRef.current?.close();
     setJobId(null);
     setJob(null);
@@ -324,9 +338,41 @@ export function DashboardPage() {
     if (!store || typeof store.getItem !== "function") return;
     const saved = store.getItem("ta:lastJobId");
     if (!saved) return;
+    const nowIso = new Date().toISOString();
+    activeJobIdRef.current = saved;
     setJobId(saved);
+    setJob({
+      job_id: saved,
+      status: "running",
+      created_at: nowIso,
+      ticker: null,
+      date: null,
+      result: null,
+      error: null,
+      progress_events: [
+        {
+          ts: nowIso,
+          stage: "running",
+          message: "Restoring live job after refresh…",
+        },
+      ],
+      batch_id: null,
+    });
+    setEvents([
+      {
+        ts: nowIso,
+        stage: "running",
+        message: "Restoring live job after refresh…",
+      },
+    ]);
     void getJob(saved)
       .then((j) => {
+        if (j.status === "completed" || j.status === "failed" || j.status === "cancelled") {
+          clearStaleJob(
+            "Previous job is already finished. Start a new analysis here, or open History for past reports."
+          );
+          return;
+        }
         setJob(j);
         if (j.progress_events?.length) setEvents(j.progress_events);
       })
@@ -336,7 +382,9 @@ export function DashboardPage() {
           clearStaleJob(
             "Previous live job no longer exists (API restart/TTL). Use History for persisted runs or start a new analysis."
           );
+          return;
         }
+        setJobNotice("Reconnecting to live job…");
       });
   }, [clearStaleJob]);
   const headingCursorRef = useRef(0);
@@ -429,6 +477,7 @@ export function DashboardPage() {
   const poll = useCallback(async (id: string) => {
     try {
       const j = await getJob(id);
+      if (activeJobIdRef.current !== id) return;
       setJobNotice(null);
       setJob(j);
       if (j.progress_events?.length) setEvents(j.progress_events);
@@ -513,13 +562,17 @@ export function DashboardPage() {
     };
     if (applyTemperature) overrides.llm_temperature = temperature;
     const trimmedBackend = backendUrl.trim();
-    if (trimmedBackend) {
-      // Prevent stale OpenRouter endpoint from leaking into Ollama runs.
-      const providerIsOllama = provider.startsWith("ollama");
-      const staleOpenRouterForOllama = providerIsOllama && trimmedBackend.includes("openrouter.ai");
-      if (!staleOpenRouterForOllama) {
+    const providerIsOllama = provider.startsWith("ollama");
+    if (providerIsOllama) {
+      // Important: do not inherit server-level OpenRouter backend_url when user switches
+      // to Ollama providers in the UI. Force null unless a non-OpenRouter URL is given.
+      if (trimmedBackend && !trimmedBackend.includes("openrouter.ai")) {
         overrides.backend_url = trimmedBackend;
+      } else {
+        overrides.backend_url = null;
       }
+    } else if (trimmedBackend) {
+      overrides.backend_url = trimmedBackend;
     }
     try {
       const r = await submitAnalyze({
@@ -533,6 +586,7 @@ export function DashboardPage() {
       if (store && typeof store.setItem === "function") {
         store.setItem("ta:lastJobId", r.job_id);
       }
+      activeJobIdRef.current = r.job_id;
       setJobId(r.job_id);
       await poll(r.job_id);
     } finally {
@@ -541,31 +595,58 @@ export function DashboardPage() {
   }
 
   useEffect(() => {
-    if (!jobId || job?.status !== "completed") {
+    if (!jobId || job?.status !== "completed" || !job?.result) {
       return;
     }
+    const doneKey = `${jobId}:${String(job.result.completed_at)}`;
+    const r = job.result as JobResultPayload;
+
+    if ("dimensions" in r || "dimensions_error" in r) {
+      setDimensions(r.dimensions ?? null);
+      setDimensionsCommentary(r.dimensions_commentary ?? null);
+      setDimensionsError(r.dimensions_error && !r.dimensions ? r.dimensions_error : null);
+      if (analysisInitializedFor.current !== doneKey) {
+        analysisInitializedFor.current = doneKey;
+        const openStudy = Boolean(r.dimensions || (r.dimensions_error && !r.dimensions));
+        setAnalysisTab(openStudy ? "study" : "reports");
+      }
+      return;
+    }
+
     let cancelled = false;
     setDimensionsError(null);
     void getJobDimensions(jobId)
-      .then((d) => {
-        if (!cancelled) setDimensions(d);
+      .then((b) => {
+        if (cancelled) return;
+        setDimensions(b.dimensions);
+        setDimensionsCommentary(b.commentary);
+        setDimensionsError(b.error && !b.dimensions ? b.error : null);
+        if (analysisInitializedFor.current !== doneKey) {
+          analysisInitializedFor.current = doneKey;
+          setAnalysisTab(b.dimensions || b.error ? "study" : "reports");
+        }
       })
       .catch((e: unknown) => {
-        if (!cancelled) {
-          setDimensions(null);
-          setDimensionsError(e instanceof Error ? e.message : String(e));
+        if (cancelled) return;
+        setDimensions(null);
+        setDimensionsCommentary(null);
+        setDimensionsError(e instanceof Error ? e.message : String(e));
+        if (analysisInitializedFor.current !== doneKey) {
+          analysisInitializedFor.current = doneKey;
+          setAnalysisTab("reports");
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [jobId, job?.status]);
+  }, [jobId, job?.status, job?.result]);
 
   useEffect(() => {
-    // Clear dimensions when a new job starts
     if (job?.status === "queued" || job?.status === "running") {
       setDimensions(null);
+      setDimensionsCommentary(null);
       setDimensionsError(null);
+      analysisInitializedFor.current = null;
     }
   }, [job?.status]);
 
@@ -576,6 +657,12 @@ export function DashboardPage() {
       .map(([k, v]) => `## ${k}\n\n${String(v)}`)
       .join("\n\n---\n\n");
   }, [job?.result?.reports]);
+
+  const showDimensionalStudy = Boolean(
+    job?.status === "completed" && (dimensions || dimensionsError),
+  );
+  const showAgentReports = Boolean(mdReport);
+  const showAnalysisTabs = showDimensionalStudy && showAgentReports;
 
   const tocItems = useMemo(() => extractToc(mdReport), [mdReport]);
   const tocLevel2 = useMemo(() => tocItems.filter((t) => t.level === 2), [tocItems]);
@@ -637,57 +724,59 @@ export function DashboardPage() {
   const pipelineLabels = ["Queued", "Pipeline", "Report", "Done"];
 
   headingCursorRef.current = 0;
-  const markdownComponents = useMemo(
-    () => ({
-      h2: ({ children }: { children?: ReactNode }) => {
-        const pos = headingCursorRef.current;
-        const item = tocItems[pos];
-        let id = slugifyHeading(textFromChildren(children));
-        if (item?.level === 2) {
-          id = item.id;
-          headingCursorRef.current += 1;
-        }
-        return (
-          <h2
-            id={id}
-            style={{
-              scrollMarginTop: "var(--spacing-24)",
-              fontSize: "var(--text-heading)",
-              marginTop: "var(--spacing-24)",
-              marginBottom: "var(--spacing-8)",
-              color: "var(--color-slate-text)",
-            }}
-          >
-            {children}
-          </h2>
-        );
-      },
-      h3: ({ children }: { children?: ReactNode }) => {
-        const pos = headingCursorRef.current;
-        const item = tocItems[pos];
-        let id = slugifyHeading(textFromChildren(children));
-        if (item?.level === 3) {
-          id = item.id;
-          headingCursorRef.current += 1;
-        }
-        return (
-          <h3
-            id={id}
-            style={{
-              scrollMarginTop: "var(--spacing-24)",
-              fontSize: "var(--text-heading-sm)",
-              marginTop: "var(--spacing-16)",
-              marginBottom: "var(--spacing-8)",
-              color: "var(--color-slate-text)",
-            }}
-          >
-            {children}
-          </h3>
-        );
-      },
-    }),
-    [tocItems]
-  );
+  const markdownComponents = useMemo((): Components => ({
+    table: ({ children, ...rest }) => (
+      <div className="markdown-table-wrap">
+        <table {...rest}>{children}</table>
+      </div>
+    ),
+    h2: ({ children }) => {
+      const pos = headingCursorRef.current;
+      const item = tocItems[pos];
+      let id = slugifyHeading(textFromChildren(children));
+      if (item?.level === 2) {
+        id = item.id;
+        headingCursorRef.current += 1;
+      }
+      return (
+        <h2
+          id={id}
+          style={{
+            scrollMarginTop: "var(--spacing-24)",
+            fontSize: "var(--text-heading)",
+            marginTop: "var(--spacing-24)",
+            marginBottom: "var(--spacing-8)",
+            color: "var(--color-slate-text)",
+          }}
+        >
+          {children}
+        </h2>
+      );
+    },
+    h3: ({ children }) => {
+      const pos = headingCursorRef.current;
+      const item = tocItems[pos];
+      let id = slugifyHeading(textFromChildren(children));
+      if (item?.level === 3) {
+        id = item.id;
+        headingCursorRef.current += 1;
+      }
+      return (
+        <h3
+          id={id}
+          style={{
+            scrollMarginTop: "var(--spacing-24)",
+            fontSize: "var(--text-heading-sm)",
+            marginTop: "var(--spacing-16)",
+            marginBottom: "var(--spacing-8)",
+            color: "var(--color-slate-text)",
+          }}
+        >
+          {children}
+        </h3>
+      );
+    },
+  }), [tocItems]);
 
   function pipelineDotClass(i: number): string {
     if (pipelineMode === "failed" && i === 1) return "pipeline-dot pipeline-dot--error";
@@ -700,7 +789,10 @@ export function DashboardPage() {
   }
 
   return (
-    <div style={{ display: "grid", gap: "var(--spacing-24)", maxWidth: "72rem" }}>
+    <div
+      className="dashboard-page"
+      style={{ display: "grid", gap: "var(--spacing-24)" }}
+    >
       <header>
         <h1 style={{ fontSize: "var(--text-heading-lg)", margin: "0 0 8px" }}>
           Main analysis
@@ -733,15 +825,9 @@ export function DashboardPage() {
         )}
       </header>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-          gap: "var(--spacing-24)",
-          alignItems: "start",
-        }}
-      >
+      <section className="dashboard-main-grid">
         <div
+          className="dashboard-setup-card"
           style={{
             background: "var(--surface-cloud-white)",
             padding: "var(--card-padding)",
@@ -1086,14 +1172,13 @@ export function DashboardPage() {
         </div>
 
         <div
+          className="dashboard-run-card"
           style={{
             background: "var(--surface-cloud-white)",
             padding: "var(--card-padding)",
             borderRadius: "var(--radius-cards)",
             boxShadow: "var(--shadow-subtle)",
             border: "1px solid var(--color-stone-border)",
-            position: "sticky",
-            top: "var(--spacing-16)",
           }}
         >
           <h2 style={{ marginTop: 0 }}>Run</h2>
@@ -1199,7 +1284,7 @@ export function DashboardPage() {
         </div>
       </section>
 
-      <section>
+      <section className="dashboard-log-section">
         <button
           type="button"
           onClick={() => setLogOpen(!logOpen)}
@@ -1236,7 +1321,7 @@ export function DashboardPage() {
         </p>
         {logOpen && (
           <pre
-            className="mono"
+            className="mono dashboard-progress-log"
             style={{
               marginTop: 8,
               maxHeight: 320,
@@ -1245,8 +1330,11 @@ export function DashboardPage() {
               color: "#e7e5e4",
               padding: "var(--spacing-16)",
               borderRadius: "var(--radius-md)",
-              fontSize: 12,
+              fontSize: 13,
               lineHeight: 1.5,
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
             }}
           >
             <div ref={eventsLogRef}>
@@ -1254,7 +1342,7 @@ export function DashboardPage() {
                 <div style={{ color: "#94a3b8" }}>Waiting for first progress event…</div>
               )}
               {events.map((e, i) => (
-                <div key={`${e.ts}-${i}`}>
+                <div key={`${e.ts}-${i}`} className="dashboard-progress-log__entry">
                   <span style={{ color: "#94a3b8" }}>[{e.stage}]</span> {e.message}
                 </div>
               ))}
@@ -1296,194 +1384,381 @@ export function DashboardPage() {
         </div>
       )}
 
-      {mdReport ? (
-        <article
-          style={{
-            background: "var(--surface-cloud-white)",
-            padding: "var(--spacing-32)",
-            borderRadius: "var(--radius-largecard)",
-            boxShadow: "var(--shadow-md)",
-            border: "1px solid var(--color-stone-border)",
-          }}
-        >
-          <div
-            style={{
-              marginBottom: "var(--spacing-24)",
-              padding: "var(--spacing-24)",
-              borderRadius: "var(--radius-largecard)",
-              background: "var(--color-sky-tint)",
-              border: "1px solid var(--color-platinum-outline)",
-            }}
-          >
-            <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginBottom: 8 }}>
-              Result · Not financial advice
-            </div>
+      {(showDimensionalStudy || showAgentReports) && (
+        <div style={{ display: "grid", gap: "var(--spacing-16)" }}>
+          {showAnalysisTabs && (
             <div
+              role="tablist"
+              aria-label="Analysis views"
               style={{
-                fontSize: "var(--text-heading-lg)",
-                fontWeight: 600,
-                letterSpacing: "-0.021em",
-                lineHeight: 1.12,
-              }}
-            >
-              {job?.result?.rating ?? "—"}
-            </div>
-            <div style={{ marginTop: "var(--spacing-12)", fontSize: "var(--text-caption)", color: "var(--color-slate-text)" }}>
-              <span className="mono">{job?.result?.ticker ?? ticker}</span>
-              {job?.result?.date && (
-                <span style={{ marginLeft: 12 }}>As of {job.result.date}</span>
-              )}
-              {job?.result?.confidence != null && (
-                <span style={{ marginLeft: 12, color: "var(--color-ash-gray)" }}>
-                  Confidence (heuristic): {(job.result.confidence * 100).toFixed(0)}%
-                </span>
-              )}
-            </div>
-          </div>
-
-          <section
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-              gap: "var(--spacing-12)",
-              marginBottom: "var(--spacing-24)",
-            }}
-          >
-            <div
-              style={{
-                border: "1px solid var(--color-stone-border)",
-                borderRadius: "var(--radius-cards)",
-                padding: "var(--spacing-16)",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                padding: 6,
                 background: "var(--surface-cloud-white)",
-              }}
-            >
-              <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>What to do now</div>
-              <div style={{ fontWeight: 600, marginTop: 6 }}>{decisionSummary.actionNow}</div>
-            </div>
-            <div
-              style={{
-                border: "1px solid var(--color-stone-border)",
                 borderRadius: "var(--radius-cards)",
-                padding: "var(--spacing-16)",
-                background: "var(--surface-cloud-white)",
-              }}
-            >
-              <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>Confidence</div>
-              <div style={{ fontWeight: 600, marginTop: 6 }}>
-                {decisionSummary.confidencePct != null
-                  ? `${decisionSummary.confidencePct}% · ${decisionSummary.confidenceLabel}`
-                  : decisionSummary.confidenceLabel}
-              </div>
-            </div>
-            <div
-              style={{
                 border: "1px solid var(--color-stone-border)",
-                borderRadius: "var(--radius-cards)",
-                padding: "var(--spacing-16)",
-                background: "var(--surface-cloud-white)",
+                boxShadow: "var(--shadow-subtle)",
               }}
             >
-              <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>FOMO risk</div>
-              <div style={{ fontWeight: 600, marginTop: 6 }}>{decisionSummary.fomoLabel}</div>
-            </div>
-            <div
-              style={{
-                border: "1px solid var(--color-stone-border)",
-                borderRadius: "var(--radius-cards)",
-                padding: "var(--spacing-16)",
-                background: "var(--surface-cloud-white)",
-              }}
-            >
-              <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>Time horizon</div>
-              <div style={{ fontWeight: 600, marginTop: 6 }}>{decisionSummary.horizon}</div>
-            </div>
-          </section>
-
-          <section
-            style={{
-              marginBottom: "var(--spacing-24)",
-              display: "grid",
-              gap: "var(--spacing-12)",
-              background: "var(--surface-cloud-white)",
-              border: "1px solid var(--color-stone-border)",
-              borderRadius: "var(--radius-cards)",
-              padding: "var(--spacing-16)",
-            }}
-          >
-            <div>
-              <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginBottom: 8 }}>
-                Why now
-              </div>
-              <ul style={{ margin: 0, paddingLeft: "var(--spacing-16)" }}>
-                {decisionSummary.whyNow.length ? (
-                  decisionSummary.whyNow.map((line) => <li key={line}>{line}</li>)
-                ) : (
-                  <li>No concise reason lines found in the generated report yet.</li>
-                )}
-              </ul>
-            </div>
-            <div>
-              <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginBottom: 8 }}>
-                Invalidation condition
-              </div>
-              <div>{decisionSummary.invalidation}</div>
-            </div>
-          </section>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: tocLevel2.length > 1 ? "minmax(0, 11rem) minmax(0, 1fr)" : "1fr",
-              gap: "var(--spacing-32)",
-              alignItems: "start",
-            }}
-          >
-            {tocLevel2.length > 1 && (
-              <nav
-                aria-label="Report sections"
+              <button
+                type="button"
+                role="tab"
+                aria-selected={analysisTab === "study"}
+                onClick={() => setAnalysisTab("study")}
                 style={{
-                  position: "sticky",
-                  top: "var(--spacing-24)",
-                  fontSize: "var(--text-caption)",
-                  borderLeft: "2px solid var(--color-stone-border)",
-                  paddingLeft: "var(--spacing-12)",
+                  padding: "10px 16px",
+                  borderRadius: "var(--radius-buttons)",
+                  border:
+                    analysisTab === "study"
+                      ? "1px solid var(--color-chartwell-blue)"
+                      : "1px solid transparent",
+                  background: analysisTab === "study" ? "var(--color-sky-tint)" : "transparent",
+                  cursor: "pointer",
+                  fontWeight: analysisTab === "study" ? 600 : 400,
+                  color: "var(--color-slate-text)",
                 }}
               >
-                <div style={{ fontWeight: 600, marginBottom: "var(--spacing-8)", color: "var(--color-slate-text)" }}>
-                  Sections
-                </div>
-                <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-                  {tocLevel2.map((t) => (
-                    <li key={t.id} style={{ marginBottom: 6 }}>
-                      <a href={`#${t.id}`} style={{ color: "var(--color-chartwell-blue)" }}>
-                        {t.text}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </nav>
-            )}
-            <div className="markdown-body" style={{ maxWidth: "72ch", minWidth: 0 }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                {mdReport}
-              </ReactMarkdown>
+                Dimensional study
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={analysisTab === "reports"}
+                onClick={() => setAnalysisTab("reports")}
+                style={{
+                  padding: "10px 16px",
+                  borderRadius: "var(--radius-buttons)",
+                  border:
+                    analysisTab === "reports"
+                      ? "1px solid var(--color-chartwell-blue)"
+                      : "1px solid transparent",
+                  background: analysisTab === "reports" ? "var(--color-sky-tint)" : "transparent",
+                  cursor: "pointer",
+                  fontWeight: analysisTab === "reports" ? 600 : 400,
+                  color: "var(--color-slate-text)",
+                }}
+              >
+                Agent reports
+              </button>
             </div>
-          </div>
-        </article>
-      ) : null}
+          )}
 
-      {job?.status === "completed" && (dimensions || dimensionsError) && (
-        <section
-          style={{
-            background: "var(--surface-cloud-white)",
-            padding: "var(--spacing-24)",
-            borderRadius: "var(--radius-largecard)",
-            boxShadow: "var(--shadow-md)",
-            border: "1px solid var(--color-stone-border)",
-          }}
-        >
-          <DimensionsPanel dimensions={dimensions} error={dimensionsError} />
-        </section>
+          {showDimensionalStudy && (!showAnalysisTabs || analysisTab === "study") && (
+            <section
+              id="ta-dimensional-study"
+              style={{
+                background: "var(--surface-cloud-white)",
+                padding: "var(--spacing-24)",
+                borderRadius: "var(--radius-largecard)",
+                boxShadow: "var(--shadow-md)",
+                border: "1px solid var(--color-stone-border)",
+              }}
+            >
+              {job?.result?.dimensions_in_graph === true && (
+                <div
+                  style={{
+                    marginBottom: "var(--spacing-12)",
+                    fontSize: "var(--text-caption)",
+                    color: "#166534",
+                    fontWeight: 500,
+                  }}
+                >
+                  This run fed a dimensional snapshot into Trader and Portfolio Manager before the final rating.
+                </div>
+              )}
+              {job?.result?.dimensions_in_graph === false && (
+                <div
+                  style={{
+                    marginBottom: "var(--spacing-12)",
+                    fontSize: "var(--text-caption)",
+                    color: "var(--color-ash-gray)",
+                  }}
+                >
+                  No in-graph snapshot on this run; scores below may come only from the post-pass.
+                </div>
+              )}
+              <DimensionsPanel
+                dimensions={dimensions}
+                commentary={dimensionsCommentary}
+                error={dimensionsError}
+              />
+            </section>
+          )}
+
+          {showAgentReports && (!showAnalysisTabs || analysisTab === "reports") && (
+            <article
+              style={{
+                background: "var(--surface-cloud-white)",
+                padding: "clamp(var(--spacing-24), 3vw, var(--spacing-32))",
+                borderRadius: "var(--radius-largecard)",
+                boxShadow: "var(--shadow-md)",
+                border: "1px solid var(--color-stone-border)",
+                display: "grid",
+                gap: "var(--spacing-32)",
+              }}
+            >
+              <header style={{ display: "grid", gap: "var(--spacing-8)" }}>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: "var(--text-caption)",
+                    fontWeight: 600,
+                    letterSpacing: "0.02em",
+                    textTransform: "uppercase",
+                    color: "var(--color-steel-gray)",
+                  }}
+                >
+                  Agent reports
+                </p>
+                <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
+                  Research artifacts only — not financial advice. Read full context in the sections below.
+                </p>
+              </header>
+
+              <section
+                style={{
+                  display: "grid",
+                  gap: "var(--spacing-16)",
+                  paddingBottom: "var(--spacing-24)",
+                  borderBottom: "1px solid var(--color-stone-border)",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "var(--text-heading)",
+                    fontWeight: 600,
+                    letterSpacing: "-0.02em",
+                    lineHeight: 1.2,
+                    color: "var(--color-slate-text)",
+                  }}
+                >
+                  {job?.result?.rating ?? "—"}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "baseline",
+                    gap: "var(--spacing-8) var(--spacing-16)",
+                    fontSize: "var(--text-caption)",
+                    color: "var(--color-steel-gray)",
+                  }}
+                >
+                  <span className="mono" style={{ color: "var(--color-slate-text)", fontWeight: 600 }}>
+                    {job?.result?.ticker ?? ticker}
+                  </span>
+                  {job?.result?.date && <span>As of {job.result.date}</span>}
+                  {job?.result?.confidence != null && (
+                    <span>
+                      Confidence <span style={{ color: "var(--color-ash-gray)" }}>(heuristic)</span>:{" "}
+                      {(job.result.confidence * 100).toFixed(0)}%
+                    </span>
+                  )}
+                  {jobId && (
+                    <a
+                      href={`/jobs/${jobId}/report`}
+                      className="mono"
+                      style={{
+                        marginLeft: "auto",
+                        fontSize: "var(--text-caption)",
+                        color: "var(--color-chartwell-blue)",
+                        fontWeight: 500,
+                      }}
+                    >
+                      Download markdown →
+                    </a>
+                  )}
+                </div>
+                {job?.result?.dimensions_in_graph === true && (
+                  <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "#166534" }}>
+                    Dimensional snapshot was included in Trader and Portfolio Manager prompts for this run.
+                  </p>
+                )}
+                {job?.result?.dimensions_in_graph === false && (
+                  <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
+                    No in-graph dimensions snapshot (disabled, failed, or older run). Open{" "}
+                    <strong>Dimensional study</strong> for post-pass scores when available.
+                  </p>
+                )}
+              </section>
+
+              <section aria-label="Decision summary">
+                <h3
+                  style={{
+                    margin: "0 0 var(--spacing-12)",
+                    fontSize: "var(--text-heading-sm)",
+                    fontWeight: 600,
+                    color: "var(--color-slate-text)",
+                  }}
+                >
+                  At a glance
+                </h3>
+                <dl
+                  style={{
+                    margin: 0,
+                    border: "1px solid var(--color-stone-border)",
+                    borderRadius: "var(--radius-cards)",
+                    overflow: "hidden",
+                    background: "var(--surface-canvas-fog)",
+                  }}
+                >
+                  {(
+                    [
+                      ["What to do now", decisionSummary.actionNow],
+                      [
+                        "Conviction",
+                        decisionSummary.confidencePct != null
+                          ? `${decisionSummary.confidencePct}% · ${decisionSummary.confidenceLabel}`
+                          : decisionSummary.confidenceLabel,
+                      ],
+                      ["FOMO risk", decisionSummary.fomoLabel],
+                      ["Time horizon", decisionSummary.horizon],
+                    ] as const
+                  ).map(([label, value], i, arr) => (
+                    <div
+                      key={label}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "var(--spacing-4)",
+                        padding: "var(--spacing-12) var(--spacing-16)",
+                        borderBottom:
+                          i < arr.length - 1 ? "1px solid var(--color-stone-border)" : undefined,
+                      }}
+                    >
+                      <dt
+                        style={{
+                          margin: 0,
+                          fontSize: "var(--text-caption)",
+                          color: "var(--color-ash-gray)",
+                          fontWeight: 500,
+                        }}
+                      >
+                        {label}
+                      </dt>
+                      <dd style={{ margin: 0, fontWeight: 600, lineHeight: 1.35, color: "var(--color-slate-text)" }}>
+                        {value}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+
+              <section aria-label="Context excerpt">
+                <h3
+                  style={{
+                    margin: "0 0 var(--spacing-12)",
+                    fontSize: "var(--text-heading-sm)",
+                    fontWeight: 600,
+                    color: "var(--color-slate-text)",
+                  }}
+                >
+                  Context from the run
+                </h3>
+                <div
+                  style={{
+                    display: "grid",
+                    gap: "var(--spacing-16)",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(17rem, 1fr))",
+                    padding: "var(--spacing-24)",
+                    background: "var(--surface-canvas-fog)",
+                    border: "1px solid var(--color-stone-border)",
+                    borderRadius: "var(--radius-cards)",
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: "var(--text-caption)",
+                        fontWeight: 600,
+                        color: "var(--color-steel-gray)",
+                        marginBottom: "var(--spacing-8)",
+                      }}
+                    >
+                      Why now
+                    </div>
+                    <ul
+                      style={{
+                        margin: 0,
+                        paddingLeft: "var(--spacing-24)",
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      {decisionSummary.whyNow.length ? (
+                        decisionSummary.whyNow.map((line) => <li key={line}>{line}</li>)
+                      ) : (
+                        <li style={{ color: "var(--color-ash-gray)" }}>
+                          No concise reason lines found in the generated report yet.
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: "var(--text-caption)",
+                        fontWeight: 600,
+                        color: "var(--color-steel-gray)",
+                        marginBottom: "var(--spacing-8)",
+                      }}
+                    >
+                      Invalidation
+                    </div>
+                    <p style={{ margin: 0, lineHeight: 1.55 }}>{decisionSummary.invalidation}</p>
+                  </div>
+                </div>
+              </section>
+
+              <div
+                className={
+                  tocLevel2.length > 1
+                    ? "dashboard-report-layout dashboard-report-layout--with-toc"
+                    : "dashboard-report-layout"
+                }
+              >
+                {tocLevel2.length > 1 && (
+                  <nav
+                    aria-label="Report sections"
+                    className="dashboard-report-toc"
+                  >
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        marginBottom: "var(--spacing-8)",
+                        color: "var(--color-slate-text)",
+                      }}
+                    >
+                      Sections
+                    </div>
+                    <ul
+                      style={{
+                        margin: 0,
+                        padding: 0,
+                        listStyle: "none",
+                        display: "grid",
+                        gap: "var(--spacing-4)",
+                      }}
+                    >
+                      {tocLevel2.map((t) => (
+                        <li key={t.id}>
+                          <a href={`#${t.id}`} style={{ color: "var(--color-chartwell-blue)" }}>
+                            {t.text}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </nav>
+                )}
+                <div className="markdown-body dashboard-report-markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {mdReport}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            </article>
+          )}
+        </div>
       )}
     </div>
   );

@@ -20,7 +20,8 @@ describe('PillarGrid', () => {
 
   it('exposes rationale via tooltip role', () => {
     render(<PillarGrid pillars={pillars} />);
-    const trend = screen.getByRole('button', { name: /trend/i });
-    expect(trend).toHaveAttribute('title', expect.stringContaining('strong uptrend'));
+    const trendButtons = screen.getAllByRole("button", { name: /trend/i });
+    expect(trendButtons.length).toBeGreaterThanOrEqual(1);
+    expect(trendButtons[0]).toHaveAttribute("title", expect.stringContaining("strong uptrend"));
   });
 });

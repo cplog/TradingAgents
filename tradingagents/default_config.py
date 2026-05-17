@@ -3,29 +3,26 @@ import os
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
 
-# Single source of truth for env-var → config-key overrides. To expose
-# a new config key for environment-based override, add a row here — no
-# entry-point script changes required. Coercion is driven by the type
-# of the existing default, so users can keep writing plain strings in
-# their .env file.
+# Single source of truth for env-var -> config-key overrides. To expose
+# a new config key for environment-based override, add a row here.
 _ENV_OVERRIDES = {
-    "TRADINGAGENTS_LLM_PROVIDER":         "llm_provider",
-    "TRADINGAGENTS_DEEP_THINK_LLM":       "deep_think_llm",
-    "TRADINGAGENTS_QUICK_THINK_LLM":      "quick_think_llm",
-    "TRADINGAGENTS_LLM_BACKEND_URL":      "backend_url",
-    "TRADINGAGENTS_OUTPUT_LANGUAGE":      "output_language",
-    "TRADINGAGENTS_MAX_DEBATE_ROUNDS":    "max_debate_rounds",
-    "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
-    "TRADINGAGENTS_MAX_RECUR_LIMIT":      "max_recur_limit",
-    "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
-    "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
-<<<<<<< HEAD
+    "TRADINGAGENTS_LLM_PROVIDER": "llm_provider",
+    "TRADINGAGENTS_DEEP_THINK_LLM": "deep_think_llm",
+    "TRADINGAGENTS_QUICK_THINK_LLM": "quick_think_llm",
+    "TRADINGAGENTS_LLM_BACKEND_URL": "backend_url",
+    "TRADINGAGENTS_OUTPUT_LANGUAGE": "output_language",
+    "TRADINGAGENTS_MAX_DEBATE_ROUNDS": "max_debate_rounds",
+    "TRADINGAGENTS_MAX_RISK_ROUNDS": "max_risk_discuss_rounds",
+    "TRADINGAGENTS_MAX_RECUR_LIMIT": "max_recur_limit",
+    "TRADINGAGENTS_CHECKPOINT_ENABLED": "checkpoint_enabled",
+    "TRADINGAGENTS_BENCHMARK_TICKER": "benchmark_ticker",
     "TRADINGAGENTS_OPENROUTER_FREE_ONLY": "openrouter_free_only",
-    "TRADINGAGENTS_MAX_CONCURRENCY":      "max_concurrency",
-    "TRADINGAGENTS_JOB_TTL_HOURS":        "job_ttl_hours",
-    "TRADINGAGENTS_LLM_TEMPERATURE":      "llm_temperature",
-=======
->>>>>>> 78d063d (feat(reflection): configurable alpha benchmark for non-US tickers)
+    "TRADINGAGENTS_MAX_CONCURRENCY": "max_concurrency",
+    "TRADINGAGENTS_JOB_TTL_HOURS": "job_ttl_hours",
+    "TRADINGAGENTS_LLM_TEMPERATURE": "llm_temperature",
+    "TRADINGAGENTS_DIMENSIONS_ENABLED": "dimensions_enabled",
+    "TRADINGAGENTS_DIMENSIONS_IN_GRAPH": "dimensions_in_graph",
+    "TRADINGAGENTS_PREFER_FREE_DATA_VENDORS": "prefer_free_data_vendors",
 }
 
 
@@ -60,7 +57,10 @@ _CONFIG_BASE: dict = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
     "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
-    "memory_log_path": os.getenv("TRADINGAGENTS_MEMORY_LOG_PATH", os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md")),
+    "memory_log_path": os.getenv(
+        "TRADINGAGENTS_MEMORY_LOG_PATH",
+        os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md"),
+    ),
     # Optional cap on the number of resolved memory log entries. When set,
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
@@ -69,39 +69,26 @@ _CONFIG_BASE: dict = {
     "llm_provider": "openai",
     "deep_think_llm": "gpt-5.4",
     "quick_think_llm": "gpt-5.4-mini",
-    # When None, each provider's client falls back to its own default endpoint
-    # (api.openai.com for OpenAI, generativelanguage.googleapis.com for Gemini, ...).
-    # The CLI overrides this per provider when the user picks one. Keeping a
-    # provider-specific URL here would leak (e.g. OpenAI's /v1 was previously
-    # being forwarded to Gemini, producing malformed request URLs).
+    # When None, each provider's client falls back to its own default endpoint.
     "backend_url": None,
     # Provider-specific thinking configuration
-    "google_thinking_level": None,      # "high", "minimal", etc.
-    "openai_reasoning_effort": None,    # "medium", "high", "low"
-    "anthropic_effort": None,           # "high", "medium", "low"
-    # Optional sampling temperature for chat models (OpenAI-compatible, Google, Anthropic).
-    # When None, the LangChain/model default is used.
+    "google_thinking_level": None,
+    "openai_reasoning_effort": None,
+    "anthropic_effort": None,
+    # Optional sampling temperature for chat models
     "llm_temperature": None,
-    # Checkpoint/resume: when True, LangGraph saves state after each node
-    # so a crashed run can resume from the last successful step.
+    # Checkpoint/resume: when True, LangGraph saves state after each node.
     "checkpoint_enabled": False,
     # Output language for analyst reports and final decision
-    # Internal agent debate stays in English for reasoning quality
     "output_language": os.getenv("OUTPUT_LANGUAGE", "English"),
     # Debate and discussion settings
-<<<<<<< HEAD
-<<<<<<< HEAD
-    "max_debate_rounds": int(os.getenv("MAX_DEBATE_ROUNDS", "1")),
-    "max_risk_discuss_rounds": int(os.getenv("MAX_RISK_DISCUSS_ROUNDS", "1")),
-    "max_recur_limit": int(os.getenv("MAX_RECUR_LIMIT", "100")),
+    "max_debate_rounds": 1,
+    "max_risk_discuss_rounds": 1,
+    "max_recur_limit": 100,
     # News / data fetching parameters
-    # Increase for longer lookback strategies or to broaden macro coverage;
-    # decrease to reduce token usage in agent prompts.
-    "news_article_limit": 20,             # max articles per ticker (ticker-news)
-    "global_news_article_limit": 10,      # max articles for global/macro news
-    "global_news_lookback_days": 7,       # macro news lookback window
-    # Search queries used by get_global_news for macro headlines. Extend or
-    # replace to broaden geographic / sector coverage.
+    "news_article_limit": 20,
+    "global_news_article_limit": 10,
+    "global_news_lookback_days": 7,
     "global_news_queries": [
         "Federal Reserve interest rates inflation",
         "S&P 500 earnings GDP economic outlook",
@@ -114,62 +101,38 @@ _CONFIG_BASE: dict = {
     # Service settings (API mode)
     "max_concurrency": 3,
     "job_ttl_hours": 24,
-=======
-    "max_debate_rounds": 1,
-    "max_risk_discuss_rounds": 1,
-    "max_recur_limit": 100,
-    # When True, the CLI limits OpenRouter model selection to free-tier models
-    "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
->>>>>>> 5320475 (feat(cli): add OpenRouter free-model filter extension)
-=======
-    "max_debate_rounds": int(os.getenv("MAX_DEBATE_ROUNDS", "1")),
-    "max_risk_discuss_rounds": int(os.getenv("MAX_RISK_DISCUSS_ROUNDS", "1")),
-    "max_recur_limit": int(os.getenv("MAX_RECUR_LIMIT", "100")),
-    # When True, the CLI limits OpenRouter model selection to free-tier models
-    "openrouter_free_only": os.getenv("TRADINGAGENTS_OPENROUTER_FREE_ONLY", "").lower() in ("1", "true", "yes"),
-    # Service settings (API mode)
-    "max_concurrency": int(os.getenv("MAX_CONCURRENCY", "3")),
-    "job_ttl_hours": int(os.getenv("JOB_TTL_HOURS", "24")),
->>>>>>> 28cefdf (feat(api): add FastAPI service with async jobs, HK/US ticker support, and env-var config)
-    # Data vendor configuration
-    # Category-level configuration (default for all tools in category)
+    # Data vendor configuration (comma-separated primaries; see prefer_free_data_vendors).
+    "prefer_free_data_vendors": True,
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_stock_apis": "yfinance,finnhub,alpha_vantage",
+        "technical_indicators": "yfinance,alpha_vantage",
+        "fundamental_data": "yfinance,alpha_vantage",
+        "news_data": "yfinance,finnhub,google_rss,akshare,alpha_vantage",
+        "macro_data": "akshare",
     },
-    # Tool-level configuration (takes precedence over category-level)
-    "tool_vendors": {
-        # Example: "get_stock_data": "alpha_vantage",  # Override category default
-    },
+    "tool_vendors": {},
     # Benchmark for alpha calculation in the reflection layer.
-    # ``benchmark_ticker`` (when set) overrides the suffix map for all
-    # tickers; leave it None to use ``benchmark_map`` for auto-detection
-    # based on the ticker's exchange suffix. SPY remains the US default
-    # so the reflection label keeps reading "Alpha vs SPY" for US tickers
-    # while non-US tickers get their regional index automatically.
     "benchmark_ticker": None,
     "benchmark_map": {
-        ".NS":  "^NSEI",    # NSE India (Nifty 50)
-        ".BO":  "^BSESN",   # BSE India (Sensex)
-        ".T":   "^N225",    # Tokyo (Nikkei 225)
-        ".HK":  "^HSI",     # Hong Kong (Hang Seng)
-        ".L":   "^FTSE",    # London (FTSE 100)
-        ".TO":  "^GSPTSE",  # Toronto (TSX Composite)
-        ".AX":  "^AXJO",    # Australia (ASX 200)
-        "":     "SPY",      # default for US-listed tickers (no suffix)
+        ".NS": "^NSEI",
+        ".BO": "^BSESN",
+        ".T": "^N225",
+        ".HK": "^HSI",
+        ".L": "^FTSE",
+        ".TO": "^GSPTSE",
+        ".AX": "^AXJO",
+        "": "SPY",
     },
-<<<<<<< HEAD
+    # Standardized stock dimensions (API UX / peer-aware factors)
+    "dimensions_enabled": True,
+    # When True, run one dimensions build inside LangGraph after analysts (feeds PM/trader).
+    "dimensions_in_graph": True,
 }
 
 
 def build_fresh_config() -> dict:
-    """Return a new config dict with current ``TRADINGAGENTS_*`` env applied."""
+    """Return a new config dict with current TRADINGAGENTS_* env applied."""
     return _apply_env_overrides(copy.deepcopy(_CONFIG_BASE))
 
 
 DEFAULT_CONFIG = build_fresh_config()
-=======
-})
->>>>>>> 78d063d (feat(reflection): configurable alpha benchmark for non-US tickers)
