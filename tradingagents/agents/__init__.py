@@ -2,8 +2,12 @@ from .utils.agent_utils import create_msg_delete
 from .utils.agent_states import AgentState, InvestDebateState, RiskDebateState
 
 from .analysts.fundamentals_analyst import create_fundamentals_analyst
+from .analysts.hot_money_analyst import create_hot_money_analyst
+from .analysts.kronos_analyst import create_kronos_analyst
+from .analysts.lockup_analyst import create_lockup_analyst
 from .analysts.market_analyst import create_market_analyst
 from .analysts.news_analyst import create_news_analyst
+from .analysts.policy_analyst import create_policy_analyst
 from .analysts.sentiment_analyst import (
     create_sentiment_analyst,
     create_social_media_analyst,  # deprecated alias kept for back-compat
@@ -30,9 +34,13 @@ __all__ = [
     "create_bull_researcher",
     "create_research_manager",
     "create_fundamentals_analyst",
+    "create_hot_money_analyst",
+    "create_kronos_analyst",
+    "create_lockup_analyst",
     "create_market_analyst",
     "create_neutral_debator",
     "create_news_analyst",
+    "create_policy_analyst",
     "create_aggressive_debator",
     "create_portfolio_manager",
     "create_conservative_debator",

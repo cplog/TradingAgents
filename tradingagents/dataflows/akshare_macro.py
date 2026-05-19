@@ -7,6 +7,7 @@ without adding one wrapper per endpoint.
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from typing import Any
@@ -17,6 +18,16 @@ from .vendor_errors import DataVendorUnavailable
 
 _FN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ALLOWED_PREFIXES = ("macro_", "stock_")
+_INTEREST_RATE_EXTRA = frozenset({"macro_china_lpr"})
+
+# Common LLM / doc typos vs actual AKShare symbol names (verified against akfamily/akshare).
+_FN_ALIASES: dict[str, str] = {
+    "macro_usa_bank_interest_rate": "macro_bank_usa_interest_rate",
+    "macro_usa_interest_rate": "macro_bank_usa_interest_rate",
+    "macro_usa_irate": "macro_bank_usa_interest_rate",
+    "macro_usa_fed_rate": "macro_bank_usa_interest_rate",
+    "macro_usa_bank_rate": "macro_bank_usa_interest_rate",
+}
 
 
 def _import_akshare():
@@ -58,13 +69,119 @@ def _trim_frame(df: pd.DataFrame, tail_rows: int) -> pd.DataFrame:
     return df.tail(n)
 
 
-def list_akshare_endpoints(prefix: str = "macro_", include_stock: bool = True, limit: int = 300) -> str:
+def _is_interest_rate_endpoint(name: str) -> bool:
+    """Central-bank / policy rate endpoints (AKShare 利率数据 + macro_*_bank_rate)."""
+    if name in _INTEREST_RATE_EXTRA:
+        return True
+    if name.startswith("macro_bank_") and name.endswith("_interest_rate"):
+        return True
+    return name.startswith("macro_") and name.endswith("_bank_rate")
+
+
+def _callable_api_names(ak: Any, prefix: str) -> list[str]:
+    return sorted(
+        name
+        for name in dir(ak)
+        if isinstance(name, str)
+        and name.startswith(prefix)
+        and _FN_RE.match(name)
+        and callable(getattr(ak, name, None))
+    )
+
+
+def _resolve_fn_alias(ak: Any, fn: str) -> tuple[str, bool]:
+    """Map hallucinated / deprecated names to current AKShare symbols when known."""
+    alt = _FN_ALIASES.get(fn)
+    if alt and callable(getattr(ak, alt, None)):
+        return alt, True
+
+    low = fn.lower()
+    if low.startswith("macro_usa_") and any(
+        token in low for token in ("irate", "interest", "fed_rate", "bank_rate", "fed_funds")
+    ):
+        candidate = "macro_bank_usa_interest_rate"
+        if callable(getattr(ak, candidate, None)):
+            return candidate, True
+
+    return fn, False
+
+
+def _format_not_found(fn: str, suggestions: list[str]) -> str:
+    lines = [
+        f"## AKShare `{fn}` — not found",
+        "",
+        f"`{fn}` is not a callable AKShare endpoint in this environment.",
+        "Call `list_akshare_endpoints` first (use category=\"interest_rate\" for central-bank/LPR rates) "
+        "and use an exact name from that list.",
+    ]
+    if suggestions:
+        lines.append("")
+        lines.append("Closest matches in your AKShare build:")
+        lines.extend(f"- `{name}`" for name in suggestions)
+    return "\n".join(lines)
+
+
+def _format_call_error(resolved: str, exc: Exception) -> str:
+    return (
+        f"## AKShare `{resolved}` — call failed\n\n"
+        f"The endpoint exists but raised an error: `{exc}`\n\n"
+        "Try different `params_json` kwargs or pick another endpoint via `list_akshare_endpoints`."
+    )
+
+
+def _suggest_fn_names(ak: Any, fn: str, *, limit: int = 5) -> list[str]:
+    if fn.startswith("macro_"):
+        pool = _callable_api_names(ak, "macro_")
+    elif fn.startswith("stock_"):
+        pool = _callable_api_names(ak, "stock_")
+    else:
+        return []
+    return difflib.get_close_matches(fn, pool, n=limit, cutoff=0.55)
+
+
+def list_akshare_endpoints(
+    prefix: str = "macro_",
+    include_stock: bool = True,
+    limit: int = 300,
+    category: str = "",
+) -> str:
     """List callable AKShare endpoint names usable by the generic bridge."""
     ak = _import_akshare()
+    lim = max(1, min(int(limit), 2000))
+    cat = category.strip().lower().replace("-", "_")
+
+    if cat == "interest_rate":
+        names = sorted(
+            name
+            for name in dir(ak)
+            if _FN_RE.match(name)
+            and callable(getattr(ak, name, None))
+            and _is_interest_rate_endpoint(name)
+        )
+        if not names:
+            raise DataVendorUnavailable(
+                "akshare macro: no callable interest-rate endpoints in this AKShare build"
+            )
+        sample = names[:lim]
+        lines = [
+            f"# AKShare central-bank / LPR endpoints (matched={len(names)}, shown={len(sample)})",
+            "",
+            "US Fed rate is `macro_bank_usa_interest_rate` (not `macro_usa_*`). "
+            "Use exact names below with get_macro_data.",
+            "",
+        ]
+        lines.extend(f"- `{name}`" for name in sample)
+        return "\n".join(lines)
+
+    if cat not in ("", "macro"):
+        raise DataVendorUnavailable(
+            f"akshare macro: unknown category '{category}' "
+            "(supported: interest_rate, or leave empty for prefix browse)"
+        )
+
     prefix = prefix.strip()
     if prefix and not _FN_RE.match(prefix):
         raise DataVendorUnavailable("akshare macro: invalid prefix")
-    lim = max(1, min(int(limit), 2000))
     names = sorted(
         name
         for name in dir(ak)
@@ -81,7 +198,12 @@ def list_akshare_endpoints(prefix: str = "macro_", include_stock: bool = True, l
             f"akshare macro: no callable endpoints matched prefix '{prefix}'"
         )
     sample = names[:lim]
-    lines = [f"# AKShare endpoints (matched={len(names)}, shown={len(sample)})", ""]
+    lines = [
+        f"# AKShare endpoints (matched={len(names)}, shown={len(sample)})",
+        "",
+        "For central-bank/LPR rates, call list_akshare_endpoints(category=\"interest_rate\").",
+        "",
+    ]
     lines.extend(f"- `{name}`" for name in sample)
     return "\n".join(lines)
 
@@ -96,9 +218,15 @@ def get_macro_akshare(function_name: str, params_json: str = "{}", tail_rows: in
         raise DataVendorUnavailable(
             "akshare macro: function_name must start with 'macro_' or 'stock_'"
         )
-    func = getattr(ak, fn, None)
+    resolved, used_alias = _resolve_fn_alias(ak, fn)
+    func = getattr(ak, resolved, None)
     if not callable(func):
-        raise DataVendorUnavailable(f"akshare macro: function not found: {fn}")
+        suggestions = _suggest_fn_names(ak, fn)
+        return _format_not_found(fn, suggestions)
+
+    alias_line = ""
+    if used_alias and resolved != fn:
+        alias_line = f"\n- resolved_from_alias: `{fn}` → `{resolved}`\n"
 
     try:
         params = json.loads(params_json or "{}")
@@ -110,16 +238,25 @@ def get_macro_akshare(function_name: str, params_json: str = "{}", tail_rows: in
     try:
         raw = func(**params)
     except Exception as exc:
-        raise DataVendorUnavailable(f"akshare macro: {fn} failed: {exc}") from exc
+        return _format_call_error(resolved, exc)
 
-    df = _normalize_obj_to_df(raw)
+    try:
+        df = _normalize_obj_to_df(raw)
+    except DataVendorUnavailable as exc:
+        return _format_call_error(resolved, exc)
+
     if df.empty:
-        raise DataVendorUnavailable(f"akshare macro: {fn} returned no rows")
+        return (
+            f"## AKShare `{resolved}` — empty result\n\n"
+            f"No rows returned for params `{json.dumps(params, ensure_ascii=False)}`."
+        )
     trimmed = _trim_frame(df, tail_rows=tail_rows)
     table = trimmed.to_markdown(index=False)
 
     return (
-        f"## AKShare `{fn}`\n\n"
+        f"## AKShare `{resolved}`\n"
+        f"{alias_line}"
+        f"\n"
         f"- params: `{json.dumps(params, ensure_ascii=False)}`\n"
         f"- total_rows: `{len(df)}`\n"
         f"- shown_rows: `{len(trimmed)}` (tail)\n\n"

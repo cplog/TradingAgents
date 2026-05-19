@@ -2,7 +2,8 @@ from langchain_core.messages import HumanMessage, RemoveMessage
 
 # Import tools from separate utility files
 from tradingagents.agents.utils.core_stock_tools import (
-    get_stock_data
+    get_stock_data,
+    query_cached_ohlcv,
 )
 from tradingagents.agents.utils.technical_indicators_tools import (
     get_indicators
@@ -14,9 +15,12 @@ from tradingagents.agents.utils.fundamental_data_tools import (
     get_income_statement
 )
 from tradingagents.agents.utils.news_data_tools import (
-    get_news,
+    fetch_hot_news_board,
+    get_global_news,
     get_insider_transactions,
-    get_global_news
+    get_news,
+    get_prediction_market_snapshot,
+    search_data_cache_news,
 )
 from tradingagents.agents.utils.macro_data_tools import (
     list_akshare_endpoints,
@@ -47,6 +51,25 @@ def build_instrument_context(ticker: str) -> str:
         "Use this exact ticker in every tool call, report, and recommendation, "
         "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`)."
     )
+
+
+def build_supplementary_analyst_context(state: dict) -> str:
+    """Concatenate optional analyst reports for bull/bear prompts."""
+    sections = [
+        ("Hot Money / flows", "hot_money_report"),
+        ("Policy & regulation", "policy_report"),
+        ("Lockups & insider overhang", "lockup_report"),
+        ("Short-horizon scenarios (Kronos-style)", "kronos_report"),
+    ]
+    parts: list[str] = []
+    for title, key in sections:
+        text = (state.get(key) or "").strip()
+        if text:
+            parts.append(f"### {title}\n{text}")
+    if not parts:
+        return "(no supplementary analyst reports for this run)"
+    return "\n\n".join(parts)
+
 
 def create_msg_delete():
     def delete_messages(state):

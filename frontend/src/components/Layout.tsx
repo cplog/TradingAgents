@@ -5,10 +5,12 @@ import { useRouteTransitionMotion } from "../hooks/useRouteTransitionMotion";
 const nav: { to: string; label: string }[] = [
   { to: "/dashboard", label: "Analysis" },
   { to: "/history", label: "History" },
+  { to: "/history/stats", label: "History stats" },
   { to: "/batch", label: "Batch" },
   { to: "/screener", label: "Screener" },
   { to: "/sectors", label: "Sectors" },
   { to: "/news", label: "News" },
+  { to: "/watchlists", label: "Watchlists" },
   { to: "/system", label: "System" },
   { to: "/admin", label: "Admin links" },
 ];
@@ -51,6 +53,7 @@ export function Layout() {
             <NavLink
               key={to}
               to={to}
+              end={to === "/history"}
               style={({ isActive }) => ({
                 padding: "var(--spacing-8) var(--spacing-12)",
                 borderRadius: "var(--radius-md)",

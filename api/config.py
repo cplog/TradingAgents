@@ -46,8 +46,15 @@ def build_service_config() -> Dict[str, Any]:
 
     Rebuilds from env on each call so runtime ``os.environ`` updates (e.g.
     admin UI) can affect keys derived from ``TRADINGAGENTS_*`` variables.
+
+    API jobs enable LangGraph checkpoints by default so failed runs can resume
+    from the last completed node. Set ``TRADINGAGENTS_CHECKPOINT_ENABLED=false``
+    to disable.
     """
-    return build_fresh_config()
+    cfg = build_fresh_config()
+    if os.environ.get("TRADINGAGENTS_CHECKPOINT_ENABLED") is None:
+        cfg["checkpoint_enabled"] = True
+    return cfg
 
 
 def validate_api_key(config: Dict[str, Any]) -> None:
@@ -68,6 +75,12 @@ def validate_api_key(config: Dict[str, Any]) -> None:
 def get_redacted_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Return a copy of config safe to serialize (no secrets)."""
     safe = {k: v for k, v in config.items() if k not in ("api_key",)}
+    # Dashboard fallback when GET /api/health omits supported_analyst_ids (proxies / older gateways).
+    from api.models import DEFAULT_ANALYST_ORDER
+
+    safe["supported_analyst_ids"] = list(DEFAULT_ANALYST_ORDER)
+    # Present only on current API builds; stale uvicorn processes omit this key entirely.
+    safe["analyze_analyst_body_schema"] = "registered_string_list"
     return safe
 
 

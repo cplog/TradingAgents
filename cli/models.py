@@ -10,3 +10,7 @@ class AnalystType(str, Enum):
     SOCIAL = "social"
     NEWS = "news"
     FUNDAMENTALS = "fundamentals"
+    HOT_MONEY = "hot_money"
+    POLICY = "policy"
+    LOCKUP = "lockup"
+    KRONOS = "kronos"

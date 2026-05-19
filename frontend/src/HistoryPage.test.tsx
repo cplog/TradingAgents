@@ -182,6 +182,58 @@ describe("HistoryPage", () => {
     expect(el.innerHTML).not.toContain("r1");
   });
 
+  it("bulk deletes selected runs", async () => {
+    vi.spyOn(api, "fetchHistoryRuns").mockResolvedValue([
+      { run_id: "r1", ticker: "AAPL", date: "2026-05-01", rating: "Buy" },
+      { run_id: "r2", ticker: "MSFT", date: "2026-05-02", rating: "Hold" },
+    ]);
+    vi.spyOn(api, "bulkDeleteHistoryRuns").mockResolvedValue({
+      deleted_count: 2,
+      deleted_run_ids: ["r1", "r2"],
+      missing_run_ids: [],
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+
+    await act(async () => {
+      createRoot(el).render(
+        <StrictMode>
+          <MemoryRouter>
+            <HistoryPage />
+          </MemoryRouter>
+        </StrictMode>
+      );
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const selectAll = el.querySelector(
+      'input[aria-label="Select all visible runs"]',
+    ) as HTMLInputElement;
+    expect(selectAll).toBeTruthy();
+    await act(async () => {
+      selectAll.click();
+    });
+
+    const bulkBtn = [...el.querySelectorAll("button")].find((b) =>
+      b.textContent?.startsWith("Delete selected"),
+    );
+    expect(bulkBtn).toBeTruthy();
+
+    await act(async () => {
+      (bulkBtn as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    expect(api.bulkDeleteHistoryRuns).toHaveBeenCalledWith(["r1", "r2"]);
+    expect(el.innerHTML).not.toContain("r1");
+    expect(el.innerHTML).not.toContain("r2");
+  });
+
   it("opens run detail from table", async () => {
     vi.spyOn(api, "fetchHistoryRuns").mockResolvedValue([
       {
@@ -230,5 +282,66 @@ describe("HistoryPage", () => {
     expect(api.fetchHistoryRun).toHaveBeenCalledWith("r1");
     expect(el.innerHTML).toContain("Run detail");
     expect(el.innerHTML).toContain("Details");
+  });
+
+  it("submits rerun from run detail", async () => {
+    vi.spyOn(api, "fetchHistoryRuns").mockResolvedValue([
+      { run_id: "r1", ticker: "AAPL", date: "2026-05-01", rating: "Buy" },
+    ]);
+    vi.spyOn(api, "fetchHistoryRun").mockResolvedValue({
+      run_id: "r1",
+      job_id: "r1",
+      ticker: "AAPL",
+      date: "2026-05-01",
+      rating: "Buy",
+      reports: { market: "x", fundamentals: "y" },
+      config_snapshot: { llm_provider: "openrouter", analysts: ["market", "fundamentals"] },
+    });
+    vi.spyOn(api, "getJob").mockRejectedValue(new Error("gone"));
+    const submit = vi.spyOn(api, "submitAnalyze").mockResolvedValue({
+      job_id: "new99",
+      status: "queued",
+      created_at: "2026-05-01T00:00:00Z",
+    });
+
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+
+    await act(async () => {
+      createRoot(el).render(
+        <StrictMode>
+          <MemoryRouter>
+            <HistoryPage />
+          </MemoryRouter>
+        </StrictMode>
+      );
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const viewBtn = [...el.querySelectorAll("button")].find((b) => b.textContent === "View");
+    await act(async () => {
+      (viewBtn as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    const rerunBtn = [...el.querySelectorAll("button")].find((b) => b.textContent === "Rerun analysis");
+    expect(rerunBtn).toBeTruthy();
+
+    await act(async () => {
+      (rerunBtn as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ticker: "AAPL",
+        date: "2026-05-01",
+        analysts: ["market", "fundamentals"],
+        config_overrides: expect.objectContaining({ llm_provider: "openrouter" }),
+      }),
+    );
   });
 });

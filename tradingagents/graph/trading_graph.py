@@ -29,14 +29,20 @@ from tradingagents.dataflows.config import set_config
 # Import the new abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
     get_stock_data,
+    query_cached_ohlcv,
     get_indicators,
     get_fundamentals,
     get_balance_sheet,
     get_cashflow,
     get_income_statement,
+    fetch_hot_news_board,
     get_news,
     get_insider_transactions,
-    get_global_news
+    get_global_news,
+    get_prediction_market_snapshot,
+    search_data_cache_news,
+    list_akshare_endpoints,
+    get_macro_data,
 )
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -169,8 +175,11 @@ class TradingAgentsGraph:
                 [
                     # Core stock data tools
                     get_stock_data,
+                    query_cached_ohlcv,
                     # Technical indicators
                     get_indicators,
+                    list_akshare_endpoints,
+                    get_macro_data,
                 ]
             ),
             "social": ToolNode(
@@ -181,10 +190,12 @@ class TradingAgentsGraph:
             ),
             "news": ToolNode(
                 [
-                    # News and insider information
                     get_news,
                     get_global_news,
                     get_insider_transactions,
+                    fetch_hot_news_board,
+                    search_data_cache_news,
+                    get_prediction_market_snapshot,
                 ]
             ),
             "fundamentals": ToolNode(
@@ -194,6 +205,43 @@ class TradingAgentsGraph:
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                ]
+            ),
+            "hot_money": ToolNode(
+                [
+                    get_stock_data,
+                    query_cached_ohlcv,
+                    get_news,
+                    get_global_news,
+                    get_insider_transactions,
+                    fetch_hot_news_board,
+                    search_data_cache_news,
+                    get_prediction_market_snapshot,
+                    list_akshare_endpoints,
+                    get_macro_data,
+                ]
+            ),
+            "policy": ToolNode(
+                [
+                    get_news,
+                    get_global_news,
+                    list_akshare_endpoints,
+                    get_macro_data,
+                ]
+            ),
+            "lockup": ToolNode(
+                [
+                    get_fundamentals,
+                    get_balance_sheet,
+                    get_insider_transactions,
+                    get_news,
+                ]
+            ),
+            "kronos": ToolNode(
+                [
+                    get_stock_data,
+                    query_cached_ohlcv,
+                    get_indicators,
                 ]
             ),
         }
@@ -393,10 +441,14 @@ class TradingAgentsGraph:
         self.log_states_dict[str(trade_date)] = {
             "company_of_interest": final_state["company_of_interest"],
             "trade_date": final_state["trade_date"],
-            "market_report": final_state["market_report"],
-            "sentiment_report": final_state["sentiment_report"],
-            "news_report": final_state["news_report"],
-            "fundamentals_report": final_state["fundamentals_report"],
+            "market_report": final_state.get("market_report", ""),
+            "sentiment_report": final_state.get("sentiment_report", ""),
+            "news_report": final_state.get("news_report", ""),
+            "fundamentals_report": final_state.get("fundamentals_report", ""),
+            "hot_money_report": final_state.get("hot_money_report", ""),
+            "policy_report": final_state.get("policy_report", ""),
+            "lockup_report": final_state.get("lockup_report", ""),
+            "kronos_report": final_state.get("kronos_report", ""),
             "investment_debate_state": {
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],

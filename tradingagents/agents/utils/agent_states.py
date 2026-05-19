@@ -56,6 +56,10 @@ class AgentState(MessagesState):
         str, "Report from the News Researcher of current world affairs"
     ]
     fundamentals_report: Annotated[str, "Report from the Fundamentals Researcher"]
+    hot_money_report: Annotated[str, "Report from the Hot Money Analyst"]
+    policy_report: Annotated[str, "Report from the Policy Analyst"]
+    lockup_report: Annotated[str, "Report from the Lockup Analyst"]
+    kronos_report: Annotated[str, "Report from the Kronos-style scenario analyst"]
 
     # researcher team discussion step
     investment_debate_state: Annotated[

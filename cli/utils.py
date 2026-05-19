@@ -21,6 +21,10 @@ ANALYST_ORDER = [
     ("Sentiment Analyst", AnalystType.SOCIAL),
     ("News Analyst", AnalystType.NEWS),
     ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
+    ("Hot Money Analyst", AnalystType.HOT_MONEY),
+    ("Policy Analyst", AnalystType.POLICY),
+    ("Lockup Analyst", AnalystType.LOCKUP),
+    ("Kronos Scenario Analyst", AnalystType.KRONOS),
 ]
 
 

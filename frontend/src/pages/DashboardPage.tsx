@@ -9,13 +9,16 @@ import type { Components } from "react-markdown";
 import {
   fetchConfig,
   fetchHealth,
+  fetchHistoryRun,
   fetchProviderModels,
   filterAnalystsForBackend,
   mergeSupportedAnalystIds,
   getJob,
   getJobDimensions,
   openJobEvents,
+  resumeJob,
   submitAnalyze,
+  type HistoryRunDetail,
   type JobResultPayload,
   type JobStatus,
   type ProviderModel,
@@ -101,6 +104,36 @@ function complexityHint(analysts: number, debate: number, risk: number): string 
   else if (debate >= 2 || risk >= 2) parts.push("extra debate rounds");
   else parts.push("standard depth");
   return parts[0] ?? "";
+}
+
+/** Hydrate dashboard job state from a persisted History run (worker TTL expired). */
+function historyRunToJobStatus(detail: HistoryRunDetail): JobStatus {
+  const completedAt = detail.completed_at ?? new Date().toISOString();
+  const result: JobResultPayload = {
+    ticker: detail.ticker,
+    date: detail.date,
+    rating: detail.rating,
+    confidence: detail.confidence,
+    reports: detail.reports ?? {},
+    structured: detail.structured ?? null,
+    artifacts_path: detail.artifacts_path ?? null,
+    completed_at: completedAt,
+    dimensions: detail.dimensions ?? null,
+    dimensions_commentary: detail.dimensions_commentary ?? null,
+    dimensions_error: detail.dimensions_error ?? null,
+    dimensions_in_graph: detail.dimensions_in_graph ?? null,
+  };
+  return {
+    job_id: detail.job_id || detail.run_id,
+    status: "completed",
+    created_at: detail.created_at ?? completedAt,
+    ticker: detail.ticker,
+    date: detail.date,
+    result,
+    error: null,
+    progress_events: [],
+    batch_id: detail.batch_id ?? null,
+  };
 }
 
 type PipelineMode = "idle" | "queued" | "pipeline" | "finalize" | "done" | "failed";
@@ -309,6 +342,7 @@ export function DashboardPage() {
   const [dimensions, setDimensions] = useState<StockDimensions | null>(null);
   const [dimensionsCommentary, setDimensionsCommentary] = useState<DimensionsCommentary | null>(null);
   const [dimensionsError, setDimensionsError] = useState<string | null>(null);
+  const [dimensionsCommentaryError, setDimensionsCommentaryError] = useState<string | null>(null);
   const [analysisTab, setAnalysisTab] = useState<"study" | "reports">("reports");
   const analysisInitializedFor = useRef<string | null>(null);
 
@@ -418,11 +452,21 @@ export function DashboardPage() {
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         if (msg.startsWith("404:")) {
-          stripJobFromUrl();
-          clearStaleJob(
-            "Job not found (expired from the worker queue or invalid id). Open History for saved runs.",
-          );
-          return;
+          try {
+            const persisted = await fetchHistoryRun(id);
+            if (cancelled || activeJobIdRef.current !== id) return;
+            setJob(historyRunToJobStatus(persisted));
+            setJobNotice(
+              "Loaded persisted run from History (live worker queue no longer has this job id).",
+            );
+            return;
+          } catch {
+            stripJobFromUrl();
+            clearStaleJob(
+              "Job not found (expired from the worker queue or invalid id). Open History for saved runs.",
+            );
+            return;
+          }
         }
         setJobNotice(msg);
       }
@@ -592,19 +636,33 @@ export function DashboardPage() {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.startsWith("404:")) {
-        clearStaleJob(
-          "Live polling stopped because this job is no longer in memory. Open History to compare persisted runs."
-        );
+        if (activeJobIdRef.current !== id) return;
+        try {
+          const persisted = await fetchHistoryRun(id);
+          if (activeJobIdRef.current !== id) return;
+          setJob(historyRunToJobStatus(persisted));
+          setJobNotice(
+            "Loaded persisted run from History (live worker queue no longer has this job id).",
+          );
+          return;
+        } catch {
+          clearStaleJob(
+            "Live polling stopped because this job is no longer in memory. Open History to compare persisted runs.",
+          );
+        }
       }
     }
   }, [clearStaleJob]);
 
   useEffect(() => {
     if (!jobId) return;
+    if (job?.status && job.status !== "queued" && job.status !== "running") {
+      return;
+    }
     poll(jobId);
     const t = setInterval(() => poll(jobId), 4000);
     return () => clearInterval(t);
-  }, [jobId, poll]);
+  }, [jobId, job?.status, poll]);
 
   useEffect(() => {
     if (!jobId) return;
@@ -662,6 +720,20 @@ export function DashboardPage() {
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
   }, [job?.status, job?.created_at]);
+
+  async function resumeAnalysis() {
+    if (!jobId) return;
+    setSubmitting(true);
+    setJobNotice(null);
+    try {
+      const r = await resumeJob(jobId);
+      setJobNotice(r.message);
+      activeJobIdRef.current = jobId;
+      await poll(jobId);
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   async function runAnalysis() {
     setSubmitting(true);
@@ -732,6 +804,9 @@ export function DashboardPage() {
       setDimensions(r.dimensions ?? null);
       setDimensionsCommentary(r.dimensions_commentary ?? null);
       setDimensionsError(r.dimensions_error && !r.dimensions ? r.dimensions_error : null);
+      setDimensionsCommentaryError(
+        r.dimensions_error && r.dimensions ? r.dimensions_error : null,
+      );
       if (analysisInitializedFor.current !== doneKey) {
         analysisInitializedFor.current = doneKey;
         const openStudy = Boolean(r.dimensions || (r.dimensions_error && !r.dimensions));
@@ -742,12 +817,14 @@ export function DashboardPage() {
 
     let cancelled = false;
     setDimensionsError(null);
+    setDimensionsCommentaryError(null);
     void getJobDimensions(jobId)
       .then((b) => {
         if (cancelled) return;
         setDimensions(b.dimensions);
         setDimensionsCommentary(b.commentary);
         setDimensionsError(b.error && !b.dimensions ? b.error : null);
+        setDimensionsCommentaryError(b.error && b.dimensions ? b.error : null);
         if (analysisInitializedFor.current !== doneKey) {
           analysisInitializedFor.current = doneKey;
           setAnalysisTab(b.dimensions || b.error ? "study" : "reports");
@@ -758,6 +835,7 @@ export function DashboardPage() {
         setDimensions(null);
         setDimensionsCommentary(null);
         setDimensionsError(e instanceof Error ? e.message : String(e));
+        setDimensionsCommentaryError(null);
         if (analysisInitializedFor.current !== doneKey) {
           analysisInitializedFor.current = doneKey;
           setAnalysisTab("reports");
@@ -773,6 +851,7 @@ export function DashboardPage() {
       setDimensions(null);
       setDimensionsCommentary(null);
       setDimensionsError(null);
+      setDimensionsCommentaryError(null);
       analysisInitializedFor.current = null;
     }
   }, [job?.status]);
@@ -1522,23 +1601,52 @@ export function DashboardPage() {
             gap: "var(--spacing-16)",
           }}
         >
-          <div style={{ flex: 1, minWidth: 0 }}>{job.error}</div>
-          <button
-            type="button"
-            onClick={() => navigator.clipboard.writeText(job.error ?? "")}
-            style={{
-              flexShrink: 0,
-              padding: "6px 12px",
-              borderRadius: "var(--radius-buttons)",
-              border: "1px solid #fecaca",
-              background: "white",
-              color: "#991b1b",
-              cursor: "pointer",
-              fontSize: "var(--text-caption)",
-            }}
-          >
-            Copy
-          </button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div>{job.error}</div>
+            {job.resumable && (
+              <div style={{ marginTop: "var(--spacing-8)", color: "#7f1d1d", fontSize: "var(--text-caption)" }}>
+                LangGraph checkpoint
+                {job.last_graph_step != null ? ` at step ${job.last_graph_step}` : ""}
+                {" "}— you can resume without restarting from the first analyst.
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", flexShrink: 0, gap: "var(--spacing-8)" }}>
+            {job.resumable && job.status === "failed" && (
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => void resumeAnalysis()}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: "var(--radius-buttons)",
+                  border: "1px solid #fca5a5",
+                  background: "#dc2626",
+                  color: "white",
+                  cursor: submitting ? "not-allowed" : "pointer",
+                  fontSize: "var(--text-caption)",
+                  fontWeight: 600,
+                }}
+              >
+                Resume analysis
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => navigator.clipboard.writeText(job.error ?? "")}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "var(--radius-buttons)",
+                border: "1px solid #fecaca",
+                background: "white",
+                color: "#991b1b",
+                cursor: "pointer",
+                fontSize: "var(--text-caption)",
+              }}
+            >
+              Copy
+            </button>
+          </div>
         </div>
       )}
 
@@ -1640,6 +1748,7 @@ export function DashboardPage() {
                 dimensions={dimensions}
                 commentary={dimensionsCommentary}
                 error={dimensionsError}
+                commentaryError={dimensionsCommentaryError}
               />
             </section>
           )}

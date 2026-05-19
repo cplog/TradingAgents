@@ -66,6 +66,44 @@ def test_score_pillars_raises_on_structured_failure():
         score_pillars(facts=facts, analyst_reports={}, llm=fake_llm)
 
 
+def test_score_pillars_accepts_dict_from_structured_invoke():
+    """Some providers return a plain dict instead of a Pydantic instance."""
+
+    class StructuredDict:
+        def invoke(self, _messages):
+            return _make_valid_pillars().model_dump()
+
+    fake_llm = MagicMock()
+    fake_llm.with_structured_output = MagicMock(return_value=StructuredDict())
+
+    facts = FactSnapshot(as_of_date="2026-05-13", currency="USD")
+    out = score_pillars(facts=facts, analyst_reports={}, llm=fake_llm)
+    assert out.market.trend.score == 4
+
+
+def test_score_pillars_fallback_when_structured_returns_none():
+    """OpenAI-compatible stacks sometimes return None from structured_output.invoke."""
+
+    valid = _make_valid_pillars()
+    payload = json.dumps(valid.model_dump())
+
+    class StructuredNone:
+        def invoke(self, _messages):
+            return None
+
+    fake_llm = MagicMock()
+    fake_llm.with_structured_output = MagicMock(return_value=StructuredNone())
+    fake_llm.invoke = MagicMock(
+        return_value=MagicMock(content=f"Here is the scoring:\n```json\n{payload}\n```")
+    )
+
+    facts = FactSnapshot(as_of_date="2026-05-13", currency="USD")
+    out = score_pillars(facts=facts, analyst_reports={}, llm=fake_llm)
+    assert isinstance(out, PillarScores)
+    assert out.fundamentals.valuation.score == valid.fundamentals.valuation.score
+    fake_llm.invoke.assert_called_once()
+
+
 def test_score_pillars_handles_empty_reports():
     fake_llm = MagicMock()
     fake_llm.with_structured_output = MagicMock(

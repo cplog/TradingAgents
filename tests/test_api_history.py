@@ -135,3 +135,65 @@ def test_history_delete_run(api_client: TestClient):
 
     after = api_client.get("/api/history/runs").json()
     assert all(row.get("run_id") != run_id for row in after)
+
+
+@pytest.mark.unit
+def test_history_bulk_delete_runs(api_client: TestClient):
+    ids = []
+    for ticker in ("AAPL", "MSFT", "NVDA"):
+        r = api_client.post("/analyze", json={"ticker": ticker})
+        assert r.status_code == 200
+        jid = r.json()["job_id"]
+        _wait_job(api_client, jid)
+        ids.append(jid)
+
+    bulk = api_client.post(
+        "/api/history/runs/bulk-delete",
+        json={"run_ids": [ids[0], ids[1]]},
+    )
+    assert bulk.status_code == 200
+    body = bulk.json()
+    assert body["deleted_count"] == 2
+    assert set(body["deleted_run_ids"]) == {ids[0], ids[1]}
+
+    listed = api_client.get("/api/history/runs").json()
+    remaining = {row["run_id"] for row in listed}
+    assert ids[2] in remaining
+    assert ids[0] not in remaining
+    assert ids[1] not in remaining
+
+
+@pytest.mark.unit
+def test_history_delete_all_requires_confirm(api_client: TestClient):
+    r = api_client.post(
+        "/api/history/runs/delete-all",
+        json={"confirm": False},
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.unit
+def test_history_delete_all_matching_filters(api_client: TestClient):
+    for ticker in ("AAPL", "MSFT"):
+        r = api_client.post("/analyze", json={"ticker": ticker})
+        jid = r.json()["job_id"]
+        _wait_job(api_client, jid)
+
+    cleared = api_client.post(
+        "/api/history/runs/delete-all",
+        json={"confirm": True, "ticker": "AAPL"},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["deleted_count"] >= 1
+
+    listed = api_client.get("/api/history/runs").json()
+    tickers = {row.get("ticker") for row in listed}
+    assert "AAPL" not in tickers
+    assert "MSFT" in tickers
+
+    wipe = api_client.post(
+        "/api/history/runs/delete-all",
+        json={"confirm": True},
+    )
+    assert wipe.status_code == 200
+    assert api_client.get("/api/history/runs").json() == []

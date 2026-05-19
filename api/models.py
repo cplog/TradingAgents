@@ -16,14 +16,38 @@ from api.dimensions.schemas import (
     StockDimensions,
 )
 
-AnalystId = Literal["market", "social", "news", "fundamentals"]
+AnalystId = Literal[
+    "market",
+    "social",
+    "news",
+    "fundamentals",
+    "hot_money",
+    "policy",
+    "lockup",
+    "kronos",
+]
 DEFAULT_ANALYST_ORDER: tuple[AnalystId, ...] = (
     "market",
     "social",
     "news",
     "fundamentals",
+    "hot_money",
+    "policy",
+    "lockup",
+    "kronos",
 )
 VALID_ANALYST_IDS: frozenset[str] = frozenset(DEFAULT_ANALYST_ORDER)
+
+
+def _validate_analyst_list_members(v: Optional[List[str]]) -> Optional[List[str]]:
+    """Reject unknown analyst ids (validated after normalization)."""
+    if not v:
+        return None
+    unknown = sorted({x for x in v if x not in VALID_ANALYST_IDS})
+    if unknown:
+        allowed = ", ".join(repr(x) for x in sorted(VALID_ANALYST_IDS))
+        raise ValueError(f"Unknown analyst id(s): {unknown}. Allowed: {allowed}")
+    return v
 
 
 class AnalyzeRequest(BaseModel):
@@ -42,9 +66,9 @@ class AnalyzeRequest(BaseModel):
         default="markdown",
         description="Output format for the report artifact.",
     )
-    analysts: Optional[List[AnalystId]] = Field(
+    analysts: Optional[List[str]] = Field(
         default=None,
-        description="Analysts to run (order preserved). Defaults to all four.",
+        description="Analysts to run (order preserved). Defaults to all configured analysts.",
     )
 
     @field_validator("analysts", mode="before")
@@ -63,6 +87,11 @@ class AnalyzeRequest(BaseModel):
             out.append(item.strip().lower())
         return out or None
 
+    @field_validator("analysts", mode="after")
+    @classmethod
+    def _analysts_must_be_registered(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        return _validate_analyst_list_members(v)
+
 
 class AnalysisResult(BaseModel):
     """Payload returned when a job completes."""
@@ -75,6 +104,10 @@ class AnalysisResult(BaseModel):
         description="Heuristic confidence 0–1 derived from rating tier for batch summaries.",
     )
     reports: Dict[str, str] = Field(default_factory=dict, description="Section name → markdown content")
+    analyst_coverage: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Per analyst id: ok vs empty and diagnostics (present when the job ran with explicit analyst selection).",
+    )
     structured: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Raw structured fields from ResearchPlan / TraderDecision / PortfolioDecision if available.",
@@ -124,6 +157,28 @@ class JobStatusResponse(AnalyzeResponse):
         description="Structured log lines for UI terminal view.",
     )
     batch_id: Optional[str] = None
+    resumable: bool = Field(
+        default=False,
+        description="True when a LangGraph checkpoint exists and the job can be resumed.",
+    )
+    last_graph_step: Optional[int] = Field(
+        default=None,
+        description="Latest LangGraph checkpoint step when resumable.",
+    )
+    checkpoint_thread_id: Optional[str] = Field(
+        default=None,
+        description="LangGraph thread id (ticker+date hash) used for checkpoint resume.",
+    )
+
+
+class ResumeJobResponse(BaseModel):
+    """POST /jobs/{job_id}/resume immediate response."""
+
+    job_id: str
+    status: Literal["queued", "running"]
+    resumable: bool = True
+    last_graph_step: Optional[int] = None
+    message: str
 
 
 class BatchAnalyzeRequest(BaseModel):
@@ -135,7 +190,7 @@ class BatchAnalyzeRequest(BaseModel):
         description="Analysis date YYYY-MM-DD; defaults to today.",
     )
     config_overrides: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    analysts: Optional[List[AnalystId]] = Field(default=None)
+    analysts: Optional[List[str]] = Field(default=None)
 
     @field_validator("tickers", mode="before")
     @classmethod
@@ -160,6 +215,11 @@ class BatchAnalyzeRequest(BaseModel):
                 continue
             out.append(item.strip().lower())
         return out or None
+
+    @field_validator("analysts", mode="after")
+    @classmethod
+    def _batch_analysts_must_be_registered(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        return _validate_analyst_list_members(v)
 
 
 class BatchAnalyzeResponse(BaseModel):
@@ -242,6 +302,10 @@ class HealthResponse(BaseModel):
     results_dir: str
     yfinance_reachable: Optional[bool] = None
     data_source_checks: Dict[str, DataSourceCheck] = Field(default_factory=dict)
+    supported_analyst_ids: List[str] = Field(
+        default_factory=lambda: list(DEFAULT_ANALYST_ORDER),
+        description="Analyst keys accepted by POST /analyze and POST /batches.",
+    )
 
 
 class HistoryRunRef(BaseModel):
@@ -312,6 +376,7 @@ class HistoryRunDetail(BaseModel):
     rating: str
     confidence: Optional[float] = None
     reports: Dict[str, str] = Field(default_factory=dict)
+    analyst_coverage: Optional[Dict[str, Dict[str, Any]]] = None
     structured: Optional[Dict[str, Any]] = None
     artifacts_path: Optional[str] = None
     completed_at: Optional[str] = None
@@ -351,6 +416,29 @@ class HistoryCompareSide(BaseModel):
 class HistoryCompareResponse(BaseModel):
     a: HistoryCompareSide
     b: HistoryCompareSide
+
+
+class HistoryBulkDeleteRequest(BaseModel):
+    run_ids: List[str] = Field(..., min_length=1, max_length=500)
+
+
+class HistoryDeleteAllRequest(BaseModel):
+    confirm: bool = Field(
+        ...,
+        description="Must be true to confirm deleting all runs matching optional filters.",
+    )
+    ticker: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+
+
+class HistoryBulkDeleteResponse(BaseModel):
+    deleted_count: int
+    deleted_run_ids: List[str] = Field(default_factory=list)
+    missing_run_ids: List[str] = Field(default_factory=list)
+    scope: str = "selected"
 
 
 __all__ = [

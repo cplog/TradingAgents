@@ -4,8 +4,21 @@ from unittest.mock import patch
 
 import pytest
 
+from tradingagents.dataflows import catalog
 from tradingagents.dataflows import interface as iface
 from tradingagents.dataflows.vendor_errors import DataVendorUnavailable
+
+
+@pytest.mark.unit
+def test_catalog_maps_methods_to_categories():
+    assert catalog.get_category_for_method("get_stock_data") == "core_stock_apis"
+    assert catalog.get_category_for_method("query_cached_ohlcv") == "core_stock_apis"
+    assert catalog.get_category_for_method("get_news") == "news_data"
+    assert catalog.get_category_for_method("fetch_hot_news_board") == "news_data"
+    assert catalog.get_category_for_method("search_data_cache_news") == "news_data"
+    assert catalog.get_category_for_method("get_prediction_market_snapshot") == "news_data"
+    assert catalog.get_category_for_method("get_macro_data") == "macro_data"
+    assert "core_stock_apis" in catalog.TOOLS_CATEGORIES
 
 
 @pytest.mark.unit
@@ -112,3 +125,26 @@ def test_route_macro_data_uses_akshare_vendor():
         iface.VENDOR_METHODS["get_macro_data"] = old
 
     assert out == "OK:macro_cnbs:50"
+
+
+@pytest.mark.unit
+def test_route_macro_lists_prior_vendor_error_when_chain_exhausted():
+    """AKShare-only tools should surface DataVendorUnavailable (e.g. missing pip pkg)."""
+    cfg = {
+        "prefer_free_data_vendors": True,
+        "data_vendors": {"macro_data": "akshare"},
+        "tool_vendors": {},
+    }
+    old = iface.VENDOR_METHODS["list_akshare_endpoints"]
+    try:
+        iface.VENDOR_METHODS["list_akshare_endpoints"] = {
+            "akshare": lambda **_: (_ for _ in ()).throw(
+                DataVendorUnavailable("akshare macro: package not installed")
+            )
+        }
+        with patch.object(iface, "get_config", return_value=cfg):
+            with pytest.raises(RuntimeError, match="package not installed") as ei:
+                iface.route_to_vendor("list_akshare_endpoints", prefix="macro_")
+    finally:
+        iface.VENDOR_METHODS["list_akshare_endpoints"] = old
+    assert ei.value.__cause__ is not None

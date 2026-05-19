@@ -1,4 +1,7 @@
-from tradingagents.agents.utils.agent_utils import get_language_instruction
+from tradingagents.agents.utils.agent_utils import (
+    build_supplementary_analyst_context,
+    get_language_instruction,
+)
 
 
 def create_bull_researcher(llm):
@@ -12,6 +15,7 @@ def create_bull_researcher(llm):
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
+        supplementary = build_supplementary_analyst_context(state)
 
         prompt = f"""You are a Bull Analyst advocating for investing in the stock. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
@@ -27,6 +31,10 @@ Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 Company fundamentals report: {fundamentals_report}
+
+Supplementary analyst reports (when enabled for this run):
+{supplementary}
+
 Conversation history of the debate: {history}
 Last bear argument: {current_response}
 Use this information to deliver a compelling bull argument, refute the bear's concerns, and engage in a dynamic debate that demonstrates the strengths of the bull position.

@@ -1,3 +1,9 @@
+from .catalog import (
+    TOOLS_CATEGORIES,
+    VENDOR_LIST,
+    VENDOR_TRY_ORDER,
+    get_category_for_method,
+)
 from .config import get_config
 from .y_finance import (
     get_YFin_data_online,
@@ -32,59 +38,6 @@ from .china_baostock import get_stock_baostock
 from .rss_news import get_global_news_google_rss, get_news_google_rss
 from .akshare_news import get_news_akshare_em
 from .akshare_macro import get_macro_akshare, list_akshare_endpoints
-
-# Tools organized by category
-TOOLS_CATEGORIES = {
-    "core_stock_apis": {
-        "description": "OHLCV stock price data",
-        "tools": [
-            "get_stock_data"
-        ]
-    },
-    "technical_indicators": {
-        "description": "Technical analysis indicators",
-        "tools": [
-            "get_indicators"
-        ]
-    },
-    "fundamental_data": {
-        "description": "Company fundamentals",
-        "tools": [
-            "get_fundamentals",
-            "get_balance_sheet",
-            "get_cashflow",
-            "get_income_statement"
-        ]
-    },
-    "news_data": {
-        "description": "News and insider data",
-        "tools": [
-            "get_news",
-            "get_global_news",
-            "get_insider_transactions",
-        ]
-    },
-    "macro_data": {
-        "description": "Macro and market datasets (AKShare dynamic bridge)",
-        "tools": [
-            "list_akshare_endpoints",
-            "get_macro_data",
-        ],
-    }
-}
-
-# Order used when merging configured primaries with fallbacks. Per-method entries
-# in VENDOR_METHODS that are missing for a tool are skipped when building the chain.
-VENDOR_TRY_ORDER: tuple[str, ...] = (
-    "yfinance",
-    "finnhub",
-    "google_rss",
-    "akshare",
-    "alpha_vantage",
-    "baostock",
-)
-
-VENDOR_LIST = list(VENDOR_TRY_ORDER)
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
@@ -145,12 +98,6 @@ VENDOR_METHODS = {
     },
 }
 
-def get_category_for_method(method: str) -> str:
-    """Get the category that contains the specified method."""
-    for category, info in TOOLS_CATEGORIES.items():
-        if method in info["tools"]:
-            return category
-    raise ValueError(f"Method '{method}' not found in any category")
 
 def get_vendor(category: str, method: str = None) -> str:
     """Get the configured vendor for a data category or specific tool method.
@@ -244,6 +191,7 @@ def route_to_vendor(method: str, *args, **kwargs):
 
     fallback_vendors = _build_vendor_fallback_chain(method, primary_vendors)
 
+    last_exc = None
     for vendor in fallback_vendors:
         if vendor not in VENDOR_METHODS[method]:
             continue
@@ -260,7 +208,10 @@ def route_to_vendor(method: str, *args, **kwargs):
             if method == "get_global_news" and _is_yfinance_style_no_global_news(out):
                 continue
             return out
-        except (AlphaVantageRateLimitError, DataVendorUnavailable):
+        except (AlphaVantageRateLimitError, DataVendorUnavailable) as exc:
+            last_exc = exc
             continue
 
+    if last_exc is not None:
+        raise RuntimeError(f"No available vendor for '{method}': {last_exc}") from last_exc
     raise RuntimeError(f"No available vendor for '{method}'")

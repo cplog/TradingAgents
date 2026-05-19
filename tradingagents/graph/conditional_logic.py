@@ -11,37 +11,15 @@ class ConditionalLogic:
         self.max_debate_rounds = max_debate_rounds
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
 
-    def should_continue_market(self, state: AgentState):
-        """Determine if market analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_market"
-        return "Msg Clear Market"
+    def should_continue_analyst(self, analyst_key: str, state: AgentState) -> str:
+        """Route tool-loop vs message-clear for any analyst id (incl. snake_case)."""
+        from tradingagents.agents.utils.analyst_labels import analyst_title_words
 
-    def should_continue_social(self, state: AgentState):
-        """Determine if social media analysis should continue."""
         messages = state["messages"]
         last_message = messages[-1]
         if last_message.tool_calls:
-            return "tools_social"
-        return "Msg Clear Social"
-
-    def should_continue_news(self, state: AgentState):
-        """Determine if news analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_news"
-        return "Msg Clear News"
-
-    def should_continue_fundamentals(self, state: AgentState):
-        """Determine if fundamentals analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_fundamentals"
-        return "Msg Clear Fundamentals"
+            return f"tools_{analyst_key}"
+        return f"Msg Clear {analyst_title_words(analyst_key)}"
 
     def should_continue_debate(self, state: AgentState) -> str:
         """Determine if debate should continue."""

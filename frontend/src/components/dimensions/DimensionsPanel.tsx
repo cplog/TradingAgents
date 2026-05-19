@@ -10,14 +10,16 @@ export interface DimensionsPanelProps {
   dimensions: StockDimensions | null;
   commentary?: DimensionsCommentary | null;
   error?: string | null;
+  /** Shown when dimensions exist but PM-alignment commentary could not be generated. */
+  commentaryError?: string | null;
 }
 
 const FACTOR_KEYS = ['value', 'growth', 'quality', 'momentum', 'low_risk', 'sentiment'] as const;
 
 const jumpLink = { color: 'var(--color-chartwell-blue)', textDecoration: 'none' as const };
 
-export function DimensionsPanel({ dimensions, commentary, error }: DimensionsPanelProps) {
-  if (error) {
+export function DimensionsPanel({ dimensions, commentary, error, commentaryError }: DimensionsPanelProps) {
+  if (error && !dimensions) {
     return (
       <div
         style={{
@@ -74,6 +76,22 @@ export function DimensionsPanel({ dimensions, commentary, error }: DimensionsPan
           {dimensions.source === 'facts_only' && ' · facts only (preview)'}
         </small>
       </header>
+
+      {commentaryError && (
+        <div
+          style={{
+            padding: 12,
+            border: '1px solid #ea3',
+            borderRadius: 'var(--radius-cards)',
+            background: 'var(--surface-cloud-white)',
+            fontSize: 'var(--text-caption)',
+            color: 'var(--color-ash-gray)',
+          }}
+        >
+          <strong style={{ color: 'var(--color-slate-text)' }}>PM alignment commentary unavailable.</strong>
+          <p style={{ margin: '8px 0 0' }}>{commentaryError}</p>
+        </div>
+      )}
 
       <nav
         aria-label="Jump to dimension sections"

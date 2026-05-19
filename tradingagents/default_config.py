@@ -23,6 +23,8 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_DIMENSIONS_ENABLED": "dimensions_enabled",
     "TRADINGAGENTS_DIMENSIONS_IN_GRAPH": "dimensions_in_graph",
     "TRADINGAGENTS_PREFER_FREE_DATA_VENDORS": "prefer_free_data_vendors",
+    "TRADINGAGENTS_DATA_CACHE_BACKEND": "data_cache_backend",
+    "TRADINGAGENTS_DATA_CACHE_AUTO_STOCK_BARS": "data_cache_auto_stock_bars",
 }
 
 
@@ -127,6 +129,17 @@ _CONFIG_BASE: dict = {
     "dimensions_enabled": True,
     # When True, run one dimensions build inside LangGraph after analysts (feeds PM/trader).
     "dimensions_in_graph": True,
+    # Optional TradingAgents data cache: none | sqlite | d1 (Cloudflare D1 REST, same env as API).
+    "data_cache_backend": "none",
+    "data_cache_sqlite_filename": "ta_data_cache.db",
+    # Hot-board JSON API base (NewsNow-compatible ``GET /api/s?id=``). None disables outbound fetch.
+    "hot_news_feed_base_url": os.getenv("TRADINGAGENTS_HOT_NEWS_FEED_BASE_URL") or None,
+    "hot_news_feed_timeout_sec": 30,
+    "hot_news_memory_ttl_sec": 300,
+    # When True with sqlite/d1 cache: persist parsed OHLCV after each successful get_stock_data.
+    "data_cache_auto_stock_bars": False,
+    # Override vendor tag stored on ta_stock_bars (default: primary configured core_stock_apis vendor).
+    "data_cache_stock_vendor_tag": None,
 }
 
 

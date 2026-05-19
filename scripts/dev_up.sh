@@ -42,6 +42,51 @@ is_port_busy() {
   lsof -iTCP:"${port}" -sTCP:LISTEN -n -P >/dev/null 2>&1
 }
 
+# Prefer `python` from an activated venv/conda env. On macOS, bare `python3` is often
+# Homebrew's PEP-668 "externally managed" interpreter even when conda is active.
+resolve_kronos_python() {
+  if [[ -n "${KRONOS_PYTHON:-}" ]]; then
+    echo "${KRONOS_PYTHON}"
+    return 0
+  fi
+  local candidate
+  for candidate in python python3; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      if "${candidate}" -m pip --version >/dev/null 2>&1; then
+        "${candidate}" -c "import sys; print(sys.executable)"
+        return 0
+      fi
+    fi
+  done
+  echo "python3"
+}
+
+# Uvicorn can take 10–30s to import api.main before binding; Vite proxies fail until then.
+wait_for_backend_ready() {
+  local port="$1"
+  local max_wait="${2:-90}"
+  local url="http://127.0.0.1:${port}/api/health"
+  local i=0
+
+  echo "Waiting for backend at ${url} (up to ${max_wait}s)..."
+  while (( i < max_wait )); do
+    if curl -sf "${url}" >/dev/null 2>&1; then
+      echo "Backend ready (${i}s)."
+      return 0
+    fi
+    if [[ -n "${backend_pid:-}" ]] && ! kill -0 "${backend_pid}" >/dev/null 2>&1; then
+      echo "Error: backend exited before ${url} responded." >&2
+      return 1
+    fi
+    sleep 1
+    (( i++ )) || true
+  done
+
+  echo "Error: backend did not respond on ${url} within ${max_wait}s." >&2
+  echo "Check the uvicorn output above for import errors or port conflicts." >&2
+  return 1
+}
+
 if ! command -v uvicorn >/dev/null 2>&1; then
   if [[ "${REUSE_BACKEND_IF_BUSY}" != "1" ]]; then
     echo "Error: 'uvicorn' is not in PATH. Activate your Python environment first." >&2
@@ -65,6 +110,9 @@ fi
 KRONOS_UPSTREAM_SHA="${KRONOS_UPSTREAM_SHA:-67b630e67f6a18c9e9be918d9b4337c960db1e9a}"
 KRONOS_VENDOR_DIR="${ROOT_DIR}/vendor/kronos"
 
+# Use the same interpreter that will run uvicorn (activate your venv/conda first).
+KRONOS_PYTHON="$(resolve_kronos_python)"
+
 if [[ "${SKIP_KRONOS_INSTALL:-0}" != "1" ]]; then
   if [[ ! -d "${KRONOS_VENDOR_DIR}/.git" ]]; then
     echo "[dev_up] cloning Kronos into ${KRONOS_VENDOR_DIR}"
@@ -74,12 +122,31 @@ if [[ "${SKIP_KRONOS_INSTALL:-0}" != "1" ]]; then
     echo "[dev_up] pinning Kronos to ${KRONOS_UPSTREAM_SHA}"
     git -C "${KRONOS_VENDOR_DIR}" fetch --quiet origin
     git -C "${KRONOS_VENDOR_DIR}" checkout --quiet "${KRONOS_UPSTREAM_SHA}"
-
-    echo "[dev_up] installing Kronos requirements"
-    pip install -r "${KRONOS_VENDOR_DIR}/requirements.txt"
   else
-    echo "[dev_up] Kronos vendor present at ${KRONOS_VENDOR_DIR} (skip clone; SKIP_KRONOS_INSTALL=1 to also skip pin check)"
+    echo "[dev_up] Kronos vendor present at ${KRONOS_VENDOR_DIR}"
   fi
+
+  if [[ ! -f "${KRONOS_VENDOR_DIR}/requirements.txt" ]]; then
+    echo "Error: ${KRONOS_VENDOR_DIR}/requirements.txt missing. Remove vendor/kronos and re-run." >&2
+    exit 1
+  fi
+
+  # Install inference deps only — vendor requirements.txt pins pandas 2.2.2 which
+  # conflicts with tradingagents (pandas>=2.3.0). matplotlib is not needed at runtime.
+  echo "[dev_up] installing Kronos inference deps via ${KRONOS_PYTHON} -m pip"
+  if ! "${KRONOS_PYTHON}" -m pip install \
+    "torch>=2.0.0" \
+    "einops==0.8.1" \
+    "huggingface_hub==0.33.1" \
+    "safetensors==0.6.2"; then
+    echo "Error: Kronos dependency install failed for ${KRONOS_PYTHON}." >&2
+    echo "Activate your project venv/conda env first, or set KRONOS_PYTHON to that interpreter." >&2
+    echo "Example: conda activate llm_base && ./scripts/dev_up.sh" >&2
+    echo "Or skip: SKIP_KRONOS_INSTALL=1 ./scripts/dev_up.sh" >&2
+    exit 1
+  fi
+else
+  echo "[dev_up] SKIP_KRONOS_INSTALL=1 — not cloning or installing Kronos deps"
 fi
 # ---------------------------------------------------------------------------
 
@@ -100,6 +167,9 @@ if is_port_busy "${BACKEND_PORT}"; then
     echo "         (literal_error for analysts). Stop that process, then from repo root:"
     echo "           pip install -e '.[api]' && PYTHONPATH=\$(pwd) uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}"
     echo "         Verify GET /config includes analyze_analyst_body_schema=registered_string_list on the running API."
+    if ! wait_for_backend_ready "${BACKEND_PORT}"; then
+      exit 1
+    fi
   else
     echo "Error: backend port ${BACKEND_PORT} is already in use." >&2
     echo "Tip: stop the existing backend or run with BACKEND_PORT=<port>." >&2
@@ -115,9 +185,11 @@ else
   (cd "${ROOT_DIR}" && PYTHONPATH="${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}" eval "${BACKEND_CMD}") &
   backend_pid=$!
 
-  sleep 1
   if ! kill -0 "${backend_pid}" >/dev/null 2>&1; then
     echo "Error: backend failed to start." >&2
+    exit 1
+  fi
+  if ! wait_for_backend_ready "${BACKEND_PORT}"; then
     exit 1
   fi
 fi

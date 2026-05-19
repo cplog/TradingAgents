@@ -74,6 +74,8 @@ export type HealthPayload = {
   data_cache_dir: string;
   results_dir: string;
   yfinance_reachable: boolean | null;
+  /** Present on current API builds; when missing, assume legacy core-four-only analysts. */
+  supported_analyst_ids?: string[];
   data_source_checks?: Record<
     string,
     {
@@ -89,8 +91,53 @@ export async function fetchHealth(): Promise<HealthPayload> {
   return apiJson<HealthPayload>("/api/health");
 }
 
+/**
+ * Intersect selected analysts with what the server explicitly reports.
+ * When capabilities are unknown (`null`/`undefined`/empty list), send the full selection — do not guess "core four only"
+ * (that caused false positives when /api/health omitted the field while POST /analyze already accepted eight analysts).
+ */
+export function filterAnalystsForBackend(
+  selected: string[],
+  supportedFromHealth: string[] | null | undefined
+): { analysts: string[] | undefined; dropped: string[] } {
+  if (!selected.length) return { analysts: undefined, dropped: [] };
+  if (
+    supportedFromHealth === undefined ||
+    supportedFromHealth === null ||
+    supportedFromHealth.length === 0
+  ) {
+    return { analysts: selected, dropped: [] };
+  }
+  const allow = new Set(supportedFromHealth);
+  const dropped: string[] = [];
+  const kept: string[] = [];
+  for (const id of selected) {
+    if (allow.has(id)) kept.push(id);
+    else dropped.push(id);
+  }
+  return { analysts: kept.length ? kept : undefined, dropped };
+}
+
 export async function fetchConfig(): Promise<Record<string, unknown>> {
   return apiJson("/config");
+}
+
+/**
+ * Analyst ids this API build accepts. Health may omit the field (proxies); /config includes it as fallback.
+ */
+export function mergeSupportedAnalystIds(
+  health: HealthPayload | null,
+  config: Record<string, unknown> | null
+): string[] | null {
+  const fromHealth = health?.supported_analyst_ids;
+  if (Array.isArray(fromHealth) && fromHealth.length > 0) {
+    return fromHealth.map((x) => String(x));
+  }
+  const fromCfg = config?.supported_analyst_ids;
+  if (Array.isArray(fromCfg) && fromCfg.length > 0) {
+    return fromCfg.map((x) => String(x));
+  }
+  return null;
 }
 
 export type ProviderModel = {
@@ -116,6 +163,11 @@ export type JobResultPayload = {
   rating: string;
   confidence?: number | null;
   reports: Record<string, string>;
+  /** Present when the job used explicit analyst selection (API path). */
+  analyst_coverage?: Record<
+    string,
+    { status: string; section_key?: string; chars?: number; detail?: string }
+  > | null;
   structured?: Record<string, unknown> | null;
   artifacts_path?: string | null;
   completed_at: string;
@@ -141,6 +193,9 @@ export type JobStatus = {
   error?: string | null;
   progress_events: { ts: string; stage: string; message: string; details?: string }[];
   batch_id?: string | null;
+  resumable?: boolean;
+  last_graph_step?: number | null;
+  checkpoint_thread_id?: string | null;
 };
 
 export async function submitAnalyze(body: {
@@ -155,6 +210,16 @@ export async function submitAnalyze(body: {
 
 export async function getJob(jobId: string): Promise<JobStatus> {
   return apiJson(`/jobs/${jobId}`);
+}
+
+export async function resumeJob(jobId: string): Promise<{
+  job_id: string;
+  status: string;
+  resumable: boolean;
+  last_graph_step?: number | null;
+  message: string;
+}> {
+  return apiJson(`/jobs/${jobId}/resume`, { method: "POST" });
 }
 
 export async function fetchJobs(limit = 50, status?: string): Promise<JobStatus[]> {
@@ -293,6 +358,7 @@ export type HistoryRunDetail = {
   created_at?: string | null;
   batch_id?: string | null;
   config_snapshot: Record<string, unknown>;
+  analyst_coverage?: Record<string, { status?: string; section_key?: string }> | null;
   dimensions?: StockDimensions | null;
   dimensions_commentary?: DimensionsCommentary | null;
   dimensions_error?: string | null;
@@ -395,6 +461,35 @@ export async function deleteHistoryRun(runId: string): Promise<{ deleted: boolea
       method: "DELETE",
     }
   );
+}
+
+export async function bulkDeleteHistoryRuns(runIds: string[]): Promise<{
+  deleted_count: number;
+  deleted_run_ids: string[];
+  missing_run_ids: string[];
+  scope?: string;
+}> {
+  return apiJson("/api/history/runs/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ run_ids: runIds }),
+  });
+}
+
+export async function deleteAllHistoryRuns(body: {
+  confirm: boolean;
+  ticker?: string;
+  date_from?: string;
+  date_to?: string;
+}): Promise<{
+  deleted_count: number;
+  deleted_run_ids: string[];
+  missing_run_ids: string[];
+  scope?: string;
+}> {
+  return apiJson("/api/history/runs/delete-all", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export async function postHistoryCompare(runIdA: string, runIdB: string): Promise<HistoryCompareResponse> {

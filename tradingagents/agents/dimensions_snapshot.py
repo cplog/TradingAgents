@@ -56,6 +56,10 @@ def create_dimensions_snapshot_node(
             "social": state.get("sentiment_report") or "",
             "news": state.get("news_report") or "",
             "fundamentals": state.get("fundamentals_report") or "",
+            "hot_money": state.get("hot_money_report") or "",
+            "policy": state.get("policy_report") or "",
+            "lockup": state.get("lockup_report") or "",
+            "kronos": state.get("kronos_report") or "",
         }
 
         try:

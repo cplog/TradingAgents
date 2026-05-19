@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ import threading
 from typing import Any, Dict, List, Optional
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.graph.checkpointer import checkpoint_step, thread_id
 from api.models import DEFAULT_ANALYST_ORDER, VALID_ANALYST_IDS
 from api.dimensions.builder import (
     DimensionsBuildError, build_commentary, build_dimensions,
@@ -35,6 +37,26 @@ from api.kronos import (
 from api.kronos.schema import KronosStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_dimensions_failure(
+    result: Dict[str, Any],
+    exc: Exception,
+    *,
+    job_id: str,
+) -> None:
+    """Keep an existing dimensions snapshot when only commentary generation failed."""
+    msg = str(exc)
+    if result.get("dimensions"):
+        result["dimensions_commentary"] = None
+        result["dimensions_error"] = msg
+        logger.warning("Dimensions commentary failed for %s: %s", job_id, exc)
+        return
+    result["dimensions"] = None
+    result["dimensions_commentary"] = None
+    result["dimensions_error"] = msg
+    logger.warning("Dimensions build failed for %s: %s", job_id, exc)
+
 
 _MAX_PROGRESS_EVENTS = 500
 _JOBS_PERSIST_INDEX_KEY = "jobs:index"
@@ -153,6 +175,31 @@ def _coerce_analyst_ids(analysts: Optional[list]) -> list:
     return out if out else list(DEFAULT_ANALYST_ORDER)
 
 
+def _refresh_checkpoint_metadata(rec: JobRecord) -> None:
+    """Set resumable / step fields from on-disk LangGraph checkpoint (if any)."""
+    cfg = rec.config_snapshot or {}
+    if not cfg.get("checkpoint_enabled"):
+        rec.resumable = False
+        rec.last_graph_step = None
+        rec.checkpoint_thread_id = None
+        return
+    cache_dir = cfg.get("data_cache_dir")
+    if not cache_dir:
+        rec.resumable = False
+        rec.last_graph_step = None
+        rec.checkpoint_thread_id = None
+        return
+    step = checkpoint_step(cache_dir, rec.ticker, rec.date)
+    if step is None:
+        rec.resumable = False
+        rec.last_graph_step = None
+        rec.checkpoint_thread_id = None
+        return
+    rec.resumable = True
+    rec.last_graph_step = int(step)
+    rec.checkpoint_thread_id = thread_id(rec.ticker, rec.date)
+
+
 @dataclass
 class JobRecord:
     job_id: str
@@ -166,6 +213,10 @@ class JobRecord:
     progress_events: List[Dict[str, Any]] = field(default_factory=list)
     batch_id: Optional[str] = None
     cancellation_requested: bool = False
+    analysts: List[str] = field(default_factory=list)
+    resumable: bool = False
+    last_graph_step: Optional[int] = None
+    checkpoint_thread_id: Optional[str] = None
 
 
 class JobStore:
@@ -192,6 +243,10 @@ class JobStore:
             "progress_events": rec.progress_events,
             "batch_id": rec.batch_id,
             "cancellation_requested": rec.cancellation_requested,
+            "analysts": rec.analysts,
+            "resumable": rec.resumable,
+            "last_graph_step": rec.last_graph_step,
+            "checkpoint_thread_id": rec.checkpoint_thread_id,
         }
 
     def _json_to_record(self, raw: Dict[str, Any]) -> Optional[JobRecord]:
@@ -218,6 +273,18 @@ class JobStore:
                 if raw.get("batch_id") is not None
                 else None,
                 cancellation_requested=bool(raw.get("cancellation_requested")),
+                analysts=[
+                    str(a).strip()
+                    for a in (raw.get("analysts") or [])
+                    if str(a).strip()
+                ],
+                resumable=bool(raw.get("resumable")),
+                last_graph_step=int(raw["last_graph_step"])
+                if raw.get("last_graph_step") is not None
+                else None,
+                checkpoint_thread_id=str(raw.get("checkpoint_thread_id")).strip()
+                if raw.get("checkpoint_thread_id")
+                else None,
             )
         except Exception:
             return None
@@ -264,15 +331,25 @@ class JobStore:
                     continue
                 if rec.status in ("queued", "running"):
                     rec.status = "failed"
-                    rec.error = (
-                        rec.error
-                        or "Service restarted before this job finished."
-                    )
+                    _refresh_checkpoint_metadata(rec)
+                    if rec.resumable:
+                        rec.error = (
+                            rec.error
+                            or (
+                                f"Service restarted with checkpoint at step "
+                                f"{rec.last_graph_step}. Use Resume to continue."
+                            )
+                        )
+                    else:
+                        rec.error = (
+                            rec.error
+                            or "Service restarted before this job finished."
+                        )
                     rec.progress_events.append(
                         {
                             "ts": datetime.utcnow().isoformat() + "Z",
                             "stage": "failed",
-                            "message": "Service restarted before this job finished.",
+                            "message": rec.error or "Service restarted before this job finished.",
                         }
                     )
                 self._jobs[rec.job_id] = rec
@@ -290,8 +367,10 @@ class JobStore:
         config: Dict[str, Any],
         *,
         batch_id: Optional[str] = None,
+        analysts: Optional[list] = None,
     ) -> str:
         job_id = str(uuid.uuid4())[:8]
+        selected = _coerce_analyst_ids(analysts)
         with self._lock:
             self._jobs[job_id] = JobRecord(
                 job_id=job_id,
@@ -301,6 +380,7 @@ class JobStore:
                 created_at=datetime.utcnow(),
                 config_snapshot={k: v for k, v in config.items() if "key" not in k.lower()},
                 batch_id=batch_id,
+                analysts=selected,
             )
             self._persist_locked(job_id, touch_index=True)
         return job_id
@@ -327,6 +407,10 @@ class JobStore:
             progress_events=list(rec.progress_events),
             batch_id=rec.batch_id,
             cancellation_requested=rec.cancellation_requested,
+            analysts=list(rec.analysts),
+            resumable=rec.resumable,
+            last_graph_step=rec.last_graph_step,
+            checkpoint_thread_id=rec.checkpoint_thread_id,
         )
 
     def update_status(self, job_id: str, status: str) -> None:
@@ -342,6 +426,9 @@ class JobStore:
             if rec:
                 rec.status = "completed"
                 rec.result = result
+                rec.resumable = False
+                rec.last_graph_step = None
+                rec.checkpoint_thread_id = None
                 self._persist_locked(job_id)
 
     def set_error(self, job_id: str, error: str) -> None:
@@ -350,7 +437,42 @@ class JobStore:
             if rec:
                 rec.status = "failed"
                 rec.error = error
+                _refresh_checkpoint_metadata(rec)
                 self._persist_locked(job_id)
+
+    def refresh_checkpoint_metadata(self, job_id: str) -> None:
+        with self._lock:
+            rec = self._jobs.get(job_id)
+            if rec:
+                _refresh_checkpoint_metadata(rec)
+                self._persist_locked(job_id)
+
+    def prepare_resume(self, job_id: str) -> Optional[JobRecord]:
+        """Mark a failed resumable job as queued again. Returns snapshot or None."""
+        with self._lock:
+            rec = self._jobs.get(job_id)
+            if rec is None:
+                return None
+            _refresh_checkpoint_metadata(rec)
+            if rec.status != "failed" or not rec.resumable:
+                return None
+            step = rec.last_graph_step
+            rec.status = "queued"
+            rec.error = None
+            rec.cancellation_requested = False
+            rec.progress_events.append(
+                {
+                    "ts": datetime.utcnow().isoformat() + "Z",
+                    "stage": "queued",
+                    "message": (
+                        f"Resuming from LangGraph checkpoint"
+                        + (f" (step {step})" if step is not None else "")
+                        + "…"
+                    ),
+                }
+            )
+            self._persist_locked(job_id)
+            return self._snapshot_record(rec)
 
     def request_cancellation(self, job_id: str) -> bool:
         with self._lock:
@@ -496,11 +618,40 @@ class Worker:
         batch_id: Optional[str] = None,
     ) -> str:
         """Enqueue a job and return its id."""
-        job_id = self.store.create(ticker, date, config, batch_id=batch_id)
+        cfg = dict(config)
+        if os.environ.get("TRADINGAGENTS_CHECKPOINT_ENABLED") is None:
+            cfg.setdefault("checkpoint_enabled", True)
+        job_id = self.store.create(
+            ticker, date, cfg, batch_id=batch_id, analysts=analysts
+        )
         self.store.append_progress(
             job_id, f"Job {job_id} queued for {ticker} @ {date}", stage="queued"
         )
-        asyncio.create_task(self._run(job_id, ticker, date, config, analysts))
+        asyncio.create_task(
+            self._run(job_id, ticker, date, cfg, analysts, resumed=False)
+        )
+        return job_id
+
+    async def resume(self, job_id: str) -> str:
+        """Re-queue a failed job that has a LangGraph checkpoint on disk."""
+        prepared = self.store.prepare_resume(job_id)
+        if prepared is None:
+            rec = self.store.get(job_id)
+            if rec is None:
+                raise ValueError("Job not found")
+            if rec.status != "failed":
+                raise ValueError(f"Job status is {rec.status!r}, not failed")
+            raise ValueError("No LangGraph checkpoint available to resume this job")
+        asyncio.create_task(
+            self._run(
+                job_id,
+                prepared.ticker,
+                prepared.date,
+                prepared.config_snapshot,
+                prepared.analysts or None,
+                resumed=True,
+            )
+        )
         return job_id
 
     async def _run(
@@ -510,15 +661,32 @@ class Worker:
         date: str,
         config: Dict[str, Any],
         analysts: Optional[list],
+        *,
+        resumed: bool = False,
     ) -> None:
         async with self.semaphore:
             self.store.update_status(job_id, "running")
             selected_analysts = _coerce_analyst_ids(analysts)
-            self.store.append_progress(
-                job_id,
-                "Starting multi-agent analysis pipeline (analysts → research → trader → risk → PM)…",
-                stage="running",
-            )
+            if resumed:
+                step_hint = self.store.get(job_id)
+                step = step_hint.last_graph_step if step_hint else None
+                self.store.append_progress(
+                    job_id,
+                    "Resuming multi-agent pipeline from saved LangGraph checkpoint…",
+                    stage="running",
+                )
+                if step is not None:
+                    self.store.append_progress(
+                        job_id,
+                        f"Checkpoint step {step} — completed nodes will be skipped.",
+                        stage="running",
+                    )
+            else:
+                self.store.append_progress(
+                    job_id,
+                    "Starting multi-agent analysis pipeline (analysts → research → trader → risk → PM)…",
+                    stage="running",
+                )
             self.store.append_progress(
                 job_id,
                 f"Parallel analyst nodes: {', '.join(selected_analysts)}",
@@ -703,6 +871,7 @@ class Worker:
                                 "Building dimensions: computing 6 factor scores…",
                                 stage="dimensions",
                             )
+                            result["dimensions"] = dimensions.model_dump()
                             if not self.store.is_cancellation_requested(job_id):
                                 self.store.append_progress(
                                     job_id,
@@ -718,29 +887,33 @@ class Worker:
                                     ),
                                 )
                                 result["dimensions_commentary"] = commentary.model_dump()
-                            result["dimensions"] = dimensions.model_dump()
                             self.store.append_progress(
                                 job_id,
                                 f"Dimensions built (version {dimensions.dimensions_version}). Persisting…",
                                 stage="dimensions",
                             )
                     except DimensionsBuildError as exc:
-                        logger.warning("Dimensions build failed for %s: %s", job_id, exc)
-                        result["dimensions"] = None
-                        result["dimensions_commentary"] = None
-                        result["dimensions_error"] = str(exc)
+                        _apply_dimensions_failure(result, exc, job_id=job_id)
+                        stage = (
+                            "dimensions_commentary_skipped"
+                            if result.get("dimensions")
+                            else "dimensions_skipped"
+                        )
                         self.store.append_progress(
                             job_id, f"Dimensions skipped: {exc}",
-                            stage="dimensions_skipped",
+                            stage=stage,
                         )
                     except Exception as exc:
                         logger.exception("Unexpected dimensions failure for %s", job_id)
-                        result["dimensions"] = None
-                        result["dimensions_commentary"] = None
-                        result["dimensions_error"] = f"{type(exc).__name__}: {exc}"
+                        _apply_dimensions_failure(result, exc, job_id=job_id)
+                        stage = (
+                            "dimensions_commentary_skipped"
+                            if result.get("dimensions")
+                            else "dimensions_skipped"
+                        )
                         self.store.append_progress(
                             job_id, f"Dimensions skipped: {exc}",
-                            stage="dimensions_skipped",
+                            stage=stage,
                         )
 
                 if self.store.is_cancellation_requested(job_id):
@@ -757,6 +930,9 @@ class Worker:
 
                     done = self.store.get(job_id)
                     if done:
+                        snap = dict(done.config_snapshot)
+                        if done.analysts:
+                            snap["analysts"] = list(done.analysts)
                         persist_completed_run(
                             get_state_store(),
                             job_id=job_id,
@@ -765,7 +941,7 @@ class Worker:
                             result=result,
                             created_at=done.created_at,
                             batch_id=done.batch_id,
-                            config_snapshot=done.config_snapshot,
+                            config_snapshot=snap,
                         )
                 except Exception:
                     logger.exception("History persistence failed for job %s", job_id)
@@ -779,9 +955,16 @@ class Worker:
             except Exception as exc:
                 logger.exception("Job %s failed for %s", job_id, ticker)
                 self.store.set_error(job_id, f"{type(exc).__name__}: {exc}")
+                rec_after = self.store.get(job_id)
+                resume_hint = ""
+                if rec_after and rec_after.resumable:
+                    resume_hint = (
+                        f" Checkpoint saved at step {rec_after.last_graph_step}; "
+                        "use Resume to continue without restarting from scratch."
+                    )
                 self.store.append_progress(
                     job_id,
-                    f"Failed: {type(exc).__name__}: {exc}",
+                    f"Failed: {type(exc).__name__}: {exc}{resume_hint}",
                     stage="failed",
                 )
 

@@ -27,6 +27,8 @@ KEY_GLOBAL_INDEX = "history:index:global"
 
 MAX_TICKER_INDEX = 200
 MAX_GLOBAL_INDEX = 500
+# Upper bound for GET /api/history/runs ``limit`` (stats UI uses 500).
+MAX_HISTORY_RUNS_QUERY_LIMIT = 500
 
 _d1_initialized = False
 
@@ -192,6 +194,10 @@ def _ensure_d1_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_yahoo_industry_constituents_market "
         "ON yahoo_industry_constituents (market, sector, industry)"
     )
+    from tradingagents.dataflows.cache.schema import DATA_CACHE_BOOTSTRAP_DDLS
+
+    for ddl in DATA_CACHE_BOOTSTRAP_DDLS:
+        _d1_query(ddl)
     _d1_initialized = True
 
 
@@ -254,6 +260,7 @@ def _merge_config_snapshot(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "max_debate_rounds",
         "max_risk_discuss_rounds",
         "output_language",
+        "analysts",
     ):
         if k in config and config[k] is not None:
             out[k] = config[k]
@@ -292,6 +299,7 @@ def persist_completed_run(
         "rating": result.get("rating"),
         "confidence": result.get("confidence"),
         "reports": result.get("reports") or {},
+        "analyst_coverage": result.get("analyst_coverage"),
         "structured": result.get("structured"),
         "artifacts_path": result.get("artifacts_path"),
         "completed_at": result.get("completed_at"),
@@ -509,7 +517,7 @@ def list_runs(
     industry: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Return compact refs, newest-first."""
-    lim = max(1, min(limit, 200))
+    lim = max(1, min(limit, MAX_HISTORY_RUNS_QUERY_LIMIT))
     sect = (sector or "").strip()
     ind = (industry or "").strip()
     if (sect or ind) and not d1_history_enabled():
@@ -765,6 +773,130 @@ def _delete_run_d1(run_id: str) -> bool:
         return False
     _d1_query("DELETE FROM analysis_runs WHERE run_id = ?", [run_id])
     return True
+
+
+def delete_runs(store: StateStore, run_ids: List[str]) -> Dict[str, Any]:
+    """Delete many runs by id. Returns deleted and missing id lists."""
+    deleted: List[str] = []
+    missing: List[str] = []
+    seen: set[str] = set()
+    for raw in run_ids:
+        rid = (raw or "").strip()
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        if delete_run(store, rid):
+            deleted.append(rid)
+        else:
+            missing.append(rid)
+    return {
+        "deleted_count": len(deleted),
+        "deleted_run_ids": deleted,
+        "missing_run_ids": missing,
+        "scope": "selected",
+    }
+
+
+def _run_filter_clauses(
+    *,
+    ticker: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    sector: Optional[str],
+    industry: Optional[str],
+) -> tuple[list[str], list[Any]]:
+    where: list[str] = []
+    params: list[Any] = []
+    if ticker:
+        where.append("ticker = ?")
+        params.append(normalize_ticker(ticker))
+    if date_from:
+        where.append("trade_date >= ?")
+        params.append(date_from)
+    if date_to:
+        where.append("trade_date <= ?")
+        params.append(date_to)
+    if sector:
+        where.append("json_extract(dimensions_json, '$.facts.sector') = ?")
+        params.append(sector)
+    if industry:
+        where.append("json_extract(dimensions_json, '$.facts.industry') = ?")
+        params.append(industry)
+    return where, params
+
+
+def delete_all_runs(
+    store: StateStore,
+    *,
+    ticker: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    sector: Optional[str] = None,
+    industry: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Delete all runs matching optional filters."""
+    sect = (sector or "").strip() or None
+    ind = (industry or "").strip() or None
+    if (sect or ind) and not d1_history_enabled():
+        raise RuntimeError("sector_industry_filters_require_d1")
+
+    if d1_history_enabled():
+        return _delete_all_runs_d1(
+            ticker=ticker,
+            date_from=date_from,
+            date_to=date_to,
+            sector=sect,
+            industry=ind,
+        )
+
+    refs = list_runs(
+        store,
+        ticker=ticker,
+        limit=MAX_HISTORY_RUNS_QUERY_LIMIT,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    ids = [
+        str(r.get("run_id") or r.get("job_id") or "").strip()
+        for r in refs
+        if isinstance(r, dict)
+    ]
+    ids = [rid for rid in ids if rid]
+    out = delete_runs(store, ids)
+    out["scope"] = "filtered"
+    return out
+
+
+def _delete_all_runs_d1(
+    *,
+    ticker: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    sector: Optional[str],
+    industry: Optional[str],
+) -> Dict[str, Any]:
+    _ensure_d1_schema()
+    where, params = _run_filter_clauses(
+        ticker=ticker,
+        date_from=date_from,
+        date_to=date_to,
+        sector=sector,
+        industry=industry,
+    )
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    count_rows = _d1_query(
+        f"SELECT COUNT(*) AS c FROM analysis_runs {where_sql}",
+        params or None,
+    )
+    count = int((count_rows[0] if count_rows else {}).get("c") or 0)
+    if count:
+        _d1_query(f"DELETE FROM analysis_runs {where_sql}", params or None)
+    return {
+        "deleted_count": count,
+        "deleted_run_ids": [],
+        "missing_run_ids": [],
+        "scope": "filtered" if where else "all",
+    }
 
 
 def default_store() -> StateStore:

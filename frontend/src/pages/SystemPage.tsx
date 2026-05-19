@@ -52,6 +52,9 @@ export function SystemPage() {
                 )}
               </li>
               <li>Provider: {health.llm_provider}</li>
+              <li className="mono" style={{ wordBreak: "break-word" }}>
+                Analysts accepted: {(health.supported_analyst_ids ?? []).join(", ") || "—"}
+              </li>
               <li>State store: {health.state_store}</li>
               <li>Cloudflare KV: {health.cloudflare_kv_configured ? "yes" : "no"}</li>
               <li>Data cache: {health.data_cache_dir}</li>

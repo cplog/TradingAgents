@@ -28,9 +28,12 @@ from api.config import (
 )
 from api.jobs import Worker
 from api.history import (
+    MAX_HISTORY_RUNS_QUERY_LIMIT,
     compare_runs,
     d1_history_enabled,
+    delete_all_runs,
     delete_run,
+    delete_runs,
     get_run,
     list_history_coverage,
     list_runs,
@@ -51,15 +54,20 @@ from api.models import (
     BatchAnalyzeResponse,
     BatchStatusResponse,
     DataSourceCheck,
+    DEFAULT_ANALYST_ORDER,
     HealthResponse,
     HistoryCompareRequest,
     HistoryCompareResponse,
+    HistoryBulkDeleteRequest,
+    HistoryBulkDeleteResponse,
+    HistoryDeleteAllRequest,
     HistoryCoverageRow,
     IndustryConstituentRow,
     HistoryRunDetail,
     HistoryRunRef,
     JobDimensionsResponse,
     JobStatusResponse,
+    ResumeJobResponse,
     RuntimeConfigUpdateRequest,
 )
 from api.news import fetch_news_feed
@@ -129,6 +137,9 @@ def _record_to_status(rec) -> JobStatusResponse:
         error=rec.error,
         progress_events=list(rec.progress_events or []),
         batch_id=rec.batch_id,
+        resumable=bool(rec.resumable),
+        last_graph_step=rec.last_graph_step,
+        checkpoint_thread_id=rec.checkpoint_thread_id,
     )
 
 
@@ -359,6 +370,69 @@ def _check_baostock() -> DataSourceCheck:
         )
 
 
+def _check_kronos() -> DataSourceCheck:
+    """Lightweight Kronos readiness (no HF weight download on health)."""
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        from api.kronos.config import KronosConfig
+
+        kcfg = KronosConfig.from_env()
+    except Exception as exc:
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail=f"kronos config error: {exc}",
+        )
+    if not kcfg.enabled:
+        return DataSourceCheck(
+            ok=True,
+            configured=False,
+            checked_at=now,
+            detail="KRONOS_ENABLED=false",
+        )
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail=(
+                "torch not installed in this Python environment — activate the "
+                "same venv/conda as uvicorn, then run scripts/dev_up.sh"
+            ),
+        )
+    vendor = Path(__file__).resolve().parents[1] / "vendor" / "kronos"
+    if not (vendor / "model" / "kronos.py").is_file():
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail="vendor/kronos missing — run scripts/dev_up.sh",
+        )
+    import sys
+
+    sp = str(vendor)
+    if sp not in sys.path:
+        sys.path.insert(0, sp)
+    try:
+        from model import Kronos, KronosTokenizer  # type: ignore  # noqa: F401
+    except Exception as exc:
+        return DataSourceCheck(
+            ok=False,
+            configured=True,
+            checked_at=now,
+            detail=f"vendored Kronos import failed: {exc}",
+        )
+    return DataSourceCheck(
+        ok=True,
+        configured=True,
+        checked_at=now,
+        detail=f"ready (device={kcfg.resolved_device}, model={kcfg.model})",
+    )
+
+
 def _build_data_source_checks() -> Dict[str, DataSourceCheck]:
     return {
         "yfinance": _check_yfinance(),
@@ -367,6 +441,7 @@ def _build_data_source_checks() -> Dict[str, DataSourceCheck]:
         "google_rss": _check_google_rss(),
         "akshare": _check_akshare(),
         "baostock": _check_baostock(),
+        "kronos": _check_kronos(),
     }
 
 
@@ -645,10 +720,12 @@ async def api_health() -> HealthResponse:
         results_dir=str(_service_config.get("results_dir", "")),
         yfinance_reachable=yf_ok,
         data_source_checks=source_checks,
+        supported_analyst_ids=list(DEFAULT_ANALYST_ORDER),
     )
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
+@app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     """Submit a ticker for analysis. Returns immediately with a job id."""
     if not request.ticker:
@@ -686,6 +763,7 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
 
 
 @app.post("/batches", response_model=BatchAnalyzeResponse)
+@app.post("/api/batches", response_model=BatchAnalyzeResponse)
 async def create_batch(request: BatchAnalyzeRequest) -> BatchAnalyzeResponse:
     """Submit many tickers; share one batch id for portfolio monitoring."""
     from api.tickers import normalize_ticker, validate_date
@@ -773,6 +851,39 @@ async def cancel_job(job_id: str) -> Dict[str, Any]:
     if not _worker.store.request_cancellation(job_id):
         raise HTTPException(status_code=404, detail="Job not found")
     return {"cancellation_requested": True}
+
+
+@app.post("/jobs/{job_id}/resume", response_model=ResumeJobResponse)
+@app.post("/api/jobs/{job_id}/resume", response_model=ResumeJobResponse)
+async def resume_job(job_id: str) -> ResumeJobResponse:
+    """Re-queue a failed job and continue from the last LangGraph checkpoint."""
+    if _worker is None:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+    record = _worker.store.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if record.status != "failed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job status is {record.status!r}; only failed jobs can be resumed",
+        )
+    try:
+        await _worker.resume(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    refreshed = _worker.store.get(job_id)
+    step = refreshed.last_graph_step if refreshed else record.last_graph_step
+    return ResumeJobResponse(
+        job_id=job_id,
+        status="queued",
+        resumable=True,
+        last_graph_step=step,
+        message=(
+            f"Job re-queued; LangGraph will resume from checkpoint"
+            + (f" step {step}" if step is not None else "")
+            + "."
+        ),
+    )
 
 
 @app.get("/jobs/{job_id}/events")
@@ -908,7 +1019,7 @@ async def get_dimensions_preview(
 @app.get("/api/history/runs", response_model=List[HistoryRunRef])
 async def history_list_runs(
     ticker: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=MAX_HISTORY_RUNS_QUERY_LIMIT),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     sector: Optional[str] = Query(
@@ -1011,6 +1122,53 @@ async def history_delete_run(run_id: str) -> Dict[str, Any]:
     if not deleted:
         raise HTTPException(status_code=404, detail="Run not found")
     return {"deleted": True, "run_id": rid}
+
+
+@app.post("/api/history/runs/bulk-delete", response_model=HistoryBulkDeleteResponse)
+async def history_bulk_delete_runs(body: HistoryBulkDeleteRequest) -> HistoryBulkDeleteResponse:
+    """Delete multiple persisted runs by id."""
+    ids = [rid.strip() for rid in body.run_ids if rid and rid.strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="run_ids must contain at least one id")
+    result = delete_runs(get_state_store(), ids)
+    return HistoryBulkDeleteResponse.model_validate(result)
+
+
+@app.post("/api/history/runs/delete-all", response_model=HistoryBulkDeleteResponse)
+async def history_delete_all_runs(body: HistoryDeleteAllRequest) -> HistoryBulkDeleteResponse:
+    """Delete all runs matching optional filters (omit filters to delete entire history)."""
+    from api.tickers import validate_date
+
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="confirm must be true")
+
+    sect = body.sector.strip() if body.sector and body.sector.strip() else None
+    ind = body.industry.strip() if body.industry and body.industry.strip() else None
+    if (sect or ind) and not d1_history_enabled():
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "sector/industry filters require Cloudflare D1 history "
+                "(CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID, CLOUDFLARE_API_TOKEN)."
+            ),
+        )
+    if body.date_from is not None and not validate_date(body.date_from):
+        raise HTTPException(status_code=400, detail="date_from must be YYYY-MM-DD")
+    if body.date_to is not None and not validate_date(body.date_to):
+        raise HTTPException(status_code=400, detail="date_to must be YYYY-MM-DD")
+
+    try:
+        result = delete_all_runs(
+            get_state_store(),
+            ticker=body.ticker.strip() if body.ticker and body.ticker.strip() else None,
+            date_from=body.date_from,
+            date_to=body.date_to,
+            sector=sect,
+            industry=ind,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    return HistoryBulkDeleteResponse.model_validate(result)
 
 
 @app.post("/api/history/compare", response_model=HistoryCompareResponse)

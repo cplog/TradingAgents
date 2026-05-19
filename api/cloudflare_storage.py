@@ -2,7 +2,7 @@
 
 | Backend | Env vars | Used for |
 |---------|----------|----------|
-| **D1** (SQL) | ``CLOUDFLARE_ACCOUNT_ID``, ``CLOUDFLARE_D1_DATABASE_ID``, ``CLOUDFLARE_API_TOKEN`` | Analysis history, sector/industry SQL, coverage aggregates, dimension peer universes |
+| **D1** (SQL) | ``CLOUDFLARE_ACCOUNT_ID``, ``CLOUDFLARE_D1_DATABASE_ID``, ``CLOUDFLARE_API_TOKEN`` | Analysis history, sector/industry SQL, coverage aggregates, dimension peer universes, optional ``ta_news_items`` / ``ta_stock_bars`` data cache |
 | **KV** (StateStore) | account/token + ``CLOUDFLARE_KV_NAMESPACE_ID`` | Admin secrets, service overrides, in-flight job snapshots only |
 | **Local file** | ``TRADINGAGENTS_API_STATE_FILE`` | Same as KV when Workers KV is not configured |
 | **Disk cache** | ``data_cache_dir`` | Peer facts JSON (when D1 off), Yahoo sector/industry catalog cache |

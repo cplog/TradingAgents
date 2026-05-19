@@ -58,25 +58,51 @@ def test_build_commentary_returns_parsed_model():
     assert "value" in out.supporting_dimensions
 
 
-def test_build_commentary_raises_on_llm_error():
+def test_build_commentary_falls_back_when_structured_invoke_raises():
+    class Boom:
+        def invoke(self, _m):
+            raise RuntimeError("provider down")
+
+    fake_llm = MagicMock()
+    fake_llm.with_structured_output = MagicMock(return_value=Boom())
+    fake_llm.invoke = MagicMock(return_value=type("Msg", (), {"content":
+        '{"alignment":"partial","supporting_dimensions":[],'
+        '"conflicting_dimensions":[],"risk_flags":[],"summary":"x"}'
+    })())
+    out = build_commentary(dimensions=_dims(), pm_decision_text="x", llm=fake_llm)
+    assert out.alignment == "partial"
+    fake_llm.invoke.assert_called_once()
+
+
+def test_build_commentary_raises_when_both_structured_and_fallback_fail():
     class Boom:
         def invoke(self, _m):
             raise RuntimeError("provider down")
     fake_llm = MagicMock()
     fake_llm.with_structured_output = MagicMock(return_value=Boom())
+    fake_llm.invoke = MagicMock(side_effect=RuntimeError("fallback down"))
     with pytest.raises(CommentaryError):
         build_commentary(dimensions=_dims(), pm_decision_text="x", llm=fake_llm)
 
 
-def test_build_commentary_logs_and_raises_when_invoke_returns_none(caplog):
+def test_build_commentary_logs_and_falls_back_when_invoke_returns_none(caplog):
+    """Structured returning None must trigger the plain-invoke JSON fallback —
+    not raise. Only if the fallback *also* fails do we raise CommentaryError.
+    """
     class ReturnsNone:
         def invoke(self, _m):
             return None
 
     fake_llm = MagicMock()
     fake_llm.with_structured_output = MagicMock(return_value=ReturnsNone())
+    # Fallback path: llm.invoke(...) returns prose containing valid JSON.
+    fake_llm.invoke = MagicMock(return_value=type("Msg", (), {"content":
+        '{"alignment":"partial","supporting_dimensions":[],'
+        '"conflicting_dimensions":[],"risk_flags":[],"summary":"x"}'
+    })())
     with caplog.at_level("WARNING", logger="api.dimensions.commentary"):
-        with pytest.raises(CommentaryError, match="Unexpected commentary type: NoneType"):
-            build_commentary(dimensions=_dims(), pm_decision_text="Hold.", llm=fake_llm)
-    assert "AAPL" in caplog.text
-    assert "NoneType" in caplog.text
+        out = build_commentary(
+            dimensions=_dims(), pm_decision_text="Hold.", llm=fake_llm
+        )
+    assert out.alignment == "partial"
+    assert "returned None" in caplog.text

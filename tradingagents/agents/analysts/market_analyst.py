@@ -7,6 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
     list_akshare_endpoints,
     get_stock_data,
 )
+from tradingagents.agents.utils.macro_data_tools import AKSHARE_MACRO_DISCOVERY_HINT
 from tradingagents.dataflows.config import get_config
 
 
@@ -49,7 +50,9 @@ Volume-Based Indicators:
 - vwma: VWMA: A moving average weighted by volume. Usage: Confirm trends by integrating price action with volume data. Tips: Watch for skewed results from volume spikes; use in combination with other volume analyses.
 
 - Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names.
-- For macro regime and cross-asset context, use the AKShare dynamic tools: call list_akshare_endpoints(prefix="macro_", include_stock=true) to discover available datasets, then call get_macro_data(function_name, params_json, tail_rows). Example endpoints include macro_cnbs, stock_ebs_lg, stock_buffett_index_lg, stock_a_congestion_lg, stock_a_gxl_lg, and stock_hk_gxl_lg.
+- For macro regime and cross-asset context, use the AKShare dynamic tools: """
+            + AKSHARE_MACRO_DISCOVERY_HINT
+            + """ Browse with list_akshare_endpoints(prefix="macro_", include_stock=true), then get_macro_data(function_name, params_json, tail_rows). Example endpoints include macro_cnbs, stock_ebs_lg, stock_buffett_index_lg, stock_a_congestion_lg, stock_a_gxl_lg, and stock_hk_gxl_lg.
 - Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + """ Accuracy and discipline: (1) Every stated percentage change must follow from the prices and dates returned by your tools—show old price, new price, and the implied return; if it disagrees with a quick sanity check, fix it before finalizing. (2) Do not contradict yourself in the same narrative (for example, do not describe the same moving-average relationship as both bullish and bearish). (3) Do not invent dates, tickers, volumes, or events that do not appear in tool outputs. (4) Prefer plain, technical language; avoid filler metaphors or fictional scenarios."""

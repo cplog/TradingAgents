@@ -1,0 +1,81 @@
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+from tradingagents.agents.utils.agent_utils import (
+    build_instrument_context,
+    get_global_news,
+    get_insider_transactions,
+    get_language_instruction,
+    get_news,
+    get_stock_data,
+    list_akshare_endpoints,
+    get_macro_data,
+)
+from tradingagents.agents.utils.macro_data_tools import AKSHARE_MACRO_DISCOVERY_HINT
+
+
+def create_hot_money_analyst(llm):
+    """Flows, positioning, and institutional context (tool-backed LLM synthesis)."""
+
+    def hot_money_analyst_node(state):
+        current_date = state["trade_date"]
+        instrument_context = build_instrument_context(state["company_of_interest"])
+
+        tools = [
+            get_stock_data,
+            get_news,
+            get_global_news,
+            get_insider_transactions,
+            list_akshare_endpoints,
+            get_macro_data,
+        ]
+
+        system_message = (
+            "You are the Hot Money Analyst. Focus on positioning, liquidity, "
+            "flows, and institutional activity relevant to the ticker: volume "
+            "regimes, abnormal turnover vs history, insider filing cadence, and "
+            "macro liquidity cues when they clearly tie to the sector or geography "
+            "of the instrument. Use get_stock_data first for price/volume history. "
+            "Use get_insider_transactions for recent insider trades. Use news tools "
+            "for flow-related headlines. Optional macro datasets: "
+            + AKSHARE_MACRO_DISCOVERY_HINT
+            + " "
+            "End with one Markdown table summarizing flow/positioning signals and gaps. "
+            "Do not invent figures or dates absent from tool outputs."
+            + get_language_instruction()
+        )
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are a helpful AI assistant, collaborating with other assistants."
+                    " Use the provided tools to progress towards answering the question."
+                    " If you are unable to fully answer, that's OK; another assistant with different tools"
+                    " will help where you left off. Execute what you can to make progress."
+                    " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
+                    " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
+                    " You have access to the following tools: {tool_names}.\n{system_message}"
+                    "For your reference, the current date is {current_date}. {instrument_context}",
+                ),
+                MessagesPlaceholder(variable_name="messages"),
+            ]
+        )
+
+        prompt = prompt.partial(system_message=system_message)
+        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
+        prompt = prompt.partial(current_date=current_date)
+        prompt = prompt.partial(instrument_context=instrument_context)
+
+        chain = prompt | llm.bind_tools(tools)
+        result = chain.invoke(state["messages"])
+
+        report = ""
+        if len(result.tool_calls) == 0:
+            report = result.content
+
+        return {
+            "messages": [result],
+            "hot_money_report": report,
+        }
+
+    return hot_money_analyst_node

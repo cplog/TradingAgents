@@ -1,20 +1,27 @@
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  bulkDeleteHistoryRuns,
+  deleteAllHistoryRuns,
   deleteHistoryRun,
   fetchHistoryRun,
   fetchHistoryRuns,
   getDimensionsByTicker,
   getJobDimensions,
+  getJob,
   postHistoryCompare,
   recomputeDimensions,
+  resumeJob,
+  submitAnalyze,
   type HistoryRunDetail,
   type HistoryCompareResponse,
   type HistoryRunRef,
+  type JobStatus,
 } from "../api";
+import { buildRerunAnalyzePayload } from "../utils/historyRerun";
 import { DimensionsPanel } from "../components/dimensions/DimensionsPanel";
 import { DimensionsRadar } from "../components/dimensions/DimensionsRadar";
 import { FactorBar } from "../components/dimensions/FactorBar";
@@ -84,6 +91,7 @@ function inferRowFactorSource(
 }
 
 export function HistoryPage() {
+  const navigate = useNavigate();
   const [runsBodyRef] = useAutoAnimate();
   const [runs, setRuns] = useState<HistoryRunRef[]>([]);
   const [loading, setLoading] = useState(false);
@@ -98,6 +106,8 @@ export function HistoryPage() {
   const [compare, setCompare] = useState<HistoryCompareResponse | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -115,7 +125,10 @@ export function HistoryPage() {
   const [detailDimensions, setDetailDimensions] = useState<StockDimensions | null>(null);
   const [detailDimensionsCommentary, setDetailDimensionsCommentary] = useState<DimensionsCommentary | null>(null);
   const [detailDimensionsError, setDetailDimensionsError] = useState<string | null>(null);
+  const [detailDimensionsCommentaryError, setDetailDimensionsCommentaryError] = useState<string | null>(null);
   const [recomputing, setRecomputing] = useState(false);
+  const [jobActionLoading, setJobActionLoading] = useState(false);
+  const [liveJobStatus, setLiveJobStatus] = useState<JobStatus | null>(null);
   // Compare-side dimensions, fetched by ticker for each side
   const [compareDims, setCompareDims] = useState<{
     a: StockDimensions | null;
@@ -164,6 +177,7 @@ export function HistoryPage() {
       setDetailDimensions(null);
       setDetailDimensionsCommentary(null);
       setDetailDimensionsError(null);
+      setDetailDimensionsCommentaryError(null);
       return;
     }
     if (detail.dimensions !== undefined || detail.dimensions_error !== undefined) {
@@ -172,22 +186,28 @@ export function HistoryPage() {
       setDetailDimensionsError(
         detail.dimensions_error && !detail.dimensions ? detail.dimensions_error : null
       );
+      setDetailDimensionsCommentaryError(
+        detail.dimensions_error && detail.dimensions ? detail.dimensions_error : null
+      );
       return;
     }
     let cancelled = false;
     setDetailDimensionsError(null);
+    setDetailDimensionsCommentaryError(null);
     void getJobDimensions(detail.job_id)
       .then((b) => {
         if (cancelled) return;
         setDetailDimensions(b.dimensions);
         setDetailDimensionsCommentary(b.commentary);
         setDetailDimensionsError(b.error && !b.dimensions ? b.error : null);
+        setDetailDimensionsCommentaryError(b.error && b.dimensions ? b.error : null);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
         setDetailDimensions(null);
         setDetailDimensionsCommentary(null);
         setDetailDimensionsError(e instanceof Error ? e.message : String(e));
+        setDetailDimensionsCommentaryError(null);
       });
     return () => {
       cancelled = true;
@@ -205,6 +225,25 @@ export function HistoryPage() {
       return keys[0] ?? null;
     });
   }, [detail?.run_id, detail?.reports]);
+
+  useEffect(() => {
+    const jobId = detail?.job_id?.trim();
+    if (!jobId) {
+      setLiveJobStatus(null);
+      return;
+    }
+    let cancelled = false;
+    void getJob(jobId)
+      .then((j) => {
+        if (!cancelled) setLiveJobStatus(j);
+      })
+      .catch(() => {
+        if (!cancelled) setLiveJobStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.job_id]);
 
   const reportMarkdown = useMemo(() => {
     if (!detail?.reports || !reportSectionKey) return "";
@@ -329,6 +368,113 @@ export function HistoryPage() {
     Boolean(runIdB.trim()) &&
     runIdA.trim() !== runIdB.trim();
 
+  const allRunsSelected =
+    runs.length > 0 && runs.every((r) => selectedRunIds.has(r.run_id));
+
+  function pruneAfterDeletes(deletedIds: string[]) {
+    const gone = new Set(deletedIds);
+    setRuns((prev) => prev.filter((r) => !gone.has(r.run_id)));
+    setSelectedRunIds((prev) => {
+      const next = new Set(prev);
+      deletedIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    if (deletedIds.includes(runIdA)) setRunIdA("");
+    if (deletedIds.includes(runIdB)) setRunIdB("");
+    if (compare && (gone.has(compare.a.run_id ?? "") || gone.has(compare.b.run_id ?? ""))) {
+      setCompare(null);
+    }
+    if (detailRunId && gone.has(detailRunId)) {
+      detailFetchGen.current += 1;
+      setDetailRunId(null);
+      setDetail(null);
+      setDetailLoading(false);
+      setDetailError(null);
+    }
+  }
+
+  function toggleRunSelection(runId: string) {
+    setSelectedRunIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(runId)) next.delete(runId);
+      else next.add(runId);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    if (allRunsSelected) {
+      setSelectedRunIds(new Set());
+      return;
+    }
+    setSelectedRunIds(new Set(runs.map((r) => r.run_id)));
+  }
+
+  async function onDeleteSelected() {
+    const ids = [...selectedRunIds];
+    if (!ids.length) return;
+    if (
+      !window.confirm(
+        `Delete ${ids.length} selected run${ids.length === 1 ? "" : "s"}? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setDeleteError(null);
+    setBulkDeleting(true);
+    try {
+      const result = await bulkDeleteHistoryRuns(ids);
+      pruneAfterDeletes(result.deleted_run_ids);
+      if (result.missing_run_ids.length) {
+        setDeleteError(
+          `Deleted ${result.deleted_count}; ${result.missing_run_ids.length} run(s) were already gone.`,
+        );
+      }
+    } catch (e: unknown) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
+  async function onDeleteAllMatchingFilters() {
+    const parts: string[] = [];
+    if (tickerFilter.trim()) parts.push(`ticker ${tickerFilter.trim().toUpperCase()}`);
+    if (dateFrom.trim()) parts.push(`from ${dateFrom.trim()}`);
+    if (dateTo.trim()) parts.push(`to ${dateTo.trim()}`);
+    const scope = parts.length ? ` matching ${parts.join(", ")}` : "";
+    if (
+      !window.confirm(
+        `Delete all history runs${scope}? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setDeleteError(null);
+    setBulkDeleting(true);
+    try {
+      const result = await deleteAllHistoryRuns({
+        confirm: true,
+        ticker: tickerFilter.trim() || undefined,
+        date_from: dateFrom.trim() || undefined,
+        date_to: dateTo.trim() || undefined,
+      });
+      setSelectedRunIds(new Set());
+      setRunIdA("");
+      setRunIdB("");
+      setCompare(null);
+      closeRunDetail();
+      await refresh();
+      if (result.deleted_count === 0) {
+        setDeleteError("No runs matched the current filters.");
+      }
+    } catch (e: unknown) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
   async function onCompare() {
     setCompareError(null);
     setCompareLoading(true);
@@ -354,19 +500,7 @@ export function HistoryPage() {
     setDeletingRunId(runId);
     try {
       await deleteHistoryRun(runId);
-      setRuns((prev) => prev.filter((r) => r.run_id !== runId));
-      if (runIdA === runId) setRunIdA("");
-      if (runIdB === runId) setRunIdB("");
-      if (compare?.a.run_id === runId || compare?.b.run_id === runId) {
-        setCompare(null);
-      }
-      if (detailRunId === runId) {
-        detailFetchGen.current += 1;
-        setDetailRunId(null);
-        setDetail(null);
-        setDetailLoading(false);
-        setDetailError(null);
-      }
+      pruneAfterDeletes([runId]);
     } catch (e: unknown) {
       setDeleteError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -433,6 +567,39 @@ export function HistoryPage() {
       setRecomputing(false);
     }
   }
+
+  async function onRerunAnalysis() {
+    if (!detail) return;
+    setJobActionLoading(true);
+    setDetailError(null);
+    try {
+      const body = buildRerunAnalyzePayload(detail);
+      const r = await submitAnalyze(body);
+      navigate(`/dashboard?job=${encodeURIComponent(r.job_id)}`);
+    } catch (e: unknown) {
+      setDetailError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJobActionLoading(false);
+    }
+  }
+
+  async function onResumeAnalysis() {
+    const jobId = detail?.job_id?.trim();
+    if (!jobId) return;
+    setJobActionLoading(true);
+    setDetailError(null);
+    try {
+      await resumeJob(jobId);
+      navigate(`/dashboard?job=${encodeURIComponent(jobId)}`);
+    } catch (e: unknown) {
+      setDetailError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJobActionLoading(false);
+    }
+  }
+
+  const canResumeLiveJob =
+    liveJobStatus?.status === "failed" && Boolean(liveJobStatus.resumable);
 
   return (
     <div className="history-page" style={{ display: "grid", gap: "var(--spacing-24)" }}>
@@ -579,22 +746,91 @@ export function HistoryPage() {
               </h2>
             </div>
             {detailRunId ? (
-              <button
-                type="button"
-                onClick={closeRunDetail}
-                style={{
-                  padding: "8px 16px",
-                  borderRadius: "var(--radius-buttons)",
-                  border: "1px solid var(--color-stone-border)",
-                  background: "var(--surface-canvas-fog)",
-                  fontWeight: 600,
-                  fontSize: "var(--text-caption)",
-                  cursor: "pointer",
-                  color: "var(--color-slate-text)",
-                }}
-              >
-                Close
-              </button>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                {detail ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={jobActionLoading}
+                      onClick={() => void onRerunAnalysis()}
+                      style={{
+                        padding: "8px 16px",
+                        borderRadius: "var(--radius-buttons)",
+                        border: "none",
+                        background: jobActionLoading
+                          ? "var(--color-platinum-outline)"
+                          : "var(--color-chartwell-blue)",
+                        fontWeight: 600,
+                        fontSize: "var(--text-caption)",
+                        cursor: jobActionLoading ? "not-allowed" : "pointer",
+                        color: "white",
+                      }}
+                    >
+                      Rerun analysis
+                    </button>
+                    {canResumeLiveJob ? (
+                      <button
+                        type="button"
+                        disabled={jobActionLoading}
+                        onClick={() => void onResumeAnalysis()}
+                        title={
+                          liveJobStatus?.last_graph_step != null
+                            ? `Resume from checkpoint step ${liveJobStatus.last_graph_step}`
+                            : "Resume from LangGraph checkpoint"
+                        }
+                        style={{
+                          padding: "8px 16px",
+                          borderRadius: "var(--radius-buttons)",
+                          border: "1px solid #fca5a5",
+                          background: jobActionLoading ? "#fecaca" : "#dc2626",
+                          fontWeight: 600,
+                          fontSize: "var(--text-caption)",
+                          cursor: jobActionLoading ? "not-allowed" : "pointer",
+                          color: "white",
+                        }}
+                      >
+                        Resume failed job
+                      </button>
+                    ) : null}
+                    {detail.job_id ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          navigate(`/dashboard?job=${encodeURIComponent(detail.job_id)}`)
+                        }
+                        style={{
+                          padding: "8px 16px",
+                          borderRadius: "var(--radius-buttons)",
+                          border: "1px solid var(--color-stone-border)",
+                          background: "var(--surface-cloud-white)",
+                          fontWeight: 600,
+                          fontSize: "var(--text-caption)",
+                          cursor: "pointer",
+                          color: "var(--color-slate-text)",
+                        }}
+                      >
+                        Open in dashboard
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={closeRunDetail}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: "var(--radius-buttons)",
+                    border: "1px solid var(--color-stone-border)",
+                    background: "var(--surface-canvas-fog)",
+                    fontWeight: 600,
+                    fontSize: "var(--text-caption)",
+                    cursor: "pointer",
+                    color: "var(--color-slate-text)",
+                  }}
+                >
+                  Close
+                </button>
+              </div>
             ) : null}
           </header>
           {detailLoading && <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>Loading run detail…</p>}
@@ -837,6 +1073,7 @@ export function HistoryPage() {
                     dimensions={detailDimensions}
                     commentary={detailDimensionsCommentary}
                     error={detailDimensionsError}
+                    commentaryError={detailDimensionsCommentaryError}
                   />
                 </div>
               )}
@@ -854,7 +1091,57 @@ export function HistoryPage() {
           boxShadow: "var(--shadow-subtle)",
         }}
       >
-        <h2 style={{ marginTop: 0 }}>Recent runs</h2>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "var(--spacing-12)",
+            marginBottom: "var(--spacing-12)",
+          }}
+        >
+          <h2 style={{ margin: 0 }}>Recent runs</h2>
+          {runs.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-8)" }}>
+              <button
+                type="button"
+                disabled={bulkDeleting || selectedRunIds.size === 0}
+                onClick={() => void onDeleteSelected()}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: "var(--radius-buttons)",
+                  border: "1px solid #fecaca",
+                  background: selectedRunIds.size === 0 ? "#f3f4f6" : "#fff1f2",
+                  color: "#991b1b",
+                  fontWeight: 600,
+                  fontSize: "var(--text-caption)",
+                  cursor:
+                    bulkDeleting || selectedRunIds.size === 0 ? "not-allowed" : "pointer",
+                }}
+              >
+                {bulkDeleting ? "Deleting…" : `Delete selected (${selectedRunIds.size})`}
+              </button>
+              <button
+                type="button"
+                disabled={bulkDeleting}
+                onClick={() => void onDeleteAllMatchingFilters()}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: "var(--radius-buttons)",
+                  border: "1px solid #fecaca",
+                  background: "#fff1f2",
+                  color: "#991b1b",
+                  fontWeight: 600,
+                  fontSize: "var(--text-caption)",
+                  cursor: bulkDeleting ? "not-allowed" : "pointer",
+                }}
+              >
+                Delete all matching filters
+              </button>
+            </div>
+          )}
+        </div>
         <p
           style={{
             margin: "0 0 var(--spacing-8)",
@@ -895,6 +1182,15 @@ export function HistoryPage() {
             <table className="history-runs-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
               <thead>
                 <tr style={{ textAlign: "left", borderBottom: "1px solid var(--color-stone-border)" }}>
+                  <th style={{ padding: "8px 6px", width: 36 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all visible runs"
+                      checked={allRunsSelected}
+                      onChange={toggleSelectAllVisible}
+                      disabled={bulkDeleting || runs.length === 0}
+                    />
+                  </th>
                   <th style={{ padding: "8px 6px" }}>Run ID</th>
                   <th style={{ padding: "8px 6px" }}>Ticker</th>
                   <th style={{ padding: "8px 6px" }}>Date</th>
@@ -926,6 +1222,15 @@ export function HistoryPage() {
               <tbody ref={runsBodyRef}>
                 {runs.map((r) => (
                   <tr key={r.run_id} style={{ borderBottom: "1px solid var(--color-platinum-outline)" }}>
+                    <td style={{ padding: "8px 6px", verticalAlign: "middle" }}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select run ${r.run_id}`}
+                        checked={selectedRunIds.has(r.run_id)}
+                        onChange={() => toggleRunSelection(r.run_id)}
+                        disabled={bulkDeleting}
+                      />
+                    </td>
                     <td style={{ padding: "8px 6px" }} className="mono">
                       {r.run_id}
                     </td>

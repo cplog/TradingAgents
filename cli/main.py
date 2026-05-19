@@ -52,6 +52,10 @@ class MessageBuffer:
         "social": "Sentiment Analyst",
         "news": "News Analyst",
         "fundamentals": "Fundamentals Analyst",
+        "hot_money": "Hot Money Analyst",
+        "policy": "Policy Analyst",
+        "lockup": "Lockup Analyst",
+        "kronos": "Kronos Scenario Analyst",
     }
 
     # Report section mapping: section -> (analyst_key for filtering, finalizing_agent)
@@ -62,6 +66,10 @@ class MessageBuffer:
         "sentiment_report": ("social", "Sentiment Analyst"),
         "news_report": ("news", "News Analyst"),
         "fundamentals_report": ("fundamentals", "Fundamentals Analyst"),
+        "hot_money_report": ("hot_money", "Hot Money Analyst"),
+        "policy_report": ("policy", "Policy Analyst"),
+        "lockup_report": ("lockup", "Lockup Analyst"),
+        "kronos_report": ("kronos", "Kronos Scenario Analyst"),
         "investment_plan": (None, "Research Manager"),
         "trader_investment_plan": (None, "Trader"),
         "final_trade_decision": (None, "Portfolio Manager"),
@@ -170,6 +178,10 @@ class MessageBuffer:
                 "sentiment_report": "Social Sentiment",
                 "news_report": "News Analysis",
                 "fundamentals_report": "Fundamentals Analysis",
+                "hot_money_report": "Hot Money Analysis",
+                "policy_report": "Policy Analysis",
+                "lockup_report": "Lockup Analysis",
+                "kronos_report": "Kronos Scenario Analysis",
                 "investment_plan": "Research Team Decision",
                 "trader_investment_plan": "Trading Team Plan",
                 "final_trade_decision": "Portfolio Management Decision",
@@ -185,7 +197,16 @@ class MessageBuffer:
         report_parts = []
 
         # Analyst Team Reports - use .get() to handle missing sections
-        analyst_sections = ["market_report", "sentiment_report", "news_report", "fundamentals_report"]
+        analyst_sections = [
+            "market_report",
+            "sentiment_report",
+            "news_report",
+            "fundamentals_report",
+            "hot_money_report",
+            "policy_report",
+            "lockup_report",
+            "kronos_report",
+        ]
         if any(self.report_sections.get(section) for section in analyst_sections):
             report_parts.append("## Analyst Team Reports")
             if self.report_sections.get("market_report"):
@@ -203,6 +224,22 @@ class MessageBuffer:
             if self.report_sections.get("fundamentals_report"):
                 report_parts.append(
                     f"### Fundamentals Analysis\n{self.report_sections['fundamentals_report']}"
+                )
+            if self.report_sections.get("hot_money_report"):
+                report_parts.append(
+                    f"### Hot Money Analysis\n{self.report_sections['hot_money_report']}"
+                )
+            if self.report_sections.get("policy_report"):
+                report_parts.append(
+                    f"### Policy Analysis\n{self.report_sections['policy_report']}"
+                )
+            if self.report_sections.get("lockup_report"):
+                report_parts.append(
+                    f"### Lockup Analysis\n{self.report_sections['lockup_report']}"
+                )
+            if self.report_sections.get("kronos_report"):
+                report_parts.append(
+                    f"### Kronos Scenario Analysis\n{self.report_sections['kronos_report']}"
                 )
 
         # Research Team Reports
@@ -277,13 +314,13 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
     progress_table.add_column("Status", style="yellow", justify="center", width=20)
 
     # Group agents by team - filter to only include agents in agent_status
+    analyst_team_agents = [
+        MessageBuffer.ANALYST_MAPPING[k]
+        for k in message_buffer.selected_analysts
+        if k in MessageBuffer.ANALYST_MAPPING
+    ]
     all_teams = {
-        "Analyst Team": [
-            "Market Analyst",
-            "Sentiment Analyst",
-            "News Analyst",
-            "Fundamentals Analyst",
-        ],
+        "Analyst Team": analyst_team_agents,
         "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
         "Trading Team": ["Trader"],
         "Risk Management": ["Aggressive Analyst", "Neutral Analyst", "Conservative Analyst"],
@@ -694,6 +731,22 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
         analysts_dir.mkdir(exist_ok=True)
         (analysts_dir / "fundamentals.md").write_text(final_state["fundamentals_report"], encoding="utf-8")
         analyst_parts.append(("Fundamentals Analyst", final_state["fundamentals_report"]))
+    if final_state.get("hot_money_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "hot_money.md").write_text(final_state["hot_money_report"], encoding="utf-8")
+        analyst_parts.append(("Hot Money Analyst", final_state["hot_money_report"]))
+    if final_state.get("policy_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "policy.md").write_text(final_state["policy_report"], encoding="utf-8")
+        analyst_parts.append(("Policy Analyst", final_state["policy_report"]))
+    if final_state.get("lockup_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "lockup.md").write_text(final_state["lockup_report"], encoding="utf-8")
+        analyst_parts.append(("Lockup Analyst", final_state["lockup_report"]))
+    if final_state.get("kronos_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "kronos.md").write_text(final_state["kronos_report"], encoding="utf-8")
+        analyst_parts.append(("Kronos Scenario Analyst", final_state["kronos_report"]))
     if analyst_parts:
         content = "\n\n".join(f"### {name}\n{text}" for name, text in analyst_parts)
         sections.append(f"## I. Analyst Team Reports\n\n{content}")
@@ -775,6 +828,14 @@ def display_complete_report(final_state):
         analysts.append(("News Analyst", final_state["news_report"]))
     if final_state.get("fundamentals_report"):
         analysts.append(("Fundamentals Analyst", final_state["fundamentals_report"]))
+    if final_state.get("hot_money_report"):
+        analysts.append(("Hot Money Analyst", final_state["hot_money_report"]))
+    if final_state.get("policy_report"):
+        analysts.append(("Policy Analyst", final_state["policy_report"]))
+    if final_state.get("lockup_report"):
+        analysts.append(("Lockup Analyst", final_state["lockup_report"]))
+    if final_state.get("kronos_report"):
+        analysts.append(("Kronos Scenario Analyst", final_state["kronos_report"]))
     if analysts:
         console.print(Panel("[bold]I. Analyst Team Reports[/bold]", border_style="cyan"))
         for title, content in analysts:
@@ -829,18 +890,35 @@ def update_research_team_status(status):
 
 
 # Ordered list of analysts for status transitions
-ANALYST_ORDER = ["market", "social", "news", "fundamentals"]
+ANALYST_ORDER = [
+    "market",
+    "social",
+    "news",
+    "fundamentals",
+    "hot_money",
+    "policy",
+    "lockup",
+    "kronos",
+]
 ANALYST_AGENT_NAMES = {
     "market": "Market Analyst",
     "social": "Sentiment Analyst",
     "news": "News Analyst",
     "fundamentals": "Fundamentals Analyst",
+    "hot_money": "Hot Money Analyst",
+    "policy": "Policy Analyst",
+    "lockup": "Lockup Analyst",
+    "kronos": "Kronos Scenario Analyst",
 }
 ANALYST_REPORT_MAP = {
     "market": "market_report",
     "social": "sentiment_report",
     "news": "news_report",
     "fundamentals": "fundamentals_report",
+    "hot_money": "hot_money_report",
+    "policy": "policy_report",
+    "lockup": "lockup_report",
+    "kronos": "kronos_report",
 }
 
 
@@ -1067,7 +1145,8 @@ def run_analysis(checkpoint: bool = False):
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
         # Update agent status to in_progress for the first analyst
-        first_analyst = f"{selections['analysts'][0].value.capitalize()} Analyst"
+        first_analyst_key = selected_analyst_keys[0]
+        first_analyst = MessageBuffer.ANALYST_MAPPING[first_analyst_key]
         message_buffer.update_agent_status(first_analyst, "in_progress")
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 

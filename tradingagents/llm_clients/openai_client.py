@@ -130,6 +130,34 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
         return payload
 
 
+class OpenRouterChatOpenAI(NormalizedChatOpenAI):
+    """OpenRouter-compatible structured output without relying on tool routing.
+
+    Many OpenRouter model routes return HTTP 404 with *No endpoints found that
+    support tool use* when LangChain uses ``method=function_calling``. Preferring
+    ``json_schema`` (then ``json_mode``) maps to OpenAI-style ``response_format``
+    instead of binding the schema as an API tool.
+    """
+
+    def with_structured_output(self, schema, *, method=None, **kwargs):
+        caps = get_capabilities(self.model_name)
+        if caps.preferred_structured_method == "none":
+            raise NotImplementedError(
+                f"{self.model_name} has no structured-output method available; "
+                f"agent factories will fall back to free-text generation."
+            )
+        if method is None:
+            if caps.supports_json_schema:
+                method = "json_schema"
+            elif caps.supports_json_mode:
+                method = "json_mode"
+            else:
+                method = caps.preferred_structured_method
+        if method == "function_calling" and not caps.supports_tool_choice:
+            kwargs.setdefault("tool_choice", None)
+        return ChatOpenAI.with_structured_output(self, schema, method=method, **kwargs)
+
+
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "reasoning_effort", "temperature",
@@ -288,6 +316,8 @@ class OpenAIClient(BaseLLMClient):
             chat_cls = DeepSeekChatOpenAI
         elif self.provider in ("minimax", "minimax-cn"):
             chat_cls = MinimaxChatOpenAI
+        elif self.provider == "openrouter":
+            chat_cls = OpenRouterChatOpenAI
         else:
             chat_cls = NormalizedChatOpenAI
         return chat_cls(**llm_kwargs)

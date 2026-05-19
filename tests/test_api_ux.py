@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from api.models import DEFAULT_ANALYST_ORDER
 from api.state_store import reset_state_store_for_tests
 
 
@@ -61,6 +62,7 @@ def test_api_health(api_client: TestClient):
     body = r.json()
     assert "llm_provider" in body
     assert body["api_key_configured"] is True
+    assert body["supported_analyst_ids"] == list(DEFAULT_ANALYST_ORDER)
 
 
 @pytest.mark.unit
