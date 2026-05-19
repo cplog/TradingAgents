@@ -22,6 +22,17 @@ from api.dimensions.builder import (
     DimensionsBuildError, build_commentary, build_dimensions,
 )
 from api.state_store import StateStore
+from api.kronos import (
+    KronosConfig,
+    KronosService,
+    InsufficientData,
+    ModelLoadError,
+    KronosDisabled,
+    fetch_ohlcv,
+    forecast_to_markdown,
+    forecast_to_state,
+)
+from api.kronos.schema import KronosStatus
 
 logger = logging.getLogger(__name__)
 
@@ -584,6 +595,7 @@ class Worker:
                     ticker=ticker,
                     date=date,
                     config=config,
+                    selected_analysts=selected_analysts,
                 )
 
                 # --- Dimensions post-pass (failure-isolated) ---
@@ -787,15 +799,98 @@ class Worker:
             config.get("llm_provider"),
         )
         selected = _coerce_analyst_ids(analysts)
+        # The real Kronos forecast runs outside the graph (spec D1, D5);
+        # strip the LLM scenario node so it never runs.
+        selected = [a for a in selected if a != "kronos"]
+
+        # ---- 1. Compute Kronos forecast (if enabled) -----------------------
+        kcfg = KronosConfig.from_env()
+        kronos_md = ""
+        kronos_payload = None
+        kronos_status: str = KronosStatus.ok.value
+
+        if not kcfg.enabled:
+            kronos_status = KronosStatus.disabled.value
+        else:
+            try:
+                ohlcv_df = fetch_ohlcv(ticker, date, lookback=kcfg.lookback)
+                kronos_payload = KronosService.get(kcfg).forecast(
+                    ohlcv_df, ticker=ticker, trade_date=date,
+                )
+                kronos_md = forecast_to_markdown(kronos_payload)
+            except InsufficientData as e:
+                logger.warning("kronos: insufficient data for %s: %s", ticker, e)
+                kronos_md = (
+                    f"_Kronos forecast skipped for {ticker} on {date}: "
+                    f"insufficient OHLCV history._"
+                )
+                kronos_status = KronosStatus.insufficient_data.value
+            except ModelLoadError as e:
+                logger.warning("kronos: model load failed: %s", e)
+                kronos_status = KronosStatus.load_failed.value
+            except KronosDisabled:
+                kronos_status = KronosStatus.disabled.value
+            except Exception as e:  # pragma: no cover - last-resort
+                logger.warning("kronos: forecast failed: %s", e, exc_info=True)
+                kronos_status = KronosStatus.predict_failed.value
+
+        # ---- 2. Run the graph with a seeded kronos_report ------------------
         with _propagate_sync_lock:
             graph = TradingAgentsGraph(
                 selected_analysts=selected,
                 config=config,
                 debug=False,
             )
-            out = graph.propagate(ticker, date)
-        logger.info("propagate() finished | ticker=%s", ticker)
-        return out
+
+            propagator = getattr(graph, "propagator", None)
+            if propagator is None or not hasattr(
+                propagator, "create_initial_state"
+            ):
+                # Test fakes / minimal graphs without a propagator — skip
+                # the seed and just propagate. kronos_report seeding is a
+                # best-effort optimization, not a correctness requirement.
+                out = graph.propagate(ticker, date)
+            else:
+                original_create = propagator.create_initial_state
+                had_instance_attr = (
+                    "create_initial_state" in propagator.__dict__
+                )
+
+                def _seeded_create_initial_state(
+                    company_name, trade_date, past_context=""
+                ):
+                    state = original_create(
+                        company_name, trade_date, past_context=past_context,
+                    )
+                    state["kronos_report"] = kronos_md
+                    return state
+
+                propagator.create_initial_state = _seeded_create_initial_state
+                try:
+                    out = graph.propagate(ticker, date)
+                finally:
+                    if had_instance_attr:
+                        propagator.create_initial_state = original_create
+                    else:
+                        # No prior instance attribute — remove the patch so
+                        # the class-level descriptor takes over again
+                        # unchanged.
+                        try:
+                            del propagator.create_initial_state
+                        except AttributeError:
+                            propagator.create_initial_state = original_create
+
+        # ---- 3. Merge structured Kronos fields into the final state --------
+        final_state, rating = out
+        if isinstance(final_state, dict):
+            final_state["kronos_forecast"] = forecast_to_state(kronos_payload)
+            final_state["kronos_status"] = kronos_status
+
+        logger.info(
+            "propagate() finished | ticker=%s kronos_status=%s",
+            ticker, kronos_status,
+        )
+        return (final_state, rating)
 
 
 # Global singleton instantiated in api.main startup
