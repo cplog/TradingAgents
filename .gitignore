@@ -227,3 +227,6 @@ uv.lock
 
 # Local agent workspace artifacts
 .agents/
+
+# Kronos forecasting model — cloned by scripts/dev_up.sh, pinned via KRONOS_UPSTREAM_SHA
+vendor/kronos/

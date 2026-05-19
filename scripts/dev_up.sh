@@ -11,7 +11,9 @@ FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 
 BACKEND_CMD="${BACKEND_CMD:-uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}}"
 FRONTEND_CMD="${FRONTEND_CMD:-npm run dev -- --host ${FRONTEND_HOST} --port ${FRONTEND_PORT}}"
-REUSE_BACKEND_IF_BUSY="${REUSE_BACKEND_IF_BUSY:-1}"
+# Default 0: an old uvicorn on :8000 causes POST /analyze 422 on hot_money/policy/lockup/kronos.
+# Opt in to reuse: REUSE_BACKEND_IF_BUSY=1 ./scripts/dev_up.sh
+REUSE_BACKEND_IF_BUSY="${REUSE_BACKEND_IF_BUSY:-0}"
 
 backend_pid=""
 frontend_pid=""
@@ -57,6 +59,30 @@ if [[ ! -f "${FRONTEND_DIR}/package.json" ]]; then
   exit 1
 fi
 
+# ----- Kronos forecasting model (real upstream clone) -----------------------
+# Spec: docs/superpowers/specs/2026-05-19-real-kronos-integration-design.md (D2)
+# Skip with SKIP_KRONOS_INSTALL=1 once the vendor is set up.
+KRONOS_UPSTREAM_SHA="${KRONOS_UPSTREAM_SHA:-67b630e67f6a18c9e9be918d9b4337c960db1e9a}"
+KRONOS_VENDOR_DIR="${ROOT_DIR}/vendor/kronos"
+
+if [[ "${SKIP_KRONOS_INSTALL:-0}" != "1" ]]; then
+  if [[ ! -d "${KRONOS_VENDOR_DIR}/.git" ]]; then
+    echo "[dev_up] cloning Kronos into ${KRONOS_VENDOR_DIR}"
+    mkdir -p "${ROOT_DIR}/vendor"
+    git clone https://github.com/shiyu-coder/Kronos.git "${KRONOS_VENDOR_DIR}"
+
+    echo "[dev_up] pinning Kronos to ${KRONOS_UPSTREAM_SHA}"
+    git -C "${KRONOS_VENDOR_DIR}" fetch --quiet origin
+    git -C "${KRONOS_VENDOR_DIR}" checkout --quiet "${KRONOS_UPSTREAM_SHA}"
+
+    echo "[dev_up] installing Kronos requirements"
+    pip install -r "${KRONOS_VENDOR_DIR}/requirements.txt"
+  else
+    echo "[dev_up] Kronos vendor present at ${KRONOS_VENDOR_DIR} (skip clone; SKIP_KRONOS_INSTALL=1 to also skip pin check)"
+  fi
+fi
+# ---------------------------------------------------------------------------
+
 if is_port_busy "${FRONTEND_PORT}"; then
   echo "Error: frontend port ${FRONTEND_PORT} is already in use." >&2
   echo "Tip: stop the existing frontend or run with FRONTEND_PORT=<port>." >&2
@@ -69,6 +95,11 @@ if is_port_busy "${BACKEND_PORT}"; then
   if [[ "${REUSE_BACKEND_IF_BUSY}" == "1" ]]; then
     echo "Backend port ${BACKEND_PORT} already in use; reusing existing backend."
     echo "Tip: if new API routes 404 (e.g. Sectors / GET /api/catalog/industry-constituents), restart that process and re-run this script."
+    echo
+    echo "WARNING: An old uvicorn on :${BACKEND_PORT} often causes POST /analyze 422 on hot_money, policy, lockup, kronos"
+    echo "         (literal_error for analysts). Stop that process, then from repo root:"
+    echo "           pip install -e '.[api]' && PYTHONPATH=\$(pwd) uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}"
+    echo "         Verify GET /config includes analyze_analyst_body_schema=registered_string_list on the running API."
   else
     echo "Error: backend port ${BACKEND_PORT} is already in use." >&2
     echo "Tip: stop the existing backend or run with BACKEND_PORT=<port>." >&2
@@ -80,7 +111,8 @@ else
     exit 1
   fi
   echo "Starting backend: ${BACKEND_CMD}"
-  (cd "${ROOT_DIR}" && eval "${BACKEND_CMD}") &
+  echo "(PYTHONPATH prepends repo root so ./api beats any stale tradingagents wheel.)"
+  (cd "${ROOT_DIR}" && PYTHONPATH="${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}" eval "${BACKEND_CMD}") &
   backend_pid=$!
 
   sleep 1
