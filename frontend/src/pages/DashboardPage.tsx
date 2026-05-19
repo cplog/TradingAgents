@@ -8,7 +8,10 @@ import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import {
   fetchConfig,
+  fetchHealth,
   fetchProviderModels,
+  filterAnalystsForBackend,
+  mergeSupportedAnalystIds,
   getJob,
   getJobDimensions,
   openJobEvents,
@@ -19,6 +22,7 @@ import {
 } from "../api";
 import { DimensionsPanel } from "../components/dimensions/DimensionsPanel";
 import type { DimensionsCommentary, StockDimensions } from "../dimensions-types";
+import { orderedReportSectionKeys, prepareReportMarkdown } from "../utils/reportMarkdown";
 
 const PROVIDERS = [
   "openai",
@@ -40,6 +44,10 @@ const ANALYST_OPTIONS = [
   { id: "social", label: "Social Media" },
   { id: "news", label: "News" },
   { id: "fundamentals", label: "Fundamentals" },
+  { id: "hot_money", label: "Hot Money" },
+  { id: "policy", label: "Policy" },
+  { id: "lockup", label: "Lockup" },
+  { id: "kronos", label: "Kronos forecast" },
 ] as const;
 
 const REPORT_FORMATS = ["markdown", "json", "structured"] as const;
@@ -257,8 +265,9 @@ function hydrateFromServerConfig(
 }
 
 export function DashboardPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const tickerFromQs = searchParams.get("ticker")?.trim() ?? "";
+  const jobFromQs = searchParams.get("job")?.trim() ?? "";
   const [ticker, setTicker] = useState(() => tickerFromQs || "AAPL");
   const [date, setDate] = useState("");
   const [provider, setProvider] = useState<string>("openai");
@@ -271,12 +280,13 @@ export function DashboardPage() {
   const [applyTemperature, setApplyTemperature] = useState(false);
   const [debate, setDebate] = useState(1);
   const [riskRounds, setRiskRounds] = useState(1);
-  const [selectedAnalysts, setSelectedAnalysts] = useState<string[]>([
-    "market",
-    "social",
-    "news",
-    "fundamentals",
-  ]);
+  const [selectedAnalysts, setSelectedAnalysts] = useState<string[]>(() =>
+    ANALYST_OPTIONS.map((a) => a.id)
+  );
+  /** undefined = health not loaded yet; null = legacy payload (restrict extras); array = explicit allow-list */
+  const [apiSupportedAnalystIds, setApiSupportedAnalystIds] = useState<string[] | null | undefined>(
+    undefined
+  );
   const [reportFormat, setReportFormat] = useState<string>("markdown");
   const [configHint, setConfigHint] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -306,6 +316,29 @@ export function DashboardPage() {
     if (tickerFromQs) setTicker(tickerFromQs);
   }, [tickerFromQs]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.allSettled([fetchHealth(), fetchConfig()]).then((results) => {
+      if (cancelled) return;
+      const h = results[0].status === "fulfilled" ? results[0].value : null;
+      const cfg =
+        results[1].status === "fulfilled" && results[1].value && typeof results[1].value === "object"
+          ? (results[1].value as Record<string, unknown>)
+          : null;
+      setApiSupportedAnalystIds(mergeSupportedAnalystIds(h, cfg));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const tabFromQs = searchParams.get("tab");
+  useEffect(() => {
+    if (tabFromQs === "study" || tabFromQs === "reports") {
+      setAnalysisTab(tabFromQs);
+    }
+  }, [tabFromQs]);
+
   const clearStaleJob = useCallback((message: string) => {
     const store = globalThis.localStorage;
     if (store && typeof store.removeItem === "function") {
@@ -334,59 +367,134 @@ export function DashboardPage() {
   }
 
   useEffect(() => {
-    const store = globalThis.localStorage;
-    if (!store || typeof store.getItem !== "function") return;
-    const saved = store.getItem("ta:lastJobId");
-    if (!saved) return;
-    const nowIso = new Date().toISOString();
-    activeJobIdRef.current = saved;
-    setJobId(saved);
-    setJob({
-      job_id: saved,
-      status: "running",
-      created_at: nowIso,
-      ticker: null,
-      date: null,
-      result: null,
-      error: null,
-      progress_events: [
+    let cancelled = false;
+
+    const stripJobFromUrl = () => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("job");
+          next.delete("tab");
+          return next;
+        },
+        { replace: true },
+      );
+    };
+
+    async function restoreFromQuery(id: string) {
+      const nowIso = new Date().toISOString();
+      activeJobIdRef.current = id;
+      setJobId(id);
+      setJobNotice(null);
+      setJob({
+        job_id: id,
+        status: "running",
+        created_at: nowIso,
+        ticker: null,
+        date: null,
+        result: null,
+        error: null,
+        progress_events: [
+          {
+            ts: nowIso,
+            stage: "running",
+            message: "Loading job from link…",
+          },
+        ],
+        batch_id: null,
+      });
+      setEvents([
+        {
+          ts: nowIso,
+          stage: "running",
+          message: "Loading job from link…",
+        },
+      ]);
+      try {
+        const j = await getJob(id);
+        if (cancelled || activeJobIdRef.current !== id) return;
+        setJob(j);
+        if (j.progress_events?.length) setEvents(j.progress_events);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.startsWith("404:")) {
+          stripJobFromUrl();
+          clearStaleJob(
+            "Job not found (expired from the worker queue or invalid id). Open History for saved runs.",
+          );
+          return;
+        }
+        setJobNotice(msg);
+      }
+    }
+
+    async function restoreFromStorage(saved: string) {
+      const nowIso = new Date().toISOString();
+      activeJobIdRef.current = saved;
+      setJobId(saved);
+      setJob({
+        job_id: saved,
+        status: "running",
+        created_at: nowIso,
+        ticker: null,
+        date: null,
+        result: null,
+        error: null,
+        progress_events: [
+          {
+            ts: nowIso,
+            stage: "running",
+            message: "Restoring live job after refresh…",
+          },
+        ],
+        batch_id: null,
+      });
+      setEvents([
         {
           ts: nowIso,
           stage: "running",
           message: "Restoring live job after refresh…",
         },
-      ],
-      batch_id: null,
-    });
-    setEvents([
-      {
-        ts: nowIso,
-        stage: "running",
-        message: "Restoring live job after refresh…",
-      },
-    ]);
-    void getJob(saved)
-      .then((j) => {
+      ]);
+      try {
+        const j = await getJob(saved);
+        if (cancelled || activeJobIdRef.current !== saved) return;
         if (j.status === "completed" || j.status === "failed" || j.status === "cancelled") {
           clearStaleJob(
-            "Previous job is already finished. Start a new analysis here, or open History for past reports."
+            "Previous job is already finished. Start a new analysis here, or open History for past reports.",
           );
           return;
         }
         setJob(j);
         if (j.progress_events?.length) setEvents(j.progress_events);
-      })
-      .catch((e: unknown) => {
+      } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         if (msg.startsWith("404:")) {
           clearStaleJob(
-            "Previous live job no longer exists (API restart/TTL). Use History for persisted runs or start a new analysis."
+            "Previous live job no longer exists (API restart/TTL). Use History for persisted runs or start a new analysis.",
           );
           return;
         }
         setJobNotice("Reconnecting to live job…");
-      });
-  }, [clearStaleJob]);
+      }
+    }
+
+    void (async () => {
+      if (jobFromQs) {
+        await restoreFromQuery(jobFromQs);
+        return;
+      }
+      const store = globalThis.localStorage;
+      if (!store || typeof store.getItem !== "function") return;
+      const saved = store.getItem("ta:lastJobId");
+      if (!saved) return;
+      await restoreFromStorage(saved);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [jobFromQs, clearStaleJob, setSearchParams]);
   const headingCursorRef = useRef(0);
 
   useEffect(() => {
@@ -500,6 +608,15 @@ export function DashboardPage() {
 
   useEffect(() => {
     if (!jobId) return;
+    if (
+      job?.status &&
+      job.status !== "queued" &&
+      job.status !== "running"
+    ) {
+      esRef.current?.close();
+      esRef.current = null;
+      return;
+    }
     esRef.current?.close();
     const es = openJobEvents(jobId);
     esRef.current = es;
@@ -518,7 +635,7 @@ export function DashboardPage() {
     };
     es.onerror = () => es.close();
     return () => es.close();
-  }, [jobId, poll]);
+  }, [jobId, job?.status, poll]);
 
   const jobActive =
     job?.status === "queued" || job?.status === "running" || submitting;
@@ -575,11 +692,21 @@ export function DashboardPage() {
       overrides.backend_url = trimmedBackend;
     }
     try {
+      const { analysts: analystsPayload, dropped } = filterAnalystsForBackend(
+        selectedAnalysts,
+        apiSupportedAnalystIds
+      );
+      if (dropped.length) {
+        setJobNotice(
+          `Unsupported analyst(s) on this API — omitted from request: ${dropped.join(", ")}. ` +
+            `Run the API from this repo (\`pip install -e .\`, then \`uvicorn api.main:app --port 8000\`) so all focus areas are accepted.`
+        );
+      }
       const r = await submitAnalyze({
         ticker: ticker.trim(),
         date: date || undefined,
         config_overrides: overrides,
-        analysts: selectedAnalysts.length ? selectedAnalysts : undefined,
+        analysts: analystsPayload,
         report_format: reportFormat as "markdown" | "json" | "structured",
       });
       const store = globalThis.localStorage;
@@ -653,8 +780,10 @@ export function DashboardPage() {
   const mdReport = useMemo(() => {
     const reps = job?.result?.reports;
     if (!reps || typeof reps !== "object") return "";
-    return Object.entries(reps)
-      .map(([k, v]) => `## ${k}\n\n${String(v)}`)
+    const keys = orderedReportSectionKeys(reps);
+    return keys
+      .map((k) => prepareReportMarkdown(k, reps[k] ?? ""))
+      .filter(Boolean)
       .join("\n\n---\n\n");
   }, [job?.result?.reports]);
 
@@ -1246,20 +1375,33 @@ export function DashboardPage() {
           </div>
 
           <Pressable
-            disabled={jobActive}
+            disabled={jobActive || apiSupportedAnalystIds === undefined}
             onClick={() => void runAnalysis().catch((e) => alert(String(e)))}
             style={{
               width: "100%",
               padding: "12px 16px",
               borderRadius: "var(--radius-buttons)",
-              background: jobActive ? "var(--color-platinum-outline)" : "var(--color-chartwell-blue)",
-              color: jobActive ? "var(--color-steel-gray)" : "white",
+              background:
+                jobActive || apiSupportedAnalystIds === undefined
+                  ? "var(--color-platinum-outline)"
+                  : "var(--color-chartwell-blue)",
+              color:
+                jobActive || apiSupportedAnalystIds === undefined
+                  ? "var(--color-steel-gray)"
+                  : "white",
               border: "none",
               fontWeight: 600,
-              cursor: jobActive ? "not-allowed" : "pointer",
+              cursor:
+                jobActive || apiSupportedAnalystIds === undefined ? "not-allowed" : "pointer",
             }}
           >
-            {submitting ? "Starting…" : jobActive ? "Running…" : "Start analysis"}
+            {apiSupportedAnalystIds === undefined
+              ? "Checking API…"
+              : submitting
+                ? "Starting…"
+                : jobActive
+                  ? "Running…"
+                  : "Start analysis"}
           </Pressable>
 
           {jobId && (
@@ -1279,6 +1421,22 @@ export function DashboardPage() {
                   Finished in <span className="mono">{formatDuration(completedSeconds)}</span>
                 </div>
               )}
+              <div style={{ marginTop: 8 }}>
+                Share:{" "}
+                <a
+                  href={`/runs/${encodeURIComponent(jobId)}`}
+                  style={{ color: "var(--color-chartwell-blue)" }}
+                >
+                  /runs/{jobId}
+                </a>
+                {" · "}
+                <a
+                  href={`/runs/${encodeURIComponent(jobId)}/results`}
+                  style={{ color: "var(--color-chartwell-blue)" }}
+                >
+                  results tab
+                </a>
+              </div>
             </div>
           )}
         </div>
@@ -1709,6 +1867,126 @@ export function DashboardPage() {
                   </div>
                 </div>
               </section>
+
+              {job?.result?.analyst_coverage &&
+              Object.keys(job.result.analyst_coverage).length > 0 ? (
+                <section
+                  aria-label="Analyst run summary"
+                  style={{
+                    marginBottom: "var(--spacing-16)",
+                    padding: "var(--spacing-16)",
+                    borderRadius: "var(--radius-md)",
+                    border: "1px solid var(--color-stone-border)",
+                    background: "var(--surface-canvas-fog)",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "var(--text-caption)",
+                      fontWeight: 600,
+                      color: "var(--color-steel-gray)",
+                      marginBottom: "var(--spacing-8)",
+                    }}
+                  >
+                    Analyst run summary
+                  </div>
+                  <p
+                    style={{
+                      margin: "0 0 var(--spacing-12)",
+                      fontSize: 13,
+                      color: "var(--color-slate-text)",
+                      maxWidth: "72ch",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Shows whether report text was captured after each analyst you selected.{' '}
+                    <strong>empty</strong> usually means the model ended with pending tool calls (no final
+                    narrative), a timeout, or empty structured fallback — see the matching section below for the same explanation.
+                  </p>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+                      <thead>
+                        <tr>
+                          <th
+                            style={{
+                              textAlign: "left",
+                              padding: "6px 8px",
+                              borderBottom: "1px solid var(--color-stone-border)",
+                            }}
+                          >
+                            Analyst
+                          </th>
+                          <th
+                            style={{
+                              textAlign: "left",
+                              padding: "6px 8px",
+                              borderBottom: "1px solid var(--color-stone-border)",
+                            }}
+                          >
+                            Status
+                          </th>
+                          <th
+                            style={{
+                              textAlign: "left",
+                              padding: "6px 8px",
+                              borderBottom: "1px solid var(--color-stone-border)",
+                            }}
+                          >
+                            Why / notes
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(job.result.analyst_coverage).map(([id, meta]) => (
+                          <tr key={id}>
+                            <td
+                              style={{
+                                padding: "6px 8px",
+                                borderBottom: "1px solid var(--color-canvas-fog)",
+                                verticalAlign: "top",
+                              }}
+                              className="mono"
+                            >
+                              {id}
+                            </td>
+                            <td
+                              style={{
+                                padding: "6px 8px",
+                                borderBottom: "1px solid var(--color-canvas-fog)",
+                                verticalAlign: "top",
+                              }}
+                            >
+                              {meta.status === "ok" ? (
+                                <span style={{ color: "#166534" }}>ok</span>
+                              ) : meta.status === "empty" ? (
+                                <span style={{ color: "#b45309" }}>empty</span>
+                              ) : (
+                                <span>{meta.status}</span>
+                              )}
+                              {typeof meta.chars === "number" ? (
+                                <span style={{ color: "var(--color-ash-gray)", marginLeft: 6 }}>
+                                  {meta.chars} chars
+                                </span>
+                              ) : null}
+                            </td>
+                            <td
+                              style={{
+                                padding: "6px 8px",
+                                borderBottom: "1px solid var(--color-canvas-fog)",
+                                verticalAlign: "top",
+                                color: "var(--color-slate-text)",
+                                lineHeight: 1.45,
+                              }}
+                            >
+                              {meta.detail ?? "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              ) : null}
 
               <div
                 className={

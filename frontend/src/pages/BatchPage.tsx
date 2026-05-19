@@ -3,6 +3,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Pressable } from "../components/Pressable";
 import {
+  fetchConfig,
+  fetchHealth,
+  filterAnalystsForBackend,
+  mergeSupportedAnalystIds,
   getBatch,
   getJobDimensions,
   submitBatch,
@@ -16,6 +20,10 @@ const ANALYST_OPTIONS = [
   { id: "social", label: "Social Media" },
   { id: "news", label: "News" },
   { id: "fundamentals", label: "Fundamentals" },
+  { id: "hot_money", label: "Hot Money" },
+  { id: "policy", label: "Policy" },
+  { id: "lockup", label: "Lockup" },
+  { id: "kronos", label: "Kronos forecast" },
 ] as const;
 
 const FACTOR_KEYS: (keyof FactorScores)[] = [
@@ -41,12 +49,14 @@ type SortDir = "asc" | "desc";
 export function BatchPage() {
   const [batchBodyRef] = useAutoAnimate();
   const [rawTickers, setRawTickers] = useState("AAPL, MSFT, GOOG");
-  const [selectedAnalysts, setSelectedAnalysts] = useState<string[]>([
-    "market",
-    "social",
-    "news",
-    "fundamentals",
-  ]);
+  const [selectedAnalysts, setSelectedAnalysts] = useState<string[]>(() =>
+    ANALYST_OPTIONS.map((a) => a.id)
+  );
+  /** undefined = health loading; null = legacy; array = explicit allow-list */
+  const [apiSupportedAnalystIds, setApiSupportedAnalystIds] = useState<string[] | null | undefined>(
+    undefined
+  );
+  const [analystOmitNotice, setAnalystOmitNotice] = useState<string | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
   const [batch, setBatch] = useState<{ jobs: JobStatus[]; summary: Record<string, number> } | null>(
     null
@@ -56,6 +66,22 @@ export function BatchPage() {
   const [sortKey, setSortKey] = useState<keyof FactorScores | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.allSettled([fetchHealth(), fetchConfig()]).then((results) => {
+      if (cancelled) return;
+      const h = results[0].status === "fulfilled" ? results[0].value : null;
+      const cfg =
+        results[1].status === "fulfilled" && results[1].value && typeof results[1].value === "object"
+          ? (results[1].value as Record<string, unknown>)
+          : null;
+      setApiSupportedAnalystIds(mergeSupportedAnalystIds(h, cfg));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Per-factor minimum-score filters persisted in URL (?min_value=50&min_growth=…)
   const filters = useMemo(() => {
@@ -128,13 +154,23 @@ export function BatchPage() {
 
   async function run() {
     setErr(null);
+    setAnalystOmitNotice(null);
     const tickers = rawTickers
       .split(/[\n,]+/)
       .map((s) => s.trim())
       .filter(Boolean);
+    const { analysts: analystsPayload, dropped } = filterAnalystsForBackend(
+      selectedAnalysts,
+      apiSupportedAnalystIds
+    );
+    if (dropped.length) {
+      setAnalystOmitNotice(
+        `Omitted analysts not supported by this API build: ${dropped.join(", ")}. Update/restart the API server from the current repo.`
+      );
+    }
     const r = await submitBatch({
       tickers,
-      analysts: selectedAnalysts.length ? selectedAnalysts : undefined,
+      analysts: analystsPayload,
     });
     setBatchId(r.batch_id);
     setDimsByJob({});
@@ -187,6 +223,19 @@ export function BatchPage() {
           <span className="mono">max_concurrency</span>.
         </p>
       </header>
+      {analystOmitNotice ? (
+        <p
+          role="status"
+          style={{
+            margin: 0,
+            fontSize: "var(--text-caption)",
+            color: "var(--color-mocha-dark)",
+            maxWidth: "72ch",
+          }}
+        >
+          {analystOmitNotice}
+        </p>
+      ) : null}
       <textarea
         value={rawTickers}
         onChange={(e) => setRawTickers(e.target.value)}
@@ -223,19 +272,23 @@ export function BatchPage() {
         </div>
       </div>
       <Pressable
+        disabled={apiSupportedAnalystIds === undefined}
         onClick={() => void run().catch((e) => setErr(String(e)))}
         style={{
           marginTop: 12,
           padding: "10px 20px",
           borderRadius: "var(--radius-buttons)",
-          background: "var(--color-chartwell-blue)",
-          color: "white",
+          background:
+            apiSupportedAnalystIds === undefined
+              ? "var(--color-platinum-outline)"
+              : "var(--color-chartwell-blue)",
+          color: apiSupportedAnalystIds === undefined ? "var(--color-steel-gray)" : "white",
           border: "none",
           fontWeight: 600,
-          cursor: "pointer",
+          cursor: apiSupportedAnalystIds === undefined ? "not-allowed" : "pointer",
         }}
       >
-        Submit batch
+        {apiSupportedAnalystIds === undefined ? "Checking API…" : "Submit batch"}
       </Pressable>
       {batchId && (
         <p className="mono" style={{ marginTop: 8 }}>
