@@ -61,7 +61,9 @@ describe("SectorIndustryPage", () => {
 
     expect(screen.getByText("NVDA")).toBeDefined();
     expect(screen.getByText("AMD")).toBeDefined();
-    expect(screen.getByText(/report: yes/i)).toBeDefined();
+    // Coverage now renders as accessible dots — NVDA has report yes, AMD has report no.
+    expect(screen.getAllByLabelText("report yes")).toHaveLength(1);
+    expect(screen.getAllByLabelText("report no")).toHaveLength(1);
   });
 
   it("reloads constituents when market filter changes", async () => {

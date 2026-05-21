@@ -129,7 +129,7 @@ def test_route_macro_data_uses_akshare_vendor():
 
 @pytest.mark.unit
 def test_route_macro_lists_prior_vendor_error_when_chain_exhausted():
-    """AKShare-only tools should surface DataVendorUnavailable (e.g. missing pip pkg)."""
+    """AKShare-only tools return a markdown hint instead of crashing the agent."""
     cfg = {
         "prefer_free_data_vendors": True,
         "data_vendors": {"macro_data": "akshare"},
@@ -143,8 +143,50 @@ def test_route_macro_lists_prior_vendor_error_when_chain_exhausted():
             )
         }
         with patch.object(iface, "get_config", return_value=cfg):
-            with pytest.raises(RuntimeError, match="package not installed") as ei:
-                iface.route_to_vendor("list_akshare_endpoints", prefix="macro_")
+            out = iface.route_to_vendor("list_akshare_endpoints", prefix="macro_")
     finally:
         iface.VENDOR_METHODS["list_akshare_endpoints"] = old
-    assert ei.value.__cause__ is not None
+
+    assert "package not installed" in out
+    assert "list_akshare_endpoints" in out
+
+
+@pytest.mark.unit
+def test_alpha_vantage_missing_key_skips_instead_of_value_error(monkeypatch):
+    """Missing ALPHA_VANTAGE_API_KEY must skip AV in the chain, not crash with ValueError."""
+    from tradingagents.dataflows import alpha_vantage_common
+
+    monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
+    with pytest.raises(DataVendorUnavailable, match="ALPHA_VANTAGE_API_KEY"):
+        alpha_vantage_common.get_api_key()
+
+
+@pytest.mark.unit
+def test_route_stock_data_skips_alpha_vantage_without_key(monkeypatch):
+    cfg = {
+        "prefer_free_data_vendors": True,
+        "data_vendors": {"core_stock_apis": "yfinance,finnhub,alpha_vantage"},
+        "tool_vendors": {},
+    }
+    monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+
+    def yf_empty(*_a, **_k):
+        return "No data found for symbol 'AAPL' between 2024-01-01 and 2024-01-05"
+
+    old = iface.VENDOR_METHODS["get_stock_data"]
+    try:
+        iface.VENDOR_METHODS["get_stock_data"] = {
+            "yfinance": yf_empty,
+            "finnhub": old["finnhub"],
+            "alpha_vantage": old["alpha_vantage"],
+        }
+        with patch.object(iface, "get_config", return_value=cfg):
+            with pytest.raises(RuntimeError, match="ALPHA_VANTAGE_API_KEY") as ei:
+                iface.route_to_vendor(
+                    "get_stock_data", "AAPL", "2024-01-01", "2024-01-05"
+                )
+    finally:
+        iface.VENDOR_METHODS["get_stock_data"] = old
+
+    assert not isinstance(ei.value.__cause__, ValueError)

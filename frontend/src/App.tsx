@@ -6,8 +6,9 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { HistoryStatsPage } from "./pages/HistoryStatsPage";
 import { NewsPage } from "./pages/NewsPage";
-import { RunJobPage } from "./pages/RunJobPage";
+import { RunDetailPage } from "./pages/RunDetailPage";
 import { RunJobResultsPage } from "./pages/RunJobResultsPage";
+import { StockPage } from "./pages/StockPage";
 import { ScreenerPage } from "./pages/ScreenerPage";
 import { SectorIndustryPage } from "./pages/SectorIndustryPage";
 import { SystemPage } from "./pages/SystemPage";
@@ -29,8 +30,9 @@ export default function App() {
         <Route path="/system" element={<SystemPage />} />
         <Route path="/settings" element={<Navigate to="/system" replace />} />
         <Route path="/configure" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/runs/:jobId" element={<RunJobPage />} />
+        <Route path="/runs/:jobId" element={<RunDetailPage />} />
         <Route path="/runs/:jobId/results" element={<RunJobResultsPage />} />
+        <Route path="/stocks/:ticker" element={<StockPage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>

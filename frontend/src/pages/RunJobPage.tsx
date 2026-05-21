@@ -1,9 +1,11 @@
-import { Navigate, useParams } from "react-router-dom";
+import { DashboardPage } from "./DashboardPage";
 
-/** Deep link: `/runs/:jobId` → dashboard job loader (`?job=`). */
+/**
+ * `/runs/:jobId` renders the same DashboardPage as `/dashboard`, but with the
+ * configuration form hidden and the focus shifted to live run + results. The
+ * page reads `:jobId` from the URL params and treats it the same as the legacy
+ * `/dashboard?job=` deep-link.
+ */
 export function RunJobPage() {
-  const { jobId } = useParams<{ jobId: string }>();
-  const id = jobId?.trim();
-  if (!id) return <Navigate to="/dashboard" replace />;
-  return <Navigate to={`/dashboard?job=${encodeURIComponent(id)}`} replace />;
+  return <DashboardPage />;
 }

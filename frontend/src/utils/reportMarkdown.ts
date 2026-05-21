@@ -63,6 +63,10 @@ export function prepareReportMarkdown(sectionKey: string, raw: string): string {
   if (sectionKey === "news") {
     body = collapseConsecutiveDuplicateBlocks(body, 180);
   }
+  // Agent reports usually open with their own heading; avoid duplicating "Market" etc.
+  if (/^#{1,3}\s+\S/m.test(body)) {
+    return body;
+  }
   const title = REPORT_SECTION_LABELS[sectionKey] ?? sectionKey.replace(/_/g, " ");
   return `## ${title}\n\n${body}`;
 }

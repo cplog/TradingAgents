@@ -27,7 +27,54 @@ _FN_ALIASES: dict[str, str] = {
     "macro_usa_irate": "macro_bank_usa_interest_rate",
     "macro_usa_fed_rate": "macro_bank_usa_interest_rate",
     "macro_usa_bank_rate": "macro_bank_usa_interest_rate",
+    # Bare names LLMs often pass without macro_/stock_ prefix.
+    "fed_rate": "macro_bank_usa_interest_rate",
+    "usa_interest_rate": "macro_bank_usa_interest_rate",
+    "usa_fed_rate": "macro_bank_usa_interest_rate",
+    "interest_rate_usa": "macro_bank_usa_interest_rate",
+    "cnbs": "macro_cnbs",
 }
+
+
+def _format_invalid_function_name(fn: str) -> str:
+    return (
+        f"## AKShare call rejected — invalid function_name `{fn}`\n\n"
+        "`function_name` must be an exact AKShare symbol starting with `macro_` or `stock_` "
+        "(for example `macro_cnbs`, `macro_bank_usa_interest_rate`, `stock_ebs_lg`).\n\n"
+        "Do not invent names like `usa_interest_rate` or `macro_usa_irate` without checking. "
+        "Call `list_akshare_endpoints` first, or "
+        '`list_akshare_endpoints(category="interest_rate")` for central-bank/LPR rates.'
+    )
+
+
+def _auto_normalize_function_name(ak: Any, fn: str) -> tuple[str, list[str]]:
+    """Best-effort repair for common LLM typos before strict validation."""
+    raw = fn.strip()
+    steps: list[str] = []
+
+    bare = _FN_ALIASES.get(raw)
+    if bare:
+        return bare, [f"bare alias `{raw}` → `{bare}`"]
+
+    if raw.startswith("get_"):
+        stripped = raw[4:]
+        if _FN_RE.match(stripped) and any(stripped.startswith(p) for p in _ALLOWED_PREFIXES):
+            raw = stripped
+            steps.append(f"stripped `get_` prefix → `{raw}`")
+
+    if any(raw.startswith(p) for p in _ALLOWED_PREFIXES) and _FN_RE.match(raw):
+        return raw, steps
+
+    for prefix in ("macro_", "stock_"):
+        candidate = f"{prefix}{raw.lstrip('_')}"
+        if not _FN_RE.match(candidate):
+            continue
+        resolved, _ = _resolve_fn_alias(ak, candidate)
+        if callable(getattr(ak, resolved, None)):
+            steps.append(f"added `{prefix}` prefix → `{candidate}`")
+            return candidate, steps
+
+    return raw, steps
 
 
 def _import_akshare():
@@ -211,13 +258,12 @@ def list_akshare_endpoints(
 def get_macro_akshare(function_name: str, params_json: str = "{}", tail_rows: int = 120) -> str:
     """Call any allowed AKShare function and return a compact markdown table."""
     ak = _import_akshare()
-    fn = function_name.strip()
+    fn, normalize_steps = _auto_normalize_function_name(ak, function_name)
     if not _FN_RE.match(fn):
-        raise DataVendorUnavailable("akshare macro: invalid function_name")
+        return _format_invalid_function_name(function_name.strip())
     if not any(fn.startswith(p) for p in _ALLOWED_PREFIXES):
-        raise DataVendorUnavailable(
-            "akshare macro: function_name must start with 'macro_' or 'stock_'"
-        )
+        return _format_invalid_function_name(function_name.strip())
+
     resolved, used_alias = _resolve_fn_alias(ak, fn)
     func = getattr(ak, resolved, None)
     if not callable(func):
@@ -225,15 +271,24 @@ def get_macro_akshare(function_name: str, params_json: str = "{}", tail_rows: in
         return _format_not_found(fn, suggestions)
 
     alias_line = ""
+    if normalize_steps:
+        alias_line += "\n".join(f"- normalize: {step}" for step in normalize_steps) + "\n"
     if used_alias and resolved != fn:
-        alias_line = f"\n- resolved_from_alias: `{fn}` → `{resolved}`\n"
+        alias_line += f"- resolved_from_alias: `{fn}` → `{resolved}`\n"
 
     try:
         params = json.loads(params_json or "{}")
     except json.JSONDecodeError as exc:
-        raise DataVendorUnavailable(f"akshare macro: params_json is not valid JSON ({exc})") from exc
+        return (
+            f"## AKShare `{resolved}` — invalid params_json\n\n"
+            f"`params_json` must be a JSON object string ({exc}). Example: `'{{}}'` or "
+            '\'{"symbol":"上证A股"}\'.'
+        )
     if not isinstance(params, dict):
-        raise DataVendorUnavailable("akshare macro: params_json must decode to a JSON object")
+        return (
+            f"## AKShare `{resolved}` — invalid params_json\n\n"
+            "`params_json` must decode to a JSON object (dict), not an array or scalar."
+        )
 
     try:
         raw = func(**params)

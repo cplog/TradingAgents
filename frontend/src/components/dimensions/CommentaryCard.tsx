@@ -1,30 +1,23 @@
 import React from 'react';
 import type { DimensionsCommentary } from '../../dimensions-types';
 
-const ALIGN_COLORS: Record<DimensionsCommentary['alignment'], string> = {
-  aligned: '#16a34a',
-  partial: '#ca8a04',
-  misaligned: '#dc2626',
+const ALIGN_COLORS: Record<DimensionsCommentary["alignment"], string> = {
+  aligned: "var(--color-phosphor)",
+  partial: "var(--color-amber-readout)",
+  misaligned: "var(--color-danger)",
 };
 
 export function CommentaryCard({ commentary }: { commentary: DimensionsCommentary }) {
   const ac = ALIGN_COLORS[commentary.alignment];
   return (
-    <div
-      style={{
-        border: '1px solid var(--color-stone-border)',
-        borderRadius: 'var(--radius-cards)',
-        padding: 'var(--spacing-16)',
-        background: 'var(--color-sky-tint)',
-      }}
-    >
+    <div className="commentary-card">
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span
           style={{
             padding: '3px 10px',
             borderRadius: 'var(--radius-buttons)',
             background: ac,
-            color: 'white',
+            color: 'var(--color-deep-space)',
             fontSize: 11,
             letterSpacing: '0.04em',
             fontWeight: 600,

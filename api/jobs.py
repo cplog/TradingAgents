@@ -23,7 +23,13 @@ from api.models import DEFAULT_ANALYST_ORDER, VALID_ANALYST_IDS
 from api.dimensions.builder import (
     DimensionsBuildError, build_commentary, build_dimensions,
 )
+from api.run_provenance import merge_config_snapshot
 from api.state_store import StateStore
+
+
+def _merge_job_config_snapshot(config: Dict[str, Any]) -> Dict[str, Any]:
+    safe = {k: v for k, v in config.items() if "key" not in k.lower()}
+    return merge_config_snapshot(safe)
 from api.kronos import (
     KronosConfig,
     KronosService,
@@ -82,6 +88,14 @@ def _should_rebuild_graph_dimensions_snapshot(snapshot: Dict[str, Any]) -> bool:
         return True
     source = snapshot.get("source") or "full_run"
     if source == "facts_only":
+        flags = snapshot.get("data_quality_flags")
+        if isinstance(flags, list) and any(
+            isinstance(f, str) and f.startswith("pillar_scoring_unavailable")
+            for f in flags
+        ):
+            # Graph pillar LLM failed (common on Ollama / weak structured-output models).
+            # Retry the full dimensions pipeline in the post-pass instead of reusing 3/5 defaults.
+            return True
         return False
     raw_factors = snapshot.get("factor_scores")
     if not isinstance(raw_factors, dict):
@@ -378,7 +392,7 @@ class JobStore:
                 date=date,
                 status="queued",
                 created_at=datetime.utcnow(),
-                config_snapshot={k: v for k, v in config.items() if "key" not in k.lower()},
+                config_snapshot=_merge_job_config_snapshot(config),
                 batch_id=batch_id,
                 analysts=selected,
             )
@@ -392,6 +406,32 @@ class JobStore:
             if rec is None:
                 return None
             return self._snapshot_record(rec)
+
+    def remove(self, job_id: str) -> bool:
+        """Drop an in-memory job and its persisted worker snapshot (if any)."""
+        jid = (job_id or "").strip()
+        if not jid:
+            return False
+        self._prune()
+        with self._lock:
+            had_mem = jid in self._jobs
+            self._jobs.pop(jid, None)
+            cleared_persist = False
+            if self._state_store is not None:
+                try:
+                    snap = self._state_store.get_json(f"{_JOBS_PERSIST_PREFIX}{jid}")
+                    if snap is not None:
+                        cleared_persist = True
+                    self._state_store.put_json(f"{_JOBS_PERSIST_PREFIX}{jid}", None)
+                    ids = self._state_store.get_json(_JOBS_PERSIST_INDEX_KEY) or []
+                    if isinstance(ids, list):
+                        if jid in [str(x) for x in ids]:
+                            cleared_persist = True
+                        new_ids = [str(x) for x in ids if str(x) != jid]
+                        self._state_store.put_json(_JOBS_PERSIST_INDEX_KEY, new_ids)
+                except Exception:
+                    logger.exception("Could not clear persisted job snapshot for %s", jid)
+            return had_mem or cleared_persist
 
     def _snapshot_record(self, rec: JobRecord) -> JobRecord:
         """Return a shallow copy with a copy of progress list for safe reads."""
@@ -787,13 +827,15 @@ class Worker:
                     try:
                         from tradingagents.llm_clients import create_llm_client
                         from api.dimensions.schemas import StockDimensions
+                        from api.llm_clients import adapt_for_structured_output
 
+                        provider = config.get("llm_provider", "openai")
                         llm_client = create_llm_client(
-                            provider=config.get("llm_provider", "openai"),
+                            provider=provider,
                             model=config.get("quick_think_llm", "gpt-4o-mini"),
                             base_url=config.get("backend_url"),
                         )
-                        llm = llm_client.get_llm()
+                        llm = adapt_for_structured_output(llm_client.get_llm(), provider)
 
                         validated: Optional[StockDimensions] = None
                         if reuse_snapshot:
@@ -930,7 +972,7 @@ class Worker:
 
                     done = self.store.get(job_id)
                     if done:
-                        snap = dict(done.config_snapshot)
+                        snap = _merge_job_config_snapshot(dict(done.config_snapshot))
                         if done.analysts:
                             snap["analysts"] = list(done.analysts)
                         persist_completed_run(

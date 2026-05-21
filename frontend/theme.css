@@ -1,39 +1,40 @@
 @theme {
-  /* Colors */
-  --color-cloud-white: #ffffff;
-  --color-canvas-fog: #fafaf9;
-  --color-slate-text: #0c0a09;
-  --color-ash-gray: #78716c;
-  --color-stone-border: #e5e7eb;
-  --color-platinum-outline: #d6d3d1;
-  --color-steel-gray: #a8a29e;
-  --color-hover-stone: #c9c5c2;
-  --color-ghost-ink: #1c1917;
-  --color-chartwell-blue: #3ba6f1;
-  --color-sky-tint: #c1e1f7;
+  --color-deep-space: #080808;
+  --color-shadow: #121212;
+  --color-phosphor: #78f0a8;
 
-  /* Typography */
-  --font-inter: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-roobert: 'roobert', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --color-cloud-white: #161616;
+  --color-canvas-fog: #0a0a0a;
+  --color-slate-text: #ececec;
+  --color-ash-gray: #9a9a9a;
+  --color-stone-border: #2c2c2c;
+  --color-platinum-outline: #3d3d3d;
+  --color-steel-gray: #707070;
+  --color-hover-stone: #454545;
+  --color-ghost-ink: #f5f5f5;
+  --color-chartwell-blue: #78f0a8;
+  --color-sky-tint: rgba(120, 240, 168, 0.12);
 
-  /* Typography — Scale */
-  --text-caption: 12px;
-  --leading-caption: 1.5;
-  --tracking-caption: 0.048px;
-  --text-heading-sm: 18px;
-  --leading-heading-sm: 1.25;
-  --tracking-heading-sm: -0.016px;
+  --font-inter: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-roobert: "Space Grotesk", var(--font-inter);
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --text-caption: 11px;
+  --leading-caption: 1.35;
+  --tracking-caption: 0.06em;
+  --text-heading-sm: 17px;
+  --leading-heading-sm: 1.2;
+  --tracking-heading-sm: -0.02em;
   --text-heading: 20px;
-  --leading-heading: 1.2;
-  --tracking-heading: -0.017px;
+  --leading-heading: 1.15;
+  --tracking-heading: -0.025em;
   --text-heading-lg: 32px;
-  --leading-heading-lg: 1.12;
-  --tracking-heading-lg: -0.021px;
-  --text-display: 52px;
+  --leading-heading-lg: 1.08;
+  --tracking-heading-lg: -0.035em;
+  --text-display: 48px;
   --leading-display: 1;
-  --tracking-display: -0.025px;
+  --tracking-display: 0.04em;
 
-  /* Spacing */
   --spacing-4: 4px;
   --spacing-8: 8px;
   --spacing-12: 12px;
@@ -47,15 +48,13 @@
   --spacing-96: 96px;
   --spacing-160: 160px;
 
-  /* Border Radius */
-  --radius-md: 4px;
-  --radius-lg: 10px;
-  --radius-2xl: 16px;
+  --radius-md: 2px;
+  --radius-lg: 4px;
+  --radius-2xl: 6px;
   --radius-full: 9999px;
 
-  /* Shadows */
-  --shadow-md: rgba(0, 0, 0, 0.05) 0px 4px 16px 0px;
-  --shadow-sm: rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px;
-  --shadow-subtle: rgba(0, 0, 0, 0.05) 0px 1px 2px 0px;
-  --shadow-xl: rgba(17, 12, 46, 0.12) 0px 12px 45px 0px;
+  --shadow-md: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-subtle: 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-xl: 0 0 0 1px rgba(120, 240, 168, 0.08), 0 16px 48px rgba(0, 0, 0, 0.55);
 }

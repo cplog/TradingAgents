@@ -81,6 +81,25 @@ def test_extract_facts_hk_ticker_currency(monkeypatch):
     assert facts.exchange == "HKG"
 
 
+def test_extract_facts_missing_currency_defaults_usd(monkeypatch):
+    """yfinance often omits currency; dimensions must not fail validation."""
+    sparse = {"regularMarketPrice": 100.0}
+    monkeypatch.setattr(
+        "api.dimensions.facts._yf_ticker",
+        lambda t: _FakeTicker(sparse, None),
+    )
+    facts, flags = extract_facts("XYZ", "2026-05-13")
+    assert facts.currency == "USD"
+    assert "missing_currency" not in flags
+
+
+def test_fact_snapshot_accepts_null_currency_from_persisted_json():
+    from api.dimensions.schemas import FactSnapshot
+
+    snap = FactSnapshot.model_validate({"as_of_date": "2026-05-13", "currency": None})
+    assert snap.currency == "USD"
+
+
 def test_extract_facts_string_forward_pe_coerced(monkeypatch):
     """yfinance occasionally returns numeric fields as strings."""
     info = {"currency": "USD", "forwardPE": "25.4"}

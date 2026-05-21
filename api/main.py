@@ -53,6 +53,7 @@ from api.models import (
     BatchAnalyzeRequest,
     BatchAnalyzeResponse,
     BatchStatusResponse,
+    CatalogStatusResponse,
     DataSourceCheck,
     DEFAULT_ANALYST_ORDER,
     HealthResponse,
@@ -121,12 +122,21 @@ def _load_persisted_into_process() -> None:
 
 def _record_to_status(rec) -> JobStatusResponse:
     """Map JobRecord snapshot to response model."""
+    from api.models import RunProvenance
+    from api.run_provenance import build_run_provenance
+
     result_model: Optional[AnalysisResult] = None
+    cov_raw: Optional[dict] = None
     if rec.result:
         try:
             result_model = AnalysisResult.model_validate(rec.result)
+            if isinstance(rec.result, dict):
+                raw_cov = rec.result.get("analyst_coverage")
+                cov_raw = raw_cov if isinstance(raw_cov, dict) else None
         except Exception:
             result_model = None
+    prov_raw = build_run_provenance(rec.config_snapshot, cov_raw)
+    provenance = RunProvenance.model_validate(prov_raw) if prov_raw else None
     return JobStatusResponse(
         job_id=rec.job_id,
         status=rec.status,
@@ -140,6 +150,7 @@ def _record_to_status(rec) -> JobStatusResponse:
         resumable=bool(rec.resumable),
         last_graph_step=rec.last_graph_step,
         checkpoint_thread_id=rec.checkpoint_thread_id,
+        provenance=provenance,
     )
 
 
@@ -821,16 +832,18 @@ async def get_batch(batch_id: str) -> BatchStatusResponse:
 
 
 @app.get("/jobs", response_model=List[JobStatusResponse])
+@app.get("/api/jobs", response_model=List[JobStatusResponse])
 async def list_jobs(
     limit: int = Query(50, ge=1, le=200),
     status: Optional[str] = Query(None),
 ) -> List[JobStatusResponse]:
     """List recent jobs ordered by creation time (newest first)."""
-    all_ids = _worker.store.list_ids()
+    snapshots = [_worker.store.get(jid) for jid in _worker.store.list_ids()]
+    records = [r for r in snapshots if r is not None]
+    records.sort(key=lambda r: r.created_at, reverse=True)
     out: List[JobStatusResponse] = []
-    for jid in sorted(all_ids, reverse=True)[:limit]:
-        rec = _worker.store.get(jid)
-        if rec and (status is None or rec.status == status):
+    for rec in records[:limit]:
+        if status is None or rec.status == status:
             out.append(_record_to_status(rec))
     return out
 
@@ -1085,6 +1098,62 @@ async def history_sector_industry_coverage() -> List[HistoryCoverageRow]:
     return [HistoryCoverageRow.model_validate(r) for r in raw]
 
 
+@app.get("/api/catalog/status", response_model=CatalogStatusResponse)
+async def catalog_status() -> CatalogStatusResponse:
+    """Yahoo sector/industry catalog freshness — counts + newest ``updated_at``.
+
+    The frontend surfaces this as a "Catalog refreshed N days ago" pill so users
+    can see at a glance whether the weekly refresh job is keeping the universe
+    of tickers up to date.
+    """
+    if not d1_history_enabled():
+        return CatalogStatusResponse(d1_enabled=False)
+
+    from api.history import _d1_query, _ensure_d1_schema
+
+    _ensure_d1_schema()
+
+    def _first(rows: list[dict[str, Any]], key: str) -> Any:
+        return rows[0].get(key) if rows else None
+
+    buckets_rows = _d1_query(
+        "SELECT COUNT(*) AS n, MAX(updated_at) AS m FROM yahoo_sector_industry_buckets"
+    )
+    cons_rows = _d1_query(
+        """
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN market = 'US' THEN 1 ELSE 0 END) AS us,
+          SUM(CASE WHEN market = 'HK' THEN 1 ELSE 0 END) AS hk,
+          MAX(updated_at) AS m
+        FROM yahoo_industry_constituents
+        """
+    )
+
+    def _as_float(val: Any) -> Optional[float]:
+        try:
+            f = float(val)
+            return f if f > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def _as_int(val: Any) -> int:
+        try:
+            return int(val or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return CatalogStatusResponse(
+        d1_enabled=True,
+        buckets=_as_int(_first(buckets_rows, "n")),
+        constituents_total=_as_int(_first(cons_rows, "total")),
+        constituents_us=_as_int(_first(cons_rows, "us")),
+        constituents_hk=_as_int(_first(cons_rows, "hk")),
+        latest_bucket_refreshed_at=_as_float(_first(buckets_rows, "m")),
+        latest_constituent_refreshed_at=_as_float(_first(cons_rows, "m")),
+    )
+
+
 @app.get("/api/catalog/industry-constituents", response_model=List[IndustryConstituentRow])
 @app.get("/api/history/constituents", response_model=List[IndustryConstituentRow])
 async def history_industry_constituents(
@@ -1107,10 +1176,86 @@ async def history_industry_constituents(
 
 @app.get("/api/history/runs/{run_id}", response_model=HistoryRunDetail)
 async def history_get_run(run_id: str) -> HistoryRunDetail:
+    from api.models import RunProvenance
+    from api.run_provenance import build_run_provenance
+
     raw = get_run(get_state_store(), run_id)
     if not raw:
         raise HTTPException(status_code=404, detail="Run not found")
-    return HistoryRunDetail.model_validate(raw)
+    payload = dict(raw)
+    cfg = payload.get("config_snapshot")
+    cov = payload.get("analyst_coverage")
+    if isinstance(cfg, dict):
+        payload["provenance"] = build_run_provenance(
+            cfg, cov if isinstance(cov, dict) else None
+        )
+    return HistoryRunDetail.model_validate(payload)
+
+
+def _purge_job_after_history_delete(run_id: str) -> bool:
+    """Remove in-memory worker job so History list does not resurrect the row."""
+    if _worker is None:
+        return False
+    return _worker.store.remove(run_id)
+
+
+def _purge_jobs_matching_history_filters(
+    *,
+    ticker: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> int:
+    """Drop worker jobs that match history delete-all filters (in-memory rows)."""
+    if _worker is None:
+        return 0
+    from api.tickers import normalize_ticker
+
+    norm_ticker: Optional[str] = None
+    if ticker and ticker.strip():
+        try:
+            norm_ticker = normalize_ticker(ticker.strip())
+        except ValueError:
+            return 0
+    removed = 0
+    for jid in list(_worker.store.list_ids()):
+        rec = _worker.store.get(jid)
+        if rec is None:
+            continue
+        if norm_ticker and str(rec.ticker or "").upper() != norm_ticker:
+            continue
+        d = str(rec.date or "")
+        if date_from and d and d < date_from:
+            continue
+        if date_to and d and d > date_to:
+            continue
+        if _worker.store.remove(jid):
+            removed += 1
+    return removed
+
+
+def _delete_history_runs_with_job_purge(run_ids: List[str]) -> Dict[str, Any]:
+    """Delete persisted history and always purge matching in-memory jobs."""
+    deleted: List[str] = []
+    missing: List[str] = []
+    seen: set[str] = set()
+    store = get_state_store()
+    for raw in run_ids:
+        rid = (raw or "").strip()
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        hist = delete_run(store, rid)
+        job = _purge_job_after_history_delete(rid)
+        if hist or job:
+            deleted.append(rid)
+        else:
+            missing.append(rid)
+    return {
+        "deleted_count": len(deleted),
+        "deleted_run_ids": deleted,
+        "missing_run_ids": missing,
+        "scope": "selected",
+    }
 
 
 @app.delete("/api/history/runs/{run_id}")
@@ -1118,10 +1263,16 @@ async def history_delete_run(run_id: str) -> Dict[str, Any]:
     rid = run_id.strip()
     if not rid:
         raise HTTPException(status_code=400, detail="run_id is required")
-    deleted = delete_run(get_state_store(), rid)
-    if not deleted:
+    deleted_history = delete_run(get_state_store(), rid)
+    removed_job = _purge_job_after_history_delete(rid)
+    if not deleted_history and not removed_job:
         raise HTTPException(status_code=404, detail="Run not found")
-    return {"deleted": True, "run_id": rid}
+    return {
+        "deleted": True,
+        "run_id": rid,
+        "history_deleted": deleted_history,
+        "job_removed": removed_job,
+    }
 
 
 @app.post("/api/history/runs/bulk-delete", response_model=HistoryBulkDeleteResponse)
@@ -1130,7 +1281,7 @@ async def history_bulk_delete_runs(body: HistoryBulkDeleteRequest) -> HistoryBul
     ids = [rid.strip() for rid in body.run_ids if rid and rid.strip()]
     if not ids:
         raise HTTPException(status_code=400, detail="run_ids must contain at least one id")
-    result = delete_runs(get_state_store(), ids)
+    result = _delete_history_runs_with_job_purge(ids)
     return HistoryBulkDeleteResponse.model_validate(result)
 
 
@@ -1157,10 +1308,11 @@ async def history_delete_all_runs(body: HistoryDeleteAllRequest) -> HistoryBulkD
     if body.date_to is not None and not validate_date(body.date_to):
         raise HTTPException(status_code=400, detail="date_to must be YYYY-MM-DD")
 
+    ticker_val = body.ticker.strip() if body.ticker and body.ticker.strip() else None
     try:
         result = delete_all_runs(
             get_state_store(),
-            ticker=body.ticker.strip() if body.ticker and body.ticker.strip() else None,
+            ticker=ticker_val,
             date_from=body.date_from,
             date_to=body.date_to,
             sector=sect,
@@ -1168,6 +1320,11 @@ async def history_delete_all_runs(body: HistoryDeleteAllRequest) -> HistoryBulkD
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    _purge_jobs_matching_history_filters(
+        ticker=ticker_val,
+        date_from=body.date_from,
+        date_to=body.date_to,
+    )
     return HistoryBulkDeleteResponse.model_validate(result)
 
 
@@ -1180,15 +1337,23 @@ async def history_compare(body: HistoryCompareRequest) -> HistoryCompareResponse
 
 
 def _build_llm_for_dimensions(cfg: Dict[str, Any]):
-    """Construct an LLM client suitable for dimensions recomputation."""
-    from tradingagents.llm_clients import create_llm_client
+    """Construct an LLM client suitable for dimensions recomputation.
 
+    Wraps Ollama-served LLMs so `with_structured_output` uses
+    `response_format` (json_schema/json_mode) instead of function_calling —
+    the function_calling path silently returns None on most Ollama models,
+    which forces the dimensions builder to fall back to neutral defaults.
+    """
+    from tradingagents.llm_clients import create_llm_client
+    from api.llm_clients import adapt_for_structured_output
+
+    provider = cfg["llm_provider"]
     client = create_llm_client(
-        provider=cfg["llm_provider"],
+        provider=provider,
         model=cfg["quick_think_llm"],
         base_url=cfg.get("backend_url"),
     )
-    return client.get_llm()
+    return adapt_for_structured_output(client.get_llm(), provider)
 
 
 @app.post("/api/history/runs/{run_id}/recompute-dimensions", response_model=HistoryRunDetail)

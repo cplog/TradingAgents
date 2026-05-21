@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
+import { paths } from "../navigation/routes";
+import { PageFrame, PageHeader } from "../components/PageFrame";
+import { HistoryRatingChart } from "../components/charts/HistoryRatingChart";
 import { fetchHistoryRuns, type HistoryRunRef } from "../api";
 
 function normalizeRating(r: string | null | undefined): string {
@@ -53,41 +56,29 @@ export function HistoryStatsPage() {
   const ratingRows = Object.entries(stats.byRating).sort((a, b) => b[1] - a[1]);
 
   return (
-    <div style={{ maxWidth: 840 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "baseline",
-          justifyContent: "space-between",
-          gap: "var(--spacing-16)",
-          flexWrap: "wrap",
-          marginBottom: "var(--spacing-24)",
-        }}
-      >
-        <h1 style={{ fontSize: "var(--text-heading-md)", fontWeight: 600 }}>
-          History statistics
-        </h1>
-        <Link
-          to="/history"
-          style={{
-            color: "var(--color-chartwell-blue)",
-            fontWeight: 600,
-            textDecoration: "none",
-          }}
-        >
-          ← Back to History
-        </Link>
-      </div>
+    <PageFrame>
+      <PageHeader
+        title="Run statistics"
+        meta={
+          <>
+            <AppBreadcrumbs
+              items={[
+                { label: "Runs", to: paths.history },
+                { label: "Statistics" },
+              ]}
+            />
+          </>
+        }
+      />
 
-      <p style={{ color: "var(--color-ash-gray)", marginBottom: "var(--spacing-24)" }}>
-        Aggregates from the latest{" "}
-        <span className="mono">GET /api/history/runs?limit=500</span> snapshot (ratings and
+      <p className="page-lead">
+        Aggregates from the latest <span className="mono">GET /api/history/runs?limit=500</span> snapshot (ratings and
         confidence only — not realized returns).
       </p>
 
       {loading ? <p>Loading…</p> : null}
       {error ? (
-        <p style={{ color: "#b91c1c" }} role="alert">
+        <p className="notice notice--error" role="alert">
           {error}
         </p>
       ) : null}
@@ -102,31 +93,13 @@ export function HistoryStatsPage() {
               marginBottom: "var(--spacing-24)",
             }}
           >
-            <div
-              style={{
-                padding: "var(--spacing-16)",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid var(--color-stone-border)",
-                background: "var(--surface-cloud-white)",
-              }}
-            >
-              <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
-                Runs in sample
-              </div>
-              <div style={{ fontSize: "28px", fontWeight: 700 }}>{stats.total}</div>
+            <div className="stat-card">
+              <div className="stat-card__label">Runs in sample</div>
+              <div className="stat-card__value">{stats.total}</div>
             </div>
-            <div
-              style={{
-                padding: "var(--spacing-16)",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid var(--color-stone-border)",
-                background: "var(--surface-cloud-white)",
-              }}
-            >
-              <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
-                Avg confidence
-              </div>
-              <div style={{ fontSize: "28px", fontWeight: 700 }}>
+            <div className="stat-card">
+              <div className="stat-card__label">Avg confidence</div>
+              <div className="stat-card__value">
                 {stats.avgConf != null ? `${Math.round(stats.avgConf * 100)}%` : "—"}
               </div>
             </div>
@@ -135,32 +108,34 @@ export function HistoryStatsPage() {
           <h2 style={{ fontSize: "var(--text-title)", fontWeight: 600, marginBottom: 12 }}>
             Rating distribution
           </h2>
+          <HistoryRatingChart runs={runs} />
+
           {ratingRows.length === 0 ? (
-            <p style={{ color: "var(--color-ash-gray)" }}>No runs with ratings yet.</p>
+            <p style={{ color: "var(--color-ash-gray)", marginTop: 12 }}>No runs with ratings yet.</p>
           ) : (
-            <table className="markdown-table-wrap" style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid var(--color-stone-border)" }}>
-                  <th style={{ padding: "8px 12px" }}>Rating</th>
-                  <th style={{ padding: "8px 12px" }}>Count</th>
-                  <th style={{ padding: "8px 12px" }}>Share</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ratingRows.map(([label, count]) => (
-                  <tr key={label} style={{ borderBottom: "1px solid var(--color-stone-border)" }}>
-                    <td style={{ padding: "8px 12px", fontWeight: 600 }}>{label}</td>
-                    <td style={{ padding: "8px 12px" }}>{count}</td>
-                    <td style={{ padding: "8px 12px" }}>
-                      {stats.total ? `${Math.round((count / stats.total) * 100)}%` : "—"}
-                    </td>
+            <div className="ui-table-wrap" style={{ marginTop: 16 }}>
+              <table className="ui-table">
+                <thead>
+                  <tr>
+                    <th>Rating</th>
+                    <th>Count</th>
+                    <th>Share</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {ratingRows.map(([label, count]) => (
+                    <tr key={label}>
+                      <td style={{ fontWeight: 600 }}>{label}</td>
+                      <td>{count}</td>
+                      <td>{stats.total ? `${Math.round((count / stats.total) * 100)}%` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       ) : null}
-    </div>
+    </PageFrame>
   );
 }

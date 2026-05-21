@@ -26,18 +26,25 @@ export function DimensionsRadar({ factorScores, height = 280 }: DimensionsRadarP
   }));
   const anyData = data.some(d => d.available);
   if (!anyData) {
-    return <div style={{ height, display: 'flex', alignItems: 'center',
-                        justifyContent: 'center', color: '#888' }}>
-      Insufficient data for radar chart
-    </div>;
+    return (
+      <div className="chart-empty" style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        Insufficient data for radar chart
+      </div>
+    );
   }
   return (
     <ResponsiveContainer width="100%" height={height}>
       <RadarChart data={data}>
-        <PolarGrid />
-        <PolarAngleAxis dataKey="factor" />
-        <PolarRadiusAxis angle={30} domain={[0, 100]} />
-        <Radar name="Factor" dataKey="score" stroke="#3a3" fill="#3a3" fillOpacity={0.3} />
+        <PolarGrid stroke="var(--color-stone-border)" />
+        <PolarAngleAxis dataKey="factor" tick={{ fill: 'var(--color-ash-gray)', fontSize: 11 }} />
+        <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: 'var(--color-steel-gray)', fontSize: 10 }} />
+        <Radar
+          name="Factor"
+          dataKey="score"
+          stroke="var(--color-phosphor)"
+          fill="var(--color-phosphor)"
+          fillOpacity={0.25}
+        />
       </RadarChart>
     </ResponsiveContainer>
   );

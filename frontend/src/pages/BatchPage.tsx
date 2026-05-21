@@ -2,6 +2,7 @@ import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Pressable } from "../components/Pressable";
+import { PageFrame, PageHeader } from "../components/PageFrame";
 import {
   fetchConfig,
   fetchHealth,
@@ -13,6 +14,7 @@ import {
   type JobStatus,
 } from "../api";
 import { FactorBar } from "../components/dimensions/FactorBar";
+import { LlmPicker, llmConfigToOverrides, useLlmConfig } from "../components/LlmPicker";
 import type { FactorScores, StockDimensions } from "../dimensions-types";
 
 const ANALYST_OPTIONS = [
@@ -46,9 +48,21 @@ const FACTOR_LABELS: Record<keyof FactorScores, string> = {
 
 type SortDir = "asc" | "desc";
 
+function readInitialTickers(): string {
+  if (typeof window === "undefined") return "AAPL, MSFT, GOOG";
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get("tickers");
+  if (!raw) return "AAPL, MSFT, GOOG";
+  const cleaned = raw
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return cleaned.length ? cleaned.join(", ") : "AAPL, MSFT, GOOG";
+}
+
 export function BatchPage() {
   const [batchBodyRef] = useAutoAnimate();
-  const [rawTickers, setRawTickers] = useState("AAPL, MSFT, GOOG");
+  const [rawTickers, setRawTickers] = useState<string>(() => readInitialTickers());
   const [selectedAnalysts, setSelectedAnalysts] = useState<string[]>(() =>
     ANALYST_OPTIONS.map((a) => a.id)
   );
@@ -66,6 +80,8 @@ export function BatchPage() {
   const [sortKey, setSortKey] = useState<keyof FactorScores | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [searchParams, setSearchParams] = useSearchParams();
+  const { config: llmConfig, setConfig: setLlmConfig, hydrateFromServer: hydrateLlmFromServer, reset: resetLlm } =
+    useLlmConfig();
 
   useEffect(() => {
     let cancelled = false;
@@ -77,11 +93,12 @@ export function BatchPage() {
           ? (results[1].value as Record<string, unknown>)
           : null;
       setApiSupportedAnalystIds(mergeSupportedAnalystIds(h, cfg));
+      if (cfg) hydrateLlmFromServer(cfg);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hydrateLlmFromServer]);
 
   // Per-factor minimum-score filters persisted in URL (?min_value=50&min_growth=…)
   const filters = useMemo(() => {
@@ -171,6 +188,7 @@ export function BatchPage() {
     const r = await submitBatch({
       tickers,
       analysts: analystsPayload,
+      config_overrides: llmConfigToOverrides(llmConfig),
     });
     setBatchId(r.batch_id);
     setDimsByJob({});
@@ -214,40 +232,55 @@ export function BatchPage() {
     return rows;
   }, [batch?.jobs, filters, dimsByJob, sortKey, sortDir]);
 
+  const tickerCount = useMemo(
+    () =>
+      rawTickers
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean).length,
+    [rawTickers]
+  );
+
+  const estMinutes = useMemo(() => Math.max(1, Math.ceil(tickerCount * 3)), [tickerCount]);
+
   return (
-    <div style={{ display: "grid", gap: "var(--spacing-24)", maxWidth: "1200px" }}>
-      <header>
-        <h1 style={{ margin: 0, fontSize: "var(--text-heading-lg)" }}>Batch analysis</h1>
-        <p style={{ margin: "var(--spacing-8) 0 0", color: "var(--color-ash-gray)", maxWidth: "62ch" }}>
-          Comma or newline separated tickers. Parallelism follows server{" "}
-          <span className="mono">max_concurrency</span>.
-        </p>
-      </header>
+    <PageFrame wide>
+      <PageHeader
+        title="Batch analysis"
+        description="Full multi-agent LLM run per ticker. Parallelism follows server max_concurrency."
+      />
+      <div className="flow-banner">
+        <strong>High cost / long runtime.</strong> Each ticker runs the full analyst → debate → PM pipeline (~3 min
+        each). For a quick factor screen first, use Screener from the sidebar (facts-only, no LLM).
+      </div>
       {analystOmitNotice ? (
-        <p
-          role="status"
-          style={{
-            margin: 0,
-            fontSize: "var(--text-caption)",
-            color: "var(--color-mocha-dark)",
-            maxWidth: "72ch",
-          }}
-        >
+        <p className="notice notice--warn" role="status">
           {analystOmitNotice}
         </p>
       ) : null}
-      <textarea
-        value={rawTickers}
-        onChange={(e) => setRawTickers(e.target.value)}
-        rows={4}
-        style={{
-          width: "100%",
-          padding: "var(--spacing-12)",
-          borderRadius: "var(--radius-md)",
-          border: "1px solid var(--color-platinum-outline)",
-          fontFamily: "inherit",
-        }}
-      />
+      <label className="ui-field">
+        <span className="ui-field__label">Tickers</span>
+        <textarea
+          className="ui-textarea"
+          value={rawTickers}
+          onChange={(e) => setRawTickers(e.target.value)}
+          rows={4}
+        />
+      </label>
+      {tickerCount > 0 && (
+        <p style={{ margin: "0 0 var(--spacing-12)", fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
+          {tickerCount} ticker{tickerCount === 1 ? "" : "s"} · rough estimate ~{estMinutes} min total (sequential
+          mental model; server may run in parallel)
+        </p>
+      )}
+      <details open style={{ marginTop: 12, marginBottom: 12 }}>
+        <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: "var(--text-caption)" }}>
+          LLM routing
+        </summary>
+        <div style={{ marginTop: 8 }}>
+          <LlmPicker value={llmConfig} onChange={setLlmConfig} onReset={resetLlm} variant="compact" />
+        </div>
+      </details>
       <div style={{ marginTop: 12 }}>
         <span style={{ fontSize: "var(--text-caption)", display: "block", marginBottom: 6 }}>
           Focus area (analysts)
@@ -272,21 +305,9 @@ export function BatchPage() {
         </div>
       </div>
       <Pressable
+        className="ui-btn-primary"
         disabled={apiSupportedAnalystIds === undefined}
         onClick={() => void run().catch((e) => setErr(String(e)))}
-        style={{
-          marginTop: 12,
-          padding: "10px 20px",
-          borderRadius: "var(--radius-buttons)",
-          background:
-            apiSupportedAnalystIds === undefined
-              ? "var(--color-platinum-outline)"
-              : "var(--color-chartwell-blue)",
-          color: apiSupportedAnalystIds === undefined ? "var(--color-steel-gray)" : "white",
-          border: "none",
-          fontWeight: 600,
-          cursor: apiSupportedAnalystIds === undefined ? "not-allowed" : "pointer",
-        }}
       >
         {apiSupportedAnalystIds === undefined ? "Checking API…" : "Submit batch"}
       </Pressable>
@@ -295,7 +316,7 @@ export function BatchPage() {
           batch_id: {batchId}
         </p>
       )}
-      {err && <p style={{ color: "#b91c1c" }}>{err}</p>}
+      {err && <p className="notice notice--error">{err}</p>}
 
       {batch && (
         <>
@@ -435,6 +456,6 @@ export function BatchPage() {
           </div>
         </>
       )}
-    </div>
+    </PageFrame>
   );
 }

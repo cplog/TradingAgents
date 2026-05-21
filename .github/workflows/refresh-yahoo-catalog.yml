@@ -1,0 +1,84 @@
+name: Refresh Yahoo sector/industry catalog
+
+# Pulls the latest sector → industry → ticker mapping from Yahoo Finance and
+# upserts it into the Cloudflare D1 history database, so the Sector/industry
+# explorer ("/sectors") and the per-industry batch flow keep working without
+# anyone having to remember to run `scripts/cold_start_yahoo_sectors.py`.
+#
+# Cadence: weekly. Yahoo renames industries and rebalances "top companies" lists
+# slowly; a daily run would be wasteful and may also tickle Yahoo's rate limits.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_ACCOUNT_ID
+#   CLOUDFLARE_D1_DATABASE_ID
+#   CLOUDFLARE_API_TOKEN  (must have D1:write on the database above)
+
+on:
+  schedule:
+    # 06:17 UTC every Monday — off-peak, not on the hour to avoid GH cron herds.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      markets:
+        description: 'Markets to refresh constituents for (comma-separated: us, hk)'
+        required: false
+        default: 'us,hk'
+      constituents:
+        description: 'Also refresh per-industry ticker lists (slow but recommended)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+concurrency:
+  group: refresh-yahoo-catalog
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install project dependencies
+        run: uv sync --frozen
+
+      - name: Verify Cloudflare D1 secrets are present
+        run: |
+          missing=()
+          [[ -z "${CLOUDFLARE_ACCOUNT_ID}" ]] && missing+=("CLOUDFLARE_ACCOUNT_ID")
+          [[ -z "${CLOUDFLARE_D1_DATABASE_ID}" ]] && missing+=("CLOUDFLARE_D1_DATABASE_ID")
+          [[ -z "${CLOUDFLARE_API_TOKEN}" ]] && missing+=("CLOUDFLARE_API_TOKEN")
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing required repository secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Refresh Yahoo catalog into Cloudflare D1
+        run: |
+          CONSTITUENTS_FLAG=""
+          if [[ "${CONSTITUENTS_INPUT:-true}" == "true" ]]; then
+            CONSTITUENTS_FLAG="--constituents"
+          fi
+          uv run python scripts/cold_start_yahoo_sectors.py \
+            ${CONSTITUENTS_FLAG} \
+            --markets "${MARKETS_INPUT:-us,hk}"
+        env:
+          MARKETS_INPUT: ${{ github.event.inputs.markets || 'us,hk' }}
+          CONSTITUENTS_INPUT: ${{ github.event.inputs.constituents || 'true' }}

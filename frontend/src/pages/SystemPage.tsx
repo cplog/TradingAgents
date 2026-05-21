@@ -6,6 +6,7 @@ import {
   postRuntimeConfig,
   type HealthPayload,
 } from "../api";
+import { PageFrame, PageHeader } from "../components/PageFrame";
 
 export function SystemPage() {
   const [health, setHealth] = useState<HealthPayload | null>(null);
@@ -27,10 +28,10 @@ export function SystemPage() {
   }, []);
 
   return (
-    <div style={{ maxWidth: "720px" }}>
-      <h1 style={{ marginTop: 0 }}>System and maintenance</h1>
+    <PageFrame>
+      <PageHeader title="System and maintenance" description="Service health, runtime config, and cache controls." />
 
-      <section
+      <section className="panel"
         style={{
           marginBottom: "var(--spacing-24)",
           padding: "var(--spacing-24)",
@@ -233,6 +234,6 @@ export function SystemPage() {
           </button>
         </div>
       </section>
-    </div>
+    </PageFrame>
   );
 }

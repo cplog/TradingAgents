@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from api.run_provenance import build_run_provenance, merge_config_snapshot
 from api.state_store import StateStore, get_state_store
 from api.tickers import _safe_ticker_component, normalize_ticker, validate_date
 
@@ -31,6 +32,20 @@ MAX_GLOBAL_INDEX = 500
 MAX_HISTORY_RUNS_QUERY_LIMIT = 500
 
 _d1_initialized = False
+_d1_http_session: Optional[requests.Session] = None
+
+# List views should not pull multi-MB JSON blobs over the D1 HTTP API.
+_D1_LIST_COLUMNS = """
+    run_id, job_id, ticker, trade_date, rating, confidence,
+    completed_at, created_at, batch_id,
+    factor_scores_json, facts_sector, facts_industry, provenance_json,
+    CASE WHEN dimensions_json IS NOT NULL AND
+         trim(COALESCE(dimensions_json, '')) NOT IN ('', '{}', 'null')
+         THEN 1 ELSE 0 END AS has_dimensions,
+    CASE WHEN dimensions_commentary_json IS NOT NULL AND
+         trim(COALESCE(dimensions_commentary_json, '')) NOT IN ('', '{}', 'null')
+         THEN 1 ELSE 0 END AS has_commentary
+"""
 
 
 def _d1_config() -> Optional[dict[str, str]]:
@@ -49,7 +64,22 @@ def d1_history_enabled() -> bool:
     return cloudflare_d1_enabled() and _d1_config() is not None
 
 
-def _d1_query(sql: str, params: Optional[list[Any]] = None) -> list[dict[str, Any]]:
+def _d1_http() -> requests.Session:
+    global _d1_http_session
+    if _d1_http_session is None:
+        sess = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8)
+        sess.mount("https://", adapter)
+        _d1_http_session = sess
+    return _d1_http_session
+
+
+def _d1_query(
+    sql: str,
+    params: Optional[list[Any]] = None,
+    *,
+    timeout: Optional[float] = None,
+) -> list[dict[str, Any]]:
     cfg = _d1_config()
     if not cfg:
         raise RuntimeError("D1 is not configured")
@@ -65,7 +95,9 @@ def _d1_query(sql: str, params: Optional[list[Any]] = None) -> list[dict[str, An
         "Authorization": f"Bearer {cfg['token']}",
         "Content-Type": "application/json",
     }
-    resp = requests.post(url, headers=headers, json=body, timeout=35)
+    if timeout is None:
+        timeout = float(os.getenv("TRADINGAGENTS_D1_QUERY_TIMEOUT", "35"))
+    resp = _d1_http().post(url, headers=headers, json=body, timeout=timeout)
     resp.raise_for_status()
     payload = resp.json()
     result_rows = payload.get("result") or []
@@ -123,6 +155,24 @@ def _ensure_d1_schema() -> None:
         _d1_query("ALTER TABLE analysis_runs ADD COLUMN dimensions_error TEXT")
     except Exception:
         pass
+    for col, typ in (
+        ("factor_scores_json", "TEXT"),
+        ("facts_sector", "TEXT"),
+        ("facts_industry", "TEXT"),
+        ("provenance_json", "TEXT"),
+    ):
+        try:
+            _d1_query(f"ALTER TABLE analysis_runs ADD COLUMN {col} {typ}")
+        except Exception:
+            pass
+    _d1_query(
+        "CREATE INDEX IF NOT EXISTS idx_analysis_runs_facts_sector "
+        "ON analysis_runs (facts_sector)"
+    )
+    _d1_query(
+        "CREATE INDEX IF NOT EXISTS idx_analysis_runs_facts_industry "
+        "ON analysis_runs (facts_industry)"
+    )
     # Dimensions peer-universe persistence (distinct from peer JSON caches on disk).
     _d1_query(
         """
@@ -210,6 +260,107 @@ def _ticker_index_key(ticker: str) -> str:
     return f"{KEY_PREFIX_TICKER_INDEX}{safe}"
 
 
+_FACTOR_SCORE_KEYS = (
+    "value",
+    "growth",
+    "quality",
+    "momentum",
+    "low_risk",
+    "sentiment",
+)
+
+
+def _compact_factor_scores(dimensions: Any) -> Dict[str, float]:
+    if not isinstance(dimensions, dict):
+        return {}
+    fs = dimensions.get("factor_scores")
+    if not isinstance(fs, dict):
+        return {}
+    scores: Dict[str, float] = {}
+    for name in _FACTOR_SCORE_KEYS:
+        v = fs.get(name)
+        if isinstance(v, dict) and v.get("score") is not None:
+            try:
+                scores[name] = float(v["score"])
+            except (TypeError, ValueError):
+                continue
+    return scores
+
+
+def _list_index_fields_from_full(full: Dict[str, Any]) -> Dict[str, Any]:
+    """Denormalized columns for fast GET /api/history/runs (avoids large JSON in list queries)."""
+    dims = full.get("dimensions") if isinstance(full.get("dimensions"), dict) else {}
+    facts = dims.get("facts") if isinstance(dims.get("facts"), dict) else {}
+    scores = _compact_factor_scores(dims)
+    cfg = full.get("config_snapshot") if isinstance(full.get("config_snapshot"), dict) else {}
+    cov = full.get("analyst_coverage")
+    prov = (
+        build_run_provenance(cfg, cov if isinstance(cov, dict) else None)
+        if cfg
+        else None
+    )
+    sector = facts.get("sector") if isinstance(facts.get("sector"), str) else ""
+    industry = facts.get("industry") if isinstance(facts.get("industry"), str) else ""
+    return {
+        "factor_scores_json": json.dumps(scores, ensure_ascii=False) if scores else None,
+        "facts_sector": sector.strip() or None,
+        "facts_industry": industry.strip() or None,
+        "provenance_json": json.dumps(prov, ensure_ascii=False) if prov else None,
+    }
+
+
+def _parse_factor_scores_json(raw: Any) -> Dict[str, float]:
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: Dict[str, float] = {}
+    for k, v in data.items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[str(k)] = float(v)
+    return out
+
+
+def _d1_list_row_to_ref(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a compact history ref from a slim D1 list row."""
+    factor_scores = _parse_factor_scores_json(row.get("factor_scores_json"))
+    prov_raw = row.get("provenance_json")
+    provenance = None
+    if isinstance(prov_raw, str) and prov_raw.strip():
+        try:
+            provenance = json.loads(prov_raw)
+        except json.JSONDecodeError:
+            provenance = None
+    base: Dict[str, Any] = {
+        "run_id": row.get("run_id"),
+        "job_id": row.get("job_id"),
+        "ticker": row.get("ticker"),
+        "date": row.get("trade_date"),
+        "rating": row.get("rating"),
+        "confidence": row.get("confidence"),
+        "completed_at": row.get("completed_at"),
+        "created_at": row.get("created_at"),
+        "batch_id": row.get("batch_id"),
+        "has_dimensions": bool(row.get("has_dimensions")),
+        "has_commentary": bool(row.get("has_commentary")),
+    }
+    if factor_scores:
+        base["factor_scores"] = factor_scores
+    fs_sec = row.get("facts_sector")
+    fs_ind = row.get("facts_industry")
+    if isinstance(fs_sec, str) and fs_sec.strip():
+        base["facts_sector"] = fs_sec.strip()
+    if isinstance(fs_ind, str) and fs_ind.strip():
+        base["facts_industry"] = fs_ind.strip()
+    if isinstance(provenance, dict):
+        base["provenance"] = provenance
+    return _ref_from_record(base)
+
+
 def _ref_from_record(rec: Dict[str, Any]) -> Dict[str, Any]:
     """Compact entry for index lists (no full reports)."""
     ref: Dict[str, Any] = {
@@ -235,36 +386,29 @@ def _ref_from_record(rec: Dict[str, Any]) -> Dict[str, Any]:
         ref["facts_sector"] = fs_sec.strip()
     if isinstance(fs_ind, str) and fs_ind.strip():
         ref["facts_industry"] = fs_ind.strip()
-    dims = rec.get("dimensions") or {}
-    fs = dims.get("factor_scores") if isinstance(dims, dict) else None
-    if isinstance(fs, dict):
-        scores: Dict[str, Any] = {}
-        for name in ("value", "growth", "quality", "momentum", "low_risk", "sentiment"):
-            v = fs.get(name)
-            if isinstance(v, dict) and v.get("score") is not None:
-                scores[name] = v["score"]
-        if scores:
-            ref["factor_scores"] = scores
+    if isinstance(rec.get("factor_scores"), dict) and rec["factor_scores"]:
+        ref["factor_scores"] = dict(rec["factor_scores"])
+    else:
+        dims = rec.get("dimensions") or {}
+        fs = dims.get("factor_scores") if isinstance(dims, dict) else None
+        if isinstance(fs, dict):
+            scores: Dict[str, Any] = {}
+            for name in _FACTOR_SCORE_KEYS:
+                v = fs.get(name)
+                if isinstance(v, dict) and v.get("score") is not None:
+                    scores[name] = v["score"]
+            if scores:
+                ref["factor_scores"] = scores
+    if rec.get("provenance"):
+        ref["provenance"] = rec["provenance"]
+    else:
+        cfg = rec.get("config_snapshot")
+        cov = rec.get("analyst_coverage")
+        if isinstance(cfg, dict) and cfg:
+            ref["provenance"] = build_run_provenance(
+                cfg, cov if isinstance(cov, dict) else None
+            )
     return ref
-
-
-def _merge_config_snapshot(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Non-sensitive fields for history / compare."""
-    if not config:
-        return {}
-    out: Dict[str, Any] = {}
-    for k in (
-        "llm_provider",
-        "deep_think_llm",
-        "quick_think_llm",
-        "max_debate_rounds",
-        "max_risk_discuss_rounds",
-        "output_language",
-        "analysts",
-    ):
-        if k in config and config[k] is not None:
-            out[k] = config[k]
-    return out
 
 
 def persist_completed_run(
@@ -305,7 +449,7 @@ def persist_completed_run(
         "completed_at": result.get("completed_at"),
         "created_at": created_iso,
         "batch_id": batch_id,
-        "config_snapshot": _merge_config_snapshot(config_snapshot),
+        "config_snapshot": merge_config_snapshot(config_snapshot),
         "dimensions": result.get("dimensions"),
         "dimensions_commentary": result.get("dimensions_commentary"),
         "dimensions_error": result.get("dimensions_error"),
@@ -332,14 +476,16 @@ def _persist_kv_run_and_indexes(
 
 def _persist_d1(full: Dict[str, Any]) -> None:
     _ensure_d1_schema()
+    list_fields = _list_index_fields_from_full(full)
     _d1_query(
         """
         INSERT INTO analysis_runs (
             run_id, job_id, ticker, trade_date, rating, confidence,
             reports_json, structured_json, artifacts_path,
             completed_at, created_at, batch_id, config_snapshot_json,
-            dimensions_json, dimensions_commentary_json, dimensions_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            dimensions_json, dimensions_commentary_json, dimensions_error,
+            factor_scores_json, facts_sector, facts_industry, provenance_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(run_id) DO UPDATE SET
             job_id = excluded.job_id,
             ticker = excluded.ticker,
@@ -355,7 +501,11 @@ def _persist_d1(full: Dict[str, Any]) -> None:
             config_snapshot_json = excluded.config_snapshot_json,
             dimensions_json = excluded.dimensions_json,
             dimensions_commentary_json = excluded.dimensions_commentary_json,
-            dimensions_error = excluded.dimensions_error
+            dimensions_error = excluded.dimensions_error,
+            factor_scores_json = excluded.factor_scores_json,
+            facts_sector = excluded.facts_sector,
+            facts_industry = excluded.facts_industry,
+            provenance_json = excluded.provenance_json
         """,
         [
             str(full.get("run_id") or ""),
@@ -380,6 +530,10 @@ def _persist_d1(full: Dict[str, Any]) -> None:
             if full.get("dimensions_commentary") is not None
             else None,
             full.get("dimensions_error"),
+            list_fields["factor_scores_json"],
+            list_fields["facts_sector"],
+            list_fields["facts_industry"],
+            list_fields["provenance_json"],
         ],
     )
 
@@ -500,10 +654,32 @@ def _list_runs_kv_index(
                 continue
             if not _in_date_range(d, date_from, date_to):
                 continue
-        out.append(r)
+        enriched = _enrich_ref_from_store(store, r)
+        out.append(enriched)
         if len(out) >= limit:
             break
     return out
+
+
+def _enrich_ref_from_store(store: StateStore, ref: Dict[str, Any]) -> Dict[str, Any]:
+    """Backfill provenance for index rows saved before provenance was indexed."""
+    if ref.get("provenance"):
+        return ref
+    jid = str(ref.get("job_id") or ref.get("run_id") or "").strip()
+    if not jid:
+        return ref
+    full = store.get_json(_run_key(jid))
+    if not isinstance(full, dict):
+        return ref
+    cfg = full.get("config_snapshot")
+    cov = full.get("analyst_coverage")
+    if isinstance(cfg, dict) and cfg:
+        merged = dict(ref)
+        merged["provenance"] = build_run_provenance(
+            cfg, cov if isinstance(cov, dict) else None
+        )
+        return merged
+    return ref
 
 
 def list_runs(
@@ -564,67 +740,27 @@ def _list_runs_d1(
         where.append("trade_date <= ?")
         params.append(date_to)
     if sector:
-        where.append("json_extract(dimensions_json, '$.facts.sector') = ?")
-        params.append(sector)
+        where.append(
+            "(facts_sector = ? OR json_extract(dimensions_json, '$.facts.sector') = ?)"
+        )
+        params.extend([sector, sector])
     if industry:
-        where.append("json_extract(dimensions_json, '$.facts.industry') = ?")
-        params.append(industry)
+        where.append(
+            "(facts_industry = ? OR json_extract(dimensions_json, '$.facts.industry') = ?)"
+        )
+        params.extend([industry, industry])
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     sql = f"""
-        SELECT run_id, job_id, ticker, trade_date, rating, confidence,
-               completed_at, created_at, batch_id, dimensions_json,
-               dimensions_commentary_json
+        SELECT {_D1_LIST_COLUMNS}
         FROM analysis_runs
         {where_sql}
         ORDER BY completed_at DESC, created_at DESC
         LIMIT ?
     """
     params.append(limit)
-    rows = _d1_query(sql, params)
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        dims_raw = row.get("dimensions_json")
-        comm_raw = row.get("dimensions_commentary_json")
-        dimensions = (
-            json.loads(dims_raw) if isinstance(dims_raw, str) and dims_raw else None
-        )
-        has_dimensions = bool(
-            isinstance(dims_raw, str) and dims_raw.strip() not in ("", "null", "{}")
-        )
-        has_commentary = bool(
-            isinstance(comm_raw, str) and comm_raw.strip() not in ("", "null", "{}")
-        )
-        facts_sector: Optional[str] = None
-        facts_industry: Optional[str] = None
-        if isinstance(dimensions, dict):
-            facts = dimensions.get("facts")
-            if isinstance(facts, dict):
-                s = facts.get("sector")
-                i = facts.get("industry")
-                if isinstance(s, str) and s.strip():
-                    facts_sector = s.strip()
-                if isinstance(i, str) and i.strip():
-                    facts_industry = i.strip()
-        base: Dict[str, Any] = {
-            "run_id": row.get("run_id"),
-            "job_id": row.get("job_id"),
-            "ticker": row.get("ticker"),
-            "date": row.get("trade_date"),
-            "rating": row.get("rating"),
-            "confidence": row.get("confidence"),
-            "completed_at": row.get("completed_at"),
-            "created_at": row.get("created_at"),
-            "batch_id": row.get("batch_id"),
-            "dimensions": dimensions if isinstance(dimensions, dict) else None,
-            "has_dimensions": has_dimensions,
-            "has_commentary": has_commentary,
-        }
-        if facts_sector:
-            base["facts_sector"] = facts_sector
-        if facts_industry:
-            base["facts_industry"] = facts_industry
-        out.append(_ref_from_record(base))
-    return out
+    list_timeout = float(os.getenv("TRADINGAGENTS_D1_LIST_TIMEOUT", "20"))
+    rows = _d1_query(sql, params, timeout=list_timeout)
+    return [_d1_list_row_to_ref(row) for row in rows]
 
 
 def _list_history_coverage_aggregates() -> List[Dict[str, Any]]:
@@ -732,6 +868,36 @@ def compare_runs(store: StateStore, run_id_a: str, run_id_b: str) -> Optional[Di
     return build_compare_payload(ra, rb)
 
 
+def _delete_kv_run_record(store: StateStore, run_id: str) -> bool:
+    """Remove a run blob and list indexes from KV/local StateStore (legacy path)."""
+    rid = (run_id or "").strip()
+    if not rid:
+        return False
+    removed = False
+    rec = store.get_json(_run_key(rid))
+    if isinstance(rec, dict):
+        store.put_json(_run_key(rid), None)
+        removed = True
+        ticker = rec.get("ticker")
+        if isinstance(ticker, str) and ticker.strip():
+            try:
+                norm_ticker = normalize_ticker(ticker)
+            except ValueError:
+                norm_ticker = None
+            if norm_ticker:
+                removed = _remove_ref(store, _ticker_index_key(norm_ticker), rid) or removed
+    ticker_guess = _ticker_from_global_index(store, rid)
+    if ticker_guess:
+        try:
+            norm_guess = normalize_ticker(ticker_guess)
+        except ValueError:
+            norm_guess = None
+        if norm_guess:
+            removed = _remove_ref(store, _ticker_index_key(norm_guess), rid) or removed
+    removed = _remove_ref(store, KEY_GLOBAL_INDEX, rid) or removed
+    return removed
+
+
 def delete_run(store: StateStore, run_id: str) -> bool:
     """Delete a run from history storage and indexes."""
     rid = (run_id or "").strip()
@@ -739,40 +905,64 @@ def delete_run(store: StateStore, run_id: str) -> bool:
         return False
 
     if d1_history_enabled():
-        return _delete_run_d1(rid)
+        deleted = _delete_run_d1(rid)
+        # Clear legacy KV copies from before D1-only persistence.
+        kv_deleted = _delete_kv_run_record(store, rid)
+        return deleted or kv_deleted
 
-    rec = get_run(store, rid)
-    if not rec:
-        return False
-
-    store.put_json(_run_key(rid), None)
-    _remove_ref(store, KEY_GLOBAL_INDEX, rid)
-
-    ticker = rec.get("ticker")
-    if isinstance(ticker, str) and ticker.strip():
-        try:
-            norm_ticker = normalize_ticker(ticker)
-        except ValueError:
-            norm_ticker = None
-        if norm_ticker:
-            _remove_ref(store, _ticker_index_key(norm_ticker), rid)
-    return True
+    if _delete_kv_run_record(store, rid):
+        return True
+    rec = store.get_json(_run_key(rid))
+    if isinstance(rec, dict):
+        store.put_json(_run_key(rid), None)
+        return True
+    return False
 
 
-def _remove_ref(store: StateStore, index_key: str, run_id: str) -> None:
+def _remove_ref(store: StateStore, index_key: str, run_id: str) -> bool:
     cur = store.get_json(index_key)
     rows: List[Dict[str, Any]] = cur if isinstance(cur, list) else []
     filtered = [r for r in rows if (r.get("run_id") or r.get("job_id")) != run_id]
+    if len(filtered) == len(rows):
+        return False
     store.put_json(index_key, filtered)
+    return True
+
+
+def _ticker_from_global_index(store: StateStore, run_id: str) -> Optional[str]:
+    """Resolve ticker for a run id from the global history index (no blob required)."""
+    cur = store.get_json(KEY_GLOBAL_INDEX)
+    rows: List[Dict[str, Any]] = cur if isinstance(cur, list) else []
+    for ref in rows:
+        if not isinstance(ref, dict):
+            continue
+        if (ref.get("run_id") or ref.get("job_id")) != run_id:
+            continue
+        ticker = ref.get("ticker")
+        if isinstance(ticker, str) and ticker.strip():
+            return ticker.strip()
+    return None
 
 
 def _delete_run_d1(run_id: str) -> bool:
     _ensure_d1_schema()
-    rows = _d1_query("SELECT run_id FROM analysis_runs WHERE run_id = ? LIMIT 1", [run_id])
-    if not rows:
+    try:
+        rows = _d1_query(
+            "SELECT run_id FROM analysis_runs WHERE run_id = ? OR job_id = ? LIMIT 1",
+            [run_id, run_id],
+        )
+        if not rows:
+            return False
+        actual = str(rows[0].get("run_id") or run_id).strip()
+        _d1_query("DELETE FROM analysis_runs WHERE run_id = ?", [actual])
+        still = _d1_query(
+            "SELECT run_id FROM analysis_runs WHERE run_id = ? LIMIT 1",
+            [actual],
+        )
+        return not still
+    except Exception:
+        logger.exception("D1 delete failed for run_id=%s", run_id)
         return False
-    _d1_query("DELETE FROM analysis_runs WHERE run_id = ?", [run_id])
-    return True
 
 
 def delete_runs(store: StateStore, run_ids: List[str]) -> Dict[str, Any]:

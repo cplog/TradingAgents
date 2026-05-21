@@ -21,14 +21,7 @@ const jumpLink = { color: 'var(--color-chartwell-blue)', textDecoration: 'none' 
 export function DimensionsPanel({ dimensions, commentary, error, commentaryError }: DimensionsPanelProps) {
   if (error && !dimensions) {
     return (
-      <div
-        style={{
-          padding: 16,
-          border: '1px solid #ea3',
-          borderRadius: 'var(--radius-cards)',
-          background: 'var(--surface-cloud-white)',
-        }}
-      >
+      <div className="panel panel--error">
         <strong>Dimensions unavailable for this run.</strong>
         <p style={{ margin: '8px 0 0', color: 'var(--color-ash-gray)' }}>{error}</p>
       </div>
@@ -36,20 +29,13 @@ export function DimensionsPanel({ dimensions, commentary, error, commentaryError
   }
   if (!dimensions) {
     return (
-      <div
-        style={{
-          padding: 16,
-          border: '1px dashed var(--color-stone-border)',
-          borderRadius: 'var(--radius-cards)',
-          color: 'var(--color-ash-gray)',
-        }}
-      >
+      <div className="panel dimensions-empty">
         Dimensions not available — this run predates v1.0 of the dimensions layer.
       </div>
     );
   }
   return (
-    <section style={{ display: 'grid', gap: 24 }}>
+    <section className="dimensions-panel">
       <header>
         <h3 style={{ margin: 0, color: 'var(--color-slate-text)' }}>Dimensional study</h3>
         <p

@@ -30,3 +30,12 @@ def test_keep_snapshot_for_facts_only_even_if_style_scores_empty():
     snap = _snapshot_with_style_scores(None)
     snap["source"] = "facts_only"
     assert _should_rebuild_graph_dimensions_snapshot(snap) is False
+
+
+def test_rebuild_facts_only_when_pillar_scoring_failed():
+    snap = _snapshot_with_style_scores(50.0)
+    snap["source"] = "facts_only"
+    snap["data_quality_flags"] = [
+        "pillar_scoring_unavailable: structured returned NoneType",
+    ]
+    assert _should_rebuild_graph_dimensions_snapshot(snap) is True

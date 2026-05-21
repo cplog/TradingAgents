@@ -169,6 +169,10 @@ class JobStatusResponse(AnalyzeResponse):
         default=None,
         description="LangGraph thread id (ticker+date hash) used for checkpoint resume.",
     )
+    provenance: Optional[RunProvenance] = Field(
+        default=None,
+        description="LLM and data-source snapshot for this job (live + completed).",
+    )
 
 
 class ResumeJobResponse(BaseModel):
@@ -308,6 +312,38 @@ class HealthResponse(BaseModel):
     )
 
 
+class RunProvenance(BaseModel):
+    """LLM, data routing, and analyst coverage summary for bias-aware comparison."""
+
+    llm_provider: Optional[str] = None
+    llm_deep: Optional[str] = None
+    llm_quick: Optional[str] = None
+    data_routing: Optional[str] = Field(
+        default=None,
+        description="Short vendor routing label (OHLCV, fundamentals, news, etc.).",
+    )
+    analysts_selected: List[str] = Field(default_factory=list)
+    analysts_ok: int = 0
+    analysts_empty: int = 0
+    analysts_failed: int = 0
+    analysts_total: int = 0
+    source_pillars: int = Field(
+        0,
+        ge=0,
+        le=4,
+        description="How many of the four data-vendor pillars were configured.",
+    )
+    vendor_count: int = Field(
+        0,
+        ge=0,
+        description="Distinct primary vendors across pillars (1 = single-source risk).",
+    )
+    bias_warnings: List[str] = Field(
+        default_factory=list,
+        description="Human-readable flags when setup may skew comparisons.",
+    )
+
+
 class HistoryRunRef(BaseModel):
     """Compact row for history lists (from KV indexes)."""
 
@@ -337,6 +373,10 @@ class HistoryRunRef(BaseModel):
         default=None,
         description="True when persisted row includes commentary JSON.",
     )
+    provenance: Optional[RunProvenance] = Field(
+        default=None,
+        description="LLM + data sources + analyst coverage snapshot for this run.",
+    )
 
 
 class HistoryCoverageRow(BaseModel):
@@ -365,6 +405,22 @@ class IndustryConstituentRow(BaseModel):
     latest_completed_at: Optional[str] = None
 
 
+class CatalogStatusResponse(BaseModel):
+    """Yahoo sector/industry catalog freshness — row counts and most-recent refresh time."""
+
+    d1_enabled: bool
+    buckets: int = Field(0, ge=0)
+    constituents_total: int = Field(0, ge=0)
+    constituents_us: int = Field(0, ge=0)
+    constituents_hk: int = Field(0, ge=0)
+    latest_bucket_refreshed_at: Optional[float] = Field(
+        None, description="POSIX timestamp of newest yahoo_sector_industry_buckets.updated_at."
+    )
+    latest_constituent_refreshed_at: Optional[float] = Field(
+        None, description="POSIX timestamp of newest yahoo_industry_constituents.updated_at."
+    )
+
+
 
 class HistoryRunDetail(BaseModel):
     """Full persisted run (same shape as completed job result + metadata)."""
@@ -383,6 +439,7 @@ class HistoryRunDetail(BaseModel):
     created_at: Optional[str] = None
     batch_id: Optional[str] = None
     config_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    provenance: Optional[RunProvenance] = None
     dimensions: Optional[StockDimensions] = None
     dimensions_commentary: Optional[DimensionsCommentary] = None
     dimensions_error: Optional[str] = None

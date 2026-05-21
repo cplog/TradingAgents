@@ -136,6 +136,39 @@ def test_history_delete_run(api_client: TestClient):
     after = api_client.get("/api/history/runs").json()
     assert all(row.get("run_id") != run_id for row in after)
 
+    jobs_after = api_client.get("/api/jobs").json()
+    assert all(j.get("job_id") != run_id for j in jobs_after)
+
+
+@pytest.mark.unit
+def test_history_bulk_delete_job_only_rows(api_client: TestClient, monkeypatch):
+    """Bulk delete must purge in-memory jobs even when history persistence was skipped."""
+
+    def _skip_persist(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("api.history.persist_completed_run", _skip_persist)
+
+    r = api_client.post("/analyze", json={"ticker": "AAPL"})
+    assert r.status_code == 200
+    job_id = r.json()["job_id"]
+    _wait_job(api_client, job_id)
+
+    jobs_before = api_client.get("/api/jobs").json()
+    assert any(j.get("job_id") == job_id for j in jobs_before)
+
+    bulk = api_client.post(
+        "/api/history/runs/bulk-delete",
+        json={"run_ids": [job_id]},
+    )
+    assert bulk.status_code == 200
+    body = bulk.json()
+    assert body["deleted_count"] == 1
+    assert body["deleted_run_ids"] == [job_id]
+
+    jobs_after = api_client.get("/api/jobs").json()
+    assert all(j.get("job_id") != job_id for j in jobs_after)
+
 
 @pytest.mark.unit
 def test_history_bulk_delete_runs(api_client: TestClient):

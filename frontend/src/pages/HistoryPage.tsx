@@ -1,6 +1,8 @@
 import { useAutoAnimate } from "@formkit/auto-animate/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
+import { runsPath, stocksPath } from "../navigation/routes";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -9,28 +11,41 @@ import {
   deleteHistoryRun,
   fetchHistoryRun,
   fetchHistoryRuns,
+  fetchJobs,
   getDimensionsByTicker,
-  getJobDimensions,
-  getJob,
   postHistoryCompare,
-  recomputeDimensions,
-  resumeJob,
   submitAnalyze,
-  type HistoryRunDetail,
+  submitBatch,
   type HistoryCompareResponse,
   type HistoryRunRef,
-  type JobStatus,
 } from "../api";
+import { HistoryTickerCards } from "../components/history/HistoryTickerCards";
+import { RunProvenancePanel } from "../components/history/RunProvenancePanel";
+import type { TickerRollup } from "../utils/historyRollup";
 import { buildRerunAnalyzePayload } from "../utils/historyRerun";
+import {
+  formatHistoryTimestampWithZone,
+  hasActiveHistoryRows,
+  mergeHistoryAndJobs,
+  sortHistoryRows,
+  statusLabel,
+  type HistorySortKey,
+  type HistoryTableRow,
+} from "../utils/historyDisplay";
+import {
+  formatLlmLabel,
+  formatSourcesLabel,
+  hasBiasWarning,
+  provenanceTitle,
+} from "../utils/runProvenance";
 import { DimensionsPanel } from "../components/dimensions/DimensionsPanel";
 import { DimensionsRadar } from "../components/dimensions/DimensionsRadar";
 import { FactorBar } from "../components/dimensions/FactorBar";
-import type { DimensionsCommentary, FactorScores, StockDimensions } from "../dimensions-types";
+import type { FactorScores, StockDimensions } from "../dimensions-types";
 import type { Components } from "react-markdown";
 import {
   orderedReportSectionKeys,
   prepareReportMarkdown,
-  REPORT_SECTION_LABELS,
 } from "../utils/reportMarkdown";
 
 const REPORT_MD_COMPONENTS: Components = {
@@ -50,8 +65,6 @@ const FACTOR_KEYS: (keyof FactorScores)[] = [
   "sentiment",
 ];
 
-type DetailTab = "report" | "dimensions";
-
 function pct(conf: number | null | undefined): string {
   if (conf == null || !Number.isFinite(conf)) return "—";
   return `${Math.round(conf * 100)}%`;
@@ -60,7 +73,7 @@ function pct(conf: number | null | undefined): string {
 type RowFactorSource = "run_snapshot" | "live_preview" | "loading" | "unavailable";
 
 function pickRowFactorScore(
-  run: HistoryRunRef,
+  run: HistoryTableRow,
   tickerPreview: StockDimensions | null | undefined,
   key: keyof FactorScores,
 ): number | null {
@@ -76,7 +89,7 @@ function pickRowFactorScore(
 }
 
 function inferRowFactorSource(
-  run: HistoryRunRef,
+  run: HistoryTableRow,
   tickerPreview: StockDimensions | null | undefined,
 ): RowFactorSource {
   const hasRunSnapshot = FACTOR_KEYS.some((k) => {
@@ -92,8 +105,14 @@ function inferRowFactorSource(
 
 export function HistoryPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const urlRunHandled = useRef(false);
+  /** Rows the user deleted this session — filters live-job merge until refresh clears worker. */
+  const hiddenRunIdsRef = useRef<Set<string>>(new Set());
   const [runsBodyRef] = useAutoAnimate();
-  const [runs, setRuns] = useState<HistoryRunRef[]>([]);
+  const [runs, setRuns] = useState<HistoryTableRow[]>([]);
+  const [sortKey, setSortKey] = useState<HistorySortKey>("processing_desc");
+  const [includeLiveJobs, setIncludeLiveJobs] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tickerFilter, setTickerFilter] = useState("");
@@ -108,27 +127,16 @@ export function HistoryPage() {
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
-  const [detailRunId, setDetailRunId] = useState<string | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
-  const [detail, setDetail] = useState<HistoryRunDetail | null>(null);
   const [showFullPm, setShowFullPm] = useState(false);
   const compareResultsRef = useRef<HTMLElement | null>(null);
-  const detailSectionRef = useRef<HTMLElement | null>(null);
-  const detailFetchGen = useRef(0);
 
+  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+  const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
+  const [rerunPendingTickers, setRerunPendingTickers] = useState<Set<string>>(new Set());
+  const [rerunError, setRerunError] = useState<string | null>(null);
+  const [bulkRerunSubmitting, setBulkRerunSubmitting] = useState(false);
   // Lazy-fetched per-row factor scores (facts-only preview) keyed by ticker
   const [thumbDims, setThumbDims] = useState<Record<string, StockDimensions | null>>({});
-  // Detail-view tab + dimensions for the currently-opened run
-  const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("report");
-  const [reportSectionKey, setReportSectionKey] = useState<string | null>(null);
-  const [detailDimensions, setDetailDimensions] = useState<StockDimensions | null>(null);
-  const [detailDimensionsCommentary, setDetailDimensionsCommentary] = useState<DimensionsCommentary | null>(null);
-  const [detailDimensionsError, setDetailDimensionsError] = useState<string | null>(null);
-  const [detailDimensionsCommentaryError, setDetailDimensionsCommentaryError] = useState<string | null>(null);
-  const [recomputing, setRecomputing] = useState(false);
-  const [jobActionLoading, setJobActionLoading] = useState(false);
-  const [liveJobStatus, setLiveJobStatus] = useState<JobStatus | null>(null);
   // Compare-side dimensions, fetched by ticker for each side
   const [compareDims, setCompareDims] = useState<{
     a: StockDimensions | null;
@@ -170,92 +178,6 @@ export function HistoryPage() {
       cancelled = true;
     };
   }, [runs, thumbDims]);
-
-  // Fetch dimensions for the currently-open detail run
-  useEffect(() => {
-    if (!detail) {
-      setDetailDimensions(null);
-      setDetailDimensionsCommentary(null);
-      setDetailDimensionsError(null);
-      setDetailDimensionsCommentaryError(null);
-      return;
-    }
-    if (detail.dimensions !== undefined || detail.dimensions_error !== undefined) {
-      setDetailDimensions(detail.dimensions ?? null);
-      setDetailDimensionsCommentary(detail.dimensions_commentary ?? null);
-      setDetailDimensionsError(
-        detail.dimensions_error && !detail.dimensions ? detail.dimensions_error : null
-      );
-      setDetailDimensionsCommentaryError(
-        detail.dimensions_error && detail.dimensions ? detail.dimensions_error : null
-      );
-      return;
-    }
-    let cancelled = false;
-    setDetailDimensionsError(null);
-    setDetailDimensionsCommentaryError(null);
-    void getJobDimensions(detail.job_id)
-      .then((b) => {
-        if (cancelled) return;
-        setDetailDimensions(b.dimensions);
-        setDetailDimensionsCommentary(b.commentary);
-        setDetailDimensionsError(b.error && !b.dimensions ? b.error : null);
-        setDetailDimensionsCommentaryError(b.error && b.dimensions ? b.error : null);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setDetailDimensions(null);
-        setDetailDimensionsCommentary(null);
-        setDetailDimensionsError(e instanceof Error ? e.message : String(e));
-        setDetailDimensionsCommentaryError(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [detail]);
-
-  useEffect(() => {
-    if (!detail?.reports) {
-      setReportSectionKey(null);
-      return;
-    }
-    const keys = orderedReportSectionKeys(detail.reports);
-    setReportSectionKey((prev) => {
-      if (prev && keys.includes(prev)) return prev;
-      return keys[0] ?? null;
-    });
-  }, [detail?.run_id, detail?.reports]);
-
-  useEffect(() => {
-    const jobId = detail?.job_id?.trim();
-    if (!jobId) {
-      setLiveJobStatus(null);
-      return;
-    }
-    let cancelled = false;
-    void getJob(jobId)
-      .then((j) => {
-        if (!cancelled) setLiveJobStatus(j);
-      })
-      .catch(() => {
-        if (!cancelled) setLiveJobStatus(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [detail?.job_id]);
-
-  const reportMarkdown = useMemo(() => {
-    if (!detail?.reports || !reportSectionKey) return "";
-    const raw = detail.reports[reportSectionKey];
-    if (!raw?.trim()) return "";
-    return prepareReportMarkdown(reportSectionKey, raw);
-  }, [detail?.reports, reportSectionKey]);
-
-  const reportSectionKeys = useMemo(
-    () => orderedReportSectionKeys(detail?.reports),
-    [detail?.reports],
-  );
 
   // Fetch compare-side dimensions (by ticker) when a compare response loads
   useEffect(() => {
@@ -299,68 +221,77 @@ export function HistoryPage() {
     }
   }, [compare]);
 
-  useEffect(() => {
-    if (!detailRunId) return;
-    const id = window.requestAnimationFrame(() => {
-      const el = detailSectionRef.current;
-      if (el && typeof el.scrollIntoView === "function") {
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    });
-    return () => cancelAnimationFrame(id);
-  }, [detailRunId, detailLoading, detail, detailError]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const list = await fetchHistoryRuns({
+      const filters = {
         ticker: tickerFilter.trim() || undefined,
-        limit: 100,
-        date_from: dateFrom.trim() || undefined,
-        date_to: dateTo.trim() || undefined,
-      });
-      setRuns(list);
+        dateFrom: dateFrom.trim() || undefined,
+        dateTo: dateTo.trim() || undefined,
+      };
+      const [history, jobs] = await Promise.all([
+        fetchHistoryRuns({
+          ticker: filters.ticker,
+          limit: 100,
+          date_from: filters.dateFrom,
+          date_to: filters.dateTo,
+        }),
+        includeLiveJobs ? fetchJobs(80) : Promise.resolve([]),
+      ]);
+      const merged = mergeHistoryAndJobs(history, jobs, filters).filter(
+        (r) => !hiddenRunIdsRef.current.has(r.run_id),
+      );
+      setRuns(merged);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
       setRuns([]);
     } finally {
       setLoading(false);
     }
-  }, [tickerFilter, dateFrom, dateTo]);
+  }, [tickerFilter, dateFrom, dateTo, includeLiveJobs]);
+
+  const sortedRuns = useMemo(
+    () => sortHistoryRows(runs, sortKey),
+    [runs, sortKey],
+  );
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    fetchHistoryRuns({ limit: 100 })
-      .then((list) => {
-        if (!cancelled) {
-          setRuns(list);
-          setError(null);
-        }
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
-          setRuns([]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!includeLiveJobs || !hasActiveHistoryRows(runs)) return;
+    const id = window.setInterval(() => {
+      void refresh();
+    }, 10000);
+    return () => window.clearInterval(id);
+  }, [includeLiveJobs, runs, refresh]);
 
   const runSelectOptions = useMemo(
     () =>
-      runs.map((r) => ({
-        id: r.run_id,
-        label: `${r.ticker ?? "?"} · ${r.date ?? "?"} · ${r.run_id}${r.rating ? ` · ${r.rating}` : ""}`,
-      })),
-    [runs]
+      sortedRuns
+        .filter((r) => r.job_status === "completed")
+        .map((r) => ({
+          id: r.run_id,
+          label: `${r.ticker ?? "?"} · ${r.date ?? "?"} · ${r.run_id}${r.rating ? ` · ${r.rating}` : ""}`,
+        })),
+    [sortedRuns]
   );
+
+  const selectableRuns = useMemo(
+    () =>
+      sortedRuns.filter((r) =>
+        r.job_status === "completed" ||
+        r.job_status === "failed" ||
+        r.job_status === "cancelled",
+      ),
+    [sortedRuns],
+  );
+
+  const allRunsSelected =
+    selectableRuns.length > 0 && selectableRuns.every((r) => selectedRunIds.has(r.run_id));
 
   const compareReady =
     runSelectOptions.length >= 2 &&
@@ -368,11 +299,28 @@ export function HistoryPage() {
     Boolean(runIdB.trim()) &&
     runIdA.trim() !== runIdB.trim();
 
-  const allRunsSelected =
-    runs.length > 0 && runs.every((r) => selectedRunIds.has(r.run_id));
+  function openRunRow(row: HistoryTableRow) {
+    openRun(row.job_id);
+  }
+
+  function statusBadgeStyle(status: HistoryTableRow["job_status"]): CSSProperties {
+    switch (status) {
+      case "running":
+        return { background: "#dbeafe", color: "#1d4ed8", border: "1px solid #93c5fd" };
+      case "queued":
+        return { background: "#f3f4f6", color: "#374151", border: "1px solid #d1d5db" };
+      case "failed":
+        return { background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca" };
+      case "cancelled":
+        return { background: "#f3f4f6", color: "#6b7280", border: "1px solid #e5e7eb" };
+      default:
+        return { background: "#ecfdf5", color: "#166534", border: "1px solid #bbf7d0" };
+    }
+  }
 
   function pruneAfterDeletes(deletedIds: string[]) {
     const gone = new Set(deletedIds);
+    deletedIds.forEach((id) => hiddenRunIdsRef.current.add(id));
     setRuns((prev) => prev.filter((r) => !gone.has(r.run_id)));
     setSelectedRunIds((prev) => {
       const next = new Set(prev);
@@ -383,13 +331,6 @@ export function HistoryPage() {
     if (deletedIds.includes(runIdB)) setRunIdB("");
     if (compare && (gone.has(compare.a.run_id ?? "") || gone.has(compare.b.run_id ?? ""))) {
       setCompare(null);
-    }
-    if (detailRunId && gone.has(detailRunId)) {
-      detailFetchGen.current += 1;
-      setDetailRunId(null);
-      setDetail(null);
-      setDetailLoading(false);
-      setDetailError(null);
     }
   }
 
@@ -407,7 +348,7 @@ export function HistoryPage() {
       setSelectedRunIds(new Set());
       return;
     }
-    setSelectedRunIds(new Set(runs.map((r) => r.run_id)));
+    setSelectedRunIds(new Set(selectableRuns.map((r) => r.run_id)));
   }
 
   async function onDeleteSelected() {
@@ -424,10 +365,17 @@ export function HistoryPage() {
     setBulkDeleting(true);
     try {
       const result = await bulkDeleteHistoryRuns(ids);
-      pruneAfterDeletes(result.deleted_run_ids);
+      const removedFromView = [
+        ...result.deleted_run_ids,
+        ...result.missing_run_ids,
+      ];
+      pruneAfterDeletes(removedFromView);
       if (result.missing_run_ids.length) {
+        const stale = result.missing_run_ids.join(", ");
         setDeleteError(
-          `Deleted ${result.deleted_count}; ${result.missing_run_ids.length} run(s) were already gone.`,
+          result.deleted_count > 0
+            ? `Removed ${result.deleted_count} from storage; cleared ${result.missing_run_ids.length} stale row(s) from the list (${stale}). Refresh if any reappear.`
+            : `Cleared ${result.missing_run_ids.length} stale row(s) from the list (${stale}). They were not in history or job storage.`,
         );
       }
     } catch (e: unknown) {
@@ -463,7 +411,6 @@ export function HistoryPage() {
       setRunIdA("");
       setRunIdB("");
       setCompare(null);
-      closeRunDetail();
       await refresh();
       if (result.deleted_count === 0) {
         setDeleteError("No runs matched the current filters.");
@@ -508,111 +455,112 @@ export function HistoryPage() {
     }
   }
 
-  function closeRunDetail() {
-    detailFetchGen.current += 1;
-    setDetailRunId(null);
-    setDetail(null);
-    setDetailError(null);
-    setDetailLoading(false);
-  }
 
-  async function onViewRun(runId: string) {
-    if (detailRunId === runId && detail) return;
-    const gen = ++detailFetchGen.current;
-    setDetailError(null);
-    setDetailLoading(true);
-    setDetailRunId(runId);
-    setActiveDetailTab("report");
-    try {
-      const payload = await fetchHistoryRun(runId);
-      if (detailFetchGen.current !== gen) return;
-      setDetail(payload);
-    } catch (e: unknown) {
-      if (detailFetchGen.current !== gen) return;
-      setDetail(null);
-      setDetailError(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (detailFetchGen.current === gen) setDetailLoading(false);
-    }
+  function openRun(runId: string) {
+    navigate(runsPath(runId));
   }
-
-  const [searchParams] = useSearchParams();
-  const urlRunHandled = useRef(false);
 
   useEffect(() => {
     const ticker = searchParams.get("ticker")?.trim();
-    if (ticker) setTickerFilter(ticker);
-  }, [searchParams]);
+    if (!ticker) return;
+    navigate(stocksPath(ticker), { replace: true });
+  }, [searchParams, navigate]);
 
   useEffect(() => {
     const run = searchParams.get("run")?.trim();
     if (!run || urlRunHandled.current) return;
     urlRunHandled.current = true;
-    void onViewRun(run);
-  }, [searchParams]);
+    navigate(runsPath(run), { replace: true });
+  }, [searchParams, navigate]);
 
-  async function onRecomputeDimensions() {
-    if (!detail) return;
-    setRecomputing(true);
-    setDetailDimensionsError(null);
-    try {
-      await recomputeDimensions(detail.run_id);
-      // Refetch dimensions for the current detail run
-      const b = await getJobDimensions(detail.job_id);
-      setDetailDimensions(b.dimensions);
-      setDetailDimensionsCommentary(b.commentary);
-    } catch (e: unknown) {
-      setDetailDimensionsError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRecomputing(false);
-    }
+
+
+  function toggleTickerSelection(ticker: string) {
+    setSelectedTickers((prev) => {
+      const next = new Set(prev);
+      if (next.has(ticker)) next.delete(ticker);
+      else next.add(ticker);
+      return next;
+    });
   }
 
-  async function onRerunAnalysis() {
-    if (!detail) return;
-    setJobActionLoading(true);
-    setDetailError(null);
+  async function onCardRerun(rollup: TickerRollup) {
+    const baseRun = rollup.latestCompletedRun;
+    if (!baseRun) return;
+    setRerunError(null);
+    setRerunPendingTickers((prev) => {
+      const next = new Set(prev);
+      next.add(rollup.ticker);
+      return next;
+    });
     try {
-      const body = buildRerunAnalyzePayload(detail);
+      const detailPayload = await fetchHistoryRun(baseRun.run_id);
+      const body = buildRerunAnalyzePayload(detailPayload);
       const r = await submitAnalyze(body);
-      navigate(`/dashboard?job=${encodeURIComponent(r.job_id)}`);
+      // Send the user to the live run page; ribbon will keep showing chip too.
+      navigate(runsPath(r.job_id));
     } catch (e: unknown) {
-      setDetailError(e instanceof Error ? e.message : String(e));
+      setRerunError(e instanceof Error ? e.message : String(e));
     } finally {
-      setJobActionLoading(false);
+      setRerunPendingTickers((prev) => {
+        const next = new Set(prev);
+        next.delete(rollup.ticker);
+        return next;
+      });
     }
   }
 
-  async function onResumeAnalysis() {
-    const jobId = detail?.job_id?.trim();
-    if (!jobId) return;
-    setJobActionLoading(true);
-    setDetailError(null);
+  function onCardOpenLatest(rollup: TickerRollup) {
+    const row = rollup.latestCompletedRun ?? rollup.latestRun;
+    if (!row) return;
+    if (row.job_status === "completed") {
+      openRun(row.run_id);
+      return;
+    }
+    const jobId = row.job_id ?? row.run_id;
+    navigate(runsPath(jobId));
+  }
+
+  async function onBulkRerunSelected() {
+    const tickers = [...selectedTickers].filter(Boolean);
+    if (!tickers.length) return;
+    if (
+      !window.confirm(
+        `Submit a batch re-run for ${tickers.length} ticker${tickers.length === 1 ? "" : "s"}? Defaults from /admin will apply.`,
+      )
+    ) {
+      return;
+    }
+    setRerunError(null);
+    setBulkRerunSubmitting(true);
     try {
-      await resumeJob(jobId);
-      navigate(`/dashboard?job=${encodeURIComponent(jobId)}`);
+      const r = await submitBatch({ tickers });
+      setSelectedTickers(new Set());
+      navigate(`/batch?id=${encodeURIComponent(r.batch_id)}`);
     } catch (e: unknown) {
-      setDetailError(e instanceof Error ? e.message : String(e));
+      setRerunError(e instanceof Error ? e.message : String(e));
     } finally {
-      setJobActionLoading(false);
+      setBulkRerunSubmitting(false);
     }
   }
 
-  const canResumeLiveJob =
-    liveJobStatus?.status === "failed" && Boolean(liveJobStatus.resumable);
+
 
   return (
     <div className="history-page" style={{ display: "grid", gap: "var(--spacing-24)" }}>
-      <header>
-        <h1 style={{ fontSize: "var(--text-heading-lg)", margin: "0 0 8px" }}>
-          History &amp; compare
-        </h1>
-        <p style={{ margin: 0, color: "var(--color-ash-gray)", maxWidth: "70ch", lineHeight: 1.55 }}>
-          Durable runs from the API state store (Cloudflare KV when configured).{" "}
-          <strong>Open a run</strong> to read reports and dimensions in the panel <strong>directly below filters</strong>, so
-          a long table never sits above your content. Pick two runs with <strong>A / B</strong> or the Compare
-          dropdowns; results open under Compare and the page scrolls there.
-        </p>
+      <header style={{ display: "grid", gap: "var(--spacing-12)" }}>
+        <div>
+          <h1 style={{ fontSize: "var(--text-heading-lg)", margin: "0 0 8px" }}>
+            Runs &amp; compare
+          </h1>
+          <p style={{ margin: 0, color: "var(--color-ash-gray)", maxWidth: "70ch", lineHeight: 1.55 }}>
+            Durable completed runs plus live jobs (queued/running/failed) from the API worker.
+            Times are shown in <strong>Hong Kong (HKT)</strong>. Default sort is newest processing time first.
+            {" "}
+            <strong>Open run</strong> for the full report; click a <strong>ticker</strong> for stock-level history and compare.
+          </p>
+        </div>
+        <AppBreadcrumbs items={[{ label: "Runs" }]} />
       </header>
 
       <section
@@ -659,6 +607,45 @@ export function HistoryPage() {
               style={{ padding: 8, borderRadius: "var(--radius-inputs)", width: 140 }}
             />
           </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 220 }}>
+            <span style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>Sort by</span>
+            <select
+              aria-label="Sort history runs"
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as HistorySortKey)}
+              style={{ padding: 8, borderRadius: "var(--radius-inputs)" }}
+            >
+              <option value="processing_desc">Processing time (newest first)</option>
+              <option value="processing_asc">Processing time (oldest first)</option>
+              <option value="trade_date_desc">Trade date (newest)</option>
+              <option value="trade_date_asc">Trade date (oldest)</option>
+              <option value="ticker_asc">Ticker (A→Z)</option>
+              <option value="ticker_desc">Ticker (Z→A)</option>
+              <option value="rating_desc">Rating (bullish first)</option>
+              <option value="rating_asc">Rating (bearish first)</option>
+              <option value="confidence_desc">Confidence (high first)</option>
+              <option value="confidence_asc">Confidence (low first)</option>
+              <option value="status_desc">Status (active first)</option>
+              <option value="status_asc">Status (completed first)</option>
+            </select>
+          </label>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              fontSize: "var(--text-caption)",
+              color: "var(--color-steel-gray)",
+              paddingBottom: 8,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={includeLiveJobs}
+              onChange={(e) => setIncludeLiveJobs(e.target.checked)}
+            />
+            Include in-progress jobs
+          </label>
           <button
             type="button"
             onClick={() => void refresh()}
@@ -684,403 +671,6 @@ export function HistoryPage() {
         )}
       </section>
 
-      {(detail || detailError || detailLoading) && (
-        <section
-          className="history-detail-card"
-          ref={detailSectionRef}
-          id="ta-history-run-detail"
-          style={{
-            display: "grid",
-            gap: "var(--spacing-24)",
-            background: "var(--surface-cloud-white)",
-            padding: "clamp(var(--spacing-24), 3vw, var(--card-padding))",
-            borderRadius: "var(--radius-largecard)",
-            border: "1px solid var(--color-stone-border)",
-            boxShadow: "var(--shadow-subtle)",
-          }}
-        >
-          <header
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              alignItems: "flex-start",
-              justifyContent: "space-between",
-              gap: "var(--spacing-12)",
-            }}
-          >
-            <div style={{ display: "grid", gap: "var(--spacing-8)", minWidth: 0, flex: "1 1 16rem" }}>
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: "var(--text-caption)",
-                  fontWeight: 600,
-                  letterSpacing: "0.02em",
-                  textTransform: "uppercase",
-                  color: "var(--color-steel-gray)",
-                }}
-              >
-                Selected run
-              </p>
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "var(--text-heading-sm)",
-                  fontWeight: 600,
-                  color: "var(--color-slate-text)",
-                }}
-              >
-                Run detail
-                {detailRunId ? (
-                  <span
-                    className="mono"
-                    style={{
-                      fontWeight: 500,
-                      color: "var(--color-steel-gray)",
-                      fontSize: "var(--text-caption)",
-                    }}
-                  >
-                    {" "}
-                    · {detailRunId}
-                  </span>
-                ) : null}
-              </h2>
-            </div>
-            {detailRunId ? (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                {detail ? (
-                  <>
-                    <button
-                      type="button"
-                      disabled={jobActionLoading}
-                      onClick={() => void onRerunAnalysis()}
-                      style={{
-                        padding: "8px 16px",
-                        borderRadius: "var(--radius-buttons)",
-                        border: "none",
-                        background: jobActionLoading
-                          ? "var(--color-platinum-outline)"
-                          : "var(--color-chartwell-blue)",
-                        fontWeight: 600,
-                        fontSize: "var(--text-caption)",
-                        cursor: jobActionLoading ? "not-allowed" : "pointer",
-                        color: "white",
-                      }}
-                    >
-                      Rerun analysis
-                    </button>
-                    {canResumeLiveJob ? (
-                      <button
-                        type="button"
-                        disabled={jobActionLoading}
-                        onClick={() => void onResumeAnalysis()}
-                        title={
-                          liveJobStatus?.last_graph_step != null
-                            ? `Resume from checkpoint step ${liveJobStatus.last_graph_step}`
-                            : "Resume from LangGraph checkpoint"
-                        }
-                        style={{
-                          padding: "8px 16px",
-                          borderRadius: "var(--radius-buttons)",
-                          border: "1px solid #fca5a5",
-                          background: jobActionLoading ? "#fecaca" : "#dc2626",
-                          fontWeight: 600,
-                          fontSize: "var(--text-caption)",
-                          cursor: jobActionLoading ? "not-allowed" : "pointer",
-                          color: "white",
-                        }}
-                      >
-                        Resume failed job
-                      </button>
-                    ) : null}
-                    {detail.job_id ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          navigate(`/dashboard?job=${encodeURIComponent(detail.job_id)}`)
-                        }
-                        style={{
-                          padding: "8px 16px",
-                          borderRadius: "var(--radius-buttons)",
-                          border: "1px solid var(--color-stone-border)",
-                          background: "var(--surface-cloud-white)",
-                          fontWeight: 600,
-                          fontSize: "var(--text-caption)",
-                          cursor: "pointer",
-                          color: "var(--color-slate-text)",
-                        }}
-                      >
-                        Open in dashboard
-                      </button>
-                    ) : null}
-                  </>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={closeRunDetail}
-                  style={{
-                    padding: "8px 16px",
-                    borderRadius: "var(--radius-buttons)",
-                    border: "1px solid var(--color-stone-border)",
-                    background: "var(--surface-canvas-fog)",
-                    fontWeight: 600,
-                    fontSize: "var(--text-caption)",
-                    cursor: "pointer",
-                    color: "var(--color-slate-text)",
-                  }}
-                >
-                  Close
-                </button>
-              </div>
-            ) : null}
-          </header>
-          {detailLoading && <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>Loading run detail…</p>}
-          {detailError && <p style={{ margin: 0, color: "#991b1b" }}>{detailError}</p>}
-          {detail && (
-            <>
-              <section
-                style={{
-                  display: "grid",
-                  gap: "var(--spacing-16)",
-                  paddingBottom: "var(--spacing-24)",
-                  borderBottom: "1px solid var(--color-stone-border)",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "var(--text-heading)",
-                    fontWeight: 600,
-                    letterSpacing: "-0.02em",
-                    lineHeight: 1.2,
-                    color: "var(--color-slate-text)",
-                  }}
-                >
-                  {detail.rating || "—"}
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    alignItems: "baseline",
-                    gap: "var(--spacing-8) var(--spacing-16)",
-                    fontSize: "var(--text-caption)",
-                    color: "var(--color-steel-gray)",
-                  }}
-                >
-                  <span className="mono" style={{ color: "var(--color-slate-text)", fontWeight: 600 }}>
-                    {detail.ticker}
-                  </span>
-                  <span>As of {detail.date}</span>
-                  <span>
-                    Conviction <span style={{ color: "var(--color-ash-gray)" }}>(heuristic)</span>:{" "}
-                    {pct(detail.confidence ?? undefined)}
-                  </span>
-                  {detail.job_id ? (
-                    <span className="mono" style={{ color: "var(--color-steel-gray)" }}>
-                      job {detail.job_id}
-                    </span>
-                  ) : null}
-                  {detail.completed_at ? <span>Completed {detail.completed_at}</span> : null}
-                </div>
-                {detail.dimensions_in_graph === true && (
-                  <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "#166534" }}>
-                    Dimensional snapshot was included in Trader and Portfolio Manager prompts for this run.
-                  </p>
-                )}
-                {detail.dimensions_in_graph === false && (
-                  <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
-                    No in-graph dimensions snapshot on this persisted run. The Dimensions tab still shows scores from
-                    storage or recompute when available.
-                  </p>
-                )}
-              </section>
-
-              <div
-                role="tablist"
-                aria-label="Run detail views"
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 8,
-                  padding: 6,
-                  background: "var(--surface-canvas-fog)",
-                  borderRadius: "var(--radius-cards)",
-                  border: "1px solid var(--color-stone-border)",
-                }}
-              >
-                {(
-                  [
-                    { id: "report" as const, label: "Agent reports" },
-                    { id: "dimensions" as const, label: "Dimensional study" },
-                  ] as const
-                ).map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeDetailTab === t.id}
-                    onClick={() => setActiveDetailTab(t.id)}
-                    style={{
-                      padding: "10px 16px",
-                      borderRadius: "var(--radius-buttons)",
-                      border:
-                        activeDetailTab === t.id
-                          ? "1px solid var(--color-chartwell-blue)"
-                          : "1px solid transparent",
-                      background: activeDetailTab === t.id ? "var(--color-sky-tint)" : "transparent",
-                      cursor: "pointer",
-                      fontWeight: activeDetailTab === t.id ? 600 : 500,
-                      color: "var(--color-slate-text)",
-                      fontSize: "var(--text-caption)",
-                    }}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-
-              {activeDetailTab === "report" && (
-                <div className="history-report-view" style={{ display: "grid", gap: "var(--spacing-24)", minWidth: 0 }}>
-                  <header style={{ display: "grid", gap: "var(--spacing-8)" }}>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "var(--text-caption)",
-                        fontWeight: 600,
-                        letterSpacing: "0.02em",
-                        textTransform: "uppercase",
-                        color: "var(--color-steel-gray)",
-                      }}
-                    >
-                      Sections
-                    </p>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "var(--text-caption)",
-                        color: "var(--color-ash-gray)",
-                        maxWidth: "65ch",
-                      }}
-                    >
-                      Research artifacts only, not financial advice. Pick a section to read; wide tables scroll
-                      horizontally inside the content area.
-                    </p>
-                  </header>
-                  <div
-                    style={{
-                      padding: "var(--spacing-16)",
-                      borderRadius: "var(--radius-cards)",
-                      border: "1px solid var(--color-stone-border)",
-                      background: "var(--surface-canvas-fog)",
-                      fontSize: "var(--text-caption)",
-                      lineHeight: 1.55,
-                      color: "var(--color-steel-gray)",
-                    }}
-                  >
-                    Agent sections are LLM-generated from tools and public data; they can contain errors, repetition, or
-                    off-topic padding (especially macro/news). Use fundamentals and tool-grounded facts when something
-                    conflicts. HK/ADR names may appear with exchange suffixes; verify critical figures in primary sources.
-                  </div>
-                  {reportSectionKeys.length > 0 ? (
-                    <div
-                      className="history-report-sections"
-                      role="tablist"
-                      aria-label="Report sections"
-                      style={{
-                        display: "flex",
-                        flexWrap: "nowrap",
-                        gap: 8,
-                        padding: 6,
-                        background: "var(--surface-cloud-white)",
-                        borderRadius: "var(--radius-cards)",
-                        border: "1px solid var(--color-stone-border)",
-                        overflowX: "auto",
-                      }}
-                    >
-                      {reportSectionKeys.map((key) => (
-                        <button
-                          key={key}
-                          type="button"
-                          role="tab"
-                          aria-selected={reportSectionKey === key}
-                          onClick={() => setReportSectionKey(key)}
-                          style={{
-                            padding: "8px 14px",
-                            borderRadius: "var(--radius-buttons)",
-                            border:
-                              reportSectionKey === key
-                                ? "1px solid var(--color-chartwell-blue)"
-                                : "1px solid var(--color-stone-border)",
-                            background:
-                              reportSectionKey === key ? "var(--color-sky-tint)" : "var(--surface-canvas-fog)",
-                            fontSize: "var(--text-caption)",
-                            fontWeight: reportSectionKey === key ? 600 : 500,
-                            cursor: "pointer",
-                            color: "var(--color-slate-text)",
-                          }}
-                        >
-                          {REPORT_SECTION_LABELS[key] ?? key.replace(/_/g, " ")}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>No report sections stored.</p>
-                  )}
-                  <div className="history-report-body-wrap">
-                    <div className="markdown-body history-report-body" style={{ maxWidth: "72ch", minWidth: 0 }}>
-                      {reportMarkdown ? (
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={REPORT_MD_COMPONENTS}
-                        >
-                          {reportMarkdown}
-                        </ReactMarkdown>
-                      ) : (
-                        <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>Select a section above.</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-              {activeDetailTab === "dimensions" && (
-                <div style={{ display: "grid", gap: "var(--spacing-16)" }}>
-                  {!detailDimensions && !detailDimensionsError && (
-                    <p style={{ margin: 0, color: "var(--color-ash-gray)" }}>Loading dimensions…</p>
-                  )}
-                  {!detailDimensions && (
-                    <div>
-                      <button
-                        type="button"
-                        onClick={() => void onRecomputeDimensions()}
-                        disabled={recomputing}
-                        style={{
-                          padding: "10px 16px",
-                          borderRadius: "var(--radius-buttons)",
-                          border: "none",
-                          background: recomputing
-                            ? "var(--color-platinum-outline)"
-                            : "var(--color-chartwell-blue)",
-                          color: "white",
-                          cursor: recomputing ? "not-allowed" : "pointer",
-                          fontWeight: 600,
-                          fontSize: "var(--text-caption)",
-                        }}
-                      >
-                        {recomputing ? "Recomputing…" : "Recompute dimensions"}
-                      </button>
-                    </div>
-                  )}
-                  <DimensionsPanel
-                    dimensions={detailDimensions}
-                    commentary={detailDimensionsCommentary}
-                    error={detailDimensionsError}
-                    commentaryError={detailDimensionsCommentaryError}
-                  />
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      )}
 
       <section
         style={{
@@ -1101,9 +691,77 @@ export function HistoryPage() {
             marginBottom: "var(--spacing-12)",
           }}
         >
-          <h2 style={{ margin: 0 }}>Recent runs</h2>
-          {runs.length > 0 && (
+          <h2 style={{ margin: 0 }}>Recent runs ({sortedRuns.length})</h2>
+          <div
+            role="tablist"
+            aria-label="Recent runs view mode"
+            style={{
+              display: "inline-flex",
+              padding: 4,
+              gap: 4,
+              background: "var(--surface-canvas-fog)",
+              borderRadius: "var(--radius-cards)",
+              border: "1px solid var(--color-stone-border)",
+            }}
+          >
+            {(["cards", "table"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="tab"
+                aria-selected={viewMode === m}
+                onClick={() => setViewMode(m)}
+                style={{
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  borderRadius: "var(--radius-buttons)",
+                  border:
+                    viewMode === m
+                      ? "1px solid var(--color-chartwell-blue)"
+                      : "1px solid transparent",
+                  background: viewMode === m ? "var(--color-sky-tint)" : "transparent",
+                  color: "var(--color-slate-text)",
+                  cursor: "pointer",
+                  textTransform: "capitalize",
+                }}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          {sortedRuns.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-8)" }}>
+              {viewMode === "cards" && (
+                <button
+                  type="button"
+                  disabled={bulkRerunSubmitting || selectedTickers.size === 0}
+                  onClick={() => void onBulkRerunSelected()}
+                  title={
+                    selectedTickers.size === 0
+                      ? "Tick one or more ticker cards to enable bulk re-run"
+                      : "Submit a batch of re-runs for the selected tickers"
+                  }
+                  style={{
+                    padding: "8px 14px",
+                    borderRadius: "var(--radius-buttons)",
+                    border: "none",
+                    background:
+                      bulkRerunSubmitting || selectedTickers.size === 0
+                        ? "var(--color-platinum-outline)"
+                        : "var(--color-chartwell-blue)",
+                    color: "white",
+                    fontWeight: 600,
+                    fontSize: "var(--text-caption)",
+                    cursor:
+                      bulkRerunSubmitting || selectedTickers.size === 0 ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {bulkRerunSubmitting
+                    ? "Submitting…"
+                    : `▶ Re-run selected (${selectedTickers.size})`}
+                </button>
+              )}
               <button
                 type="button"
                 disabled={bulkDeleting || selectedRunIds.size === 0}
@@ -1142,6 +800,10 @@ export function HistoryPage() {
             </div>
           )}
         </div>
+        <p className="reading-callout" style={{ margin: "0 0 var(--spacing-8)", maxWidth: "72ch" }}>
+          Compare ratings only when <strong>Model</strong> and <strong>Sources</strong> match — different LLMs or
+          single-vendor setups can shift outcomes more than the ticker thesis.
+        </p>
         <p
           style={{
             margin: "0 0 var(--spacing-8)",
@@ -1150,7 +812,7 @@ export function HistoryPage() {
             lineHeight: 1.45,
           }}
         >
-          <strong>View</strong> loads that row into the <strong>Selected run</strong> panel <strong>above</strong> this table (scrolls there automatically).
+          <strong>View</strong> opens the run page for that row. Tickers link to the stock-level page.
         </p>
         <p
           style={{
@@ -1173,10 +835,20 @@ export function HistoryPage() {
           <code style={{ fontSize: "0.95em" }}>scripts/warm_peer_cache.py global|local|sector</code>; when Cloudflare D1 env vars are set, warmed rows also mirror into D1.{' '}
           <strong>Why factors may show “—”:</strong> without enough cached peers relative scores are withheld to avoid pillar-only guesses; sentiment may still populate.
         </p>
-        {runs.length === 0 && !loading ? (
+        {sortedRuns.length === 0 && !loading ? (
           <p style={{ color: "var(--color-ash-gray)" }}>
-            No history yet. Complete an analysis from the dashboard; runs are persisted when jobs finish.
+            No runs yet. Start an analysis from the dashboard — in-progress jobs appear here automatically.
           </p>
+        ) : viewMode === "cards" ? (
+          <HistoryTickerCards
+            rows={sortedRuns}
+            selectedTickers={selectedTickers}
+            onToggleTicker={toggleTickerSelection}
+            onRerun={(roll) => void onCardRerun(roll)}
+            onOpenLatest={onCardOpenLatest}
+            rerunPending={rerunPendingTickers}
+            rerunError={rerunError}
+          />
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table className="history-runs-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
@@ -1188,7 +860,7 @@ export function HistoryPage() {
                       aria-label="Select all visible runs"
                       checked={allRunsSelected}
                       onChange={toggleSelectAllVisible}
-                      disabled={bulkDeleting || runs.length === 0}
+                      disabled={bulkDeleting || sortedRuns.length === 0}
                     />
                   </th>
                   <th style={{ padding: "8px 6px" }}>Run ID</th>
@@ -1201,13 +873,28 @@ export function HistoryPage() {
                   >
                     Confidence
                   </th>
+                  <th style={{ padding: "8px 6px" }} title="LLM provider and models used for this run">
+                    Model
+                  </th>
+                  <th
+                    style={{ padding: "8px 6px" }}
+                    title="Data vendor pillars and analyst breadth — warnings when setup may bias the rating"
+                  >
+                    Sources
+                  </th>
                   <th
                     style={{ padding: "8px 6px" }}
                     title="Mini bars: six 0–100 factor scores. Source priority is persisted run snapshot first; if unavailable, the UI uses a current facts-only ticker preview and labels it."
                   >
                     Factors
                   </th>
-                  <th style={{ padding: "8px 6px" }}>Completed</th>
+                  <th style={{ padding: "8px 6px" }}>Status</th>
+                  <th
+                    style={{ padding: "8px 6px" }}
+                    title="Job start or completion time, shown in Hong Kong (HKT)"
+                  >
+                    Processing (HKT)
+                  </th>
                   <th style={{ padding: "8px 6px", textAlign: "right" }} aria-label="Open run detail">
                     Detail
                   </th>
@@ -1220,24 +907,60 @@ export function HistoryPage() {
                 </tr>
               </thead>
               <tbody ref={runsBodyRef}>
-                {runs.map((r) => (
-                  <tr key={r.run_id} style={{ borderBottom: "1px solid var(--color-platinum-outline)" }}>
+                {sortedRuns.map((r) => (
+                  <tr
+                    key={r.run_id}
+                    style={{
+                      borderBottom: "1px solid var(--color-platinum-outline)",
+                      background: r.is_live_job ? "rgba(219, 234, 254, 0.25)" : undefined,
+                    }}
+                  >
                     <td style={{ padding: "8px 6px", verticalAlign: "middle" }}>
                       <input
                         type="checkbox"
                         aria-label={`Select run ${r.run_id}`}
                         checked={selectedRunIds.has(r.run_id)}
                         onChange={() => toggleRunSelection(r.run_id)}
-                        disabled={bulkDeleting}
+                        disabled={bulkDeleting || r.job_status !== "completed"}
+                        title={r.job_status !== "completed" ? "Only completed runs can be bulk-deleted" : undefined}
                       />
                     </td>
                     <td style={{ padding: "8px 6px" }} className="mono">
                       {r.run_id}
                     </td>
-                    <td style={{ padding: "8px 6px" }}>{r.ticker}</td>
+                    <td style={{ padding: "8px 6px" }}>
+                      {r.ticker ? (
+                        <Link
+                          to={stocksPath(r.ticker)}
+                          className="link-action"
+                          title={`All runs for ${r.ticker}`}
+                        >
+                          {r.ticker}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td style={{ padding: "8px 6px" }}>{r.date}</td>
                     <td style={{ padding: "8px 6px" }}>{r.rating ?? "—"}</td>
                     <td style={{ padding: "8px 6px" }}>{pct(r.confidence ?? undefined)}</td>
+                    <td
+                      style={{ padding: "8px 6px", maxWidth: 160 }}
+                      className="mono"
+                      title={provenanceTitle(r.provenance)}
+                    >
+                      {formatLlmLabel(r.provenance)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "8px 6px",
+                        maxWidth: 180,
+                        color: hasBiasWarning(r.provenance) ? "#b45309" : undefined,
+                      }}
+                      title={provenanceTitle(r.provenance)}
+                    >
+                      {formatSourcesLabel(r.provenance)}
+                    </td>
                     <td style={{ padding: "8px 6px" }}>
                       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                         {FACTOR_KEYS.map((k) => (
@@ -1293,35 +1016,39 @@ export function HistoryPage() {
                         })()}
                       </div>
                     </td>
-                    <td style={{ padding: "8px 6px" }} className="mono">
-                      {r.completed_at ?? "—"}
-                    </td>
-                    <td style={{ padding: "8px 6px", textAlign: "right", verticalAlign: "middle" }}>
-                      <button
-                        type="button"
-                        aria-label={`View run ${r.run_id}`}
-                        disabled={detailLoading && detailRunId === r.run_id}
-                        onClick={() => void onViewRun(r.run_id)}
+                    <td style={{ padding: "8px 6px" }}>
+                      <span
                         style={{
-                          padding: "4px 10px",
+                          display: "inline-block",
+                          padding: "2px 8px",
+                          borderRadius: 999,
                           fontSize: 11,
                           fontWeight: 600,
-                          borderRadius: "var(--radius-inputs)",
-                          border: "1px solid var(--color-stone-border)",
-                          background:
-                            detailRunId === r.run_id ? "var(--color-sky-tint)" : "var(--surface-cloud-white)",
-                          cursor:
-                            detailLoading && detailRunId === r.run_id ? "not-allowed" : "pointer",
+                          ...statusBadgeStyle(r.job_status),
                         }}
                       >
-                        {detailLoading && detailRunId === r.run_id ? "Loading…" : "View"}
-                      </button>
+                        {statusLabel(r.job_status)}
+                      </span>
+                    </td>
+                    <td style={{ padding: "8px 6px" }} className="mono" title={r.processing_at ?? undefined}>
+                      {formatHistoryTimestampWithZone(r.processing_at)}
+                    </td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", verticalAlign: "middle" }}>
+                      <Link to={runsPath(r.run_id)} className="link-action" style={{ fontSize: 11, fontWeight: 600 }}>
+                        {r.job_status === "completed" ? "Open run →" : "Open job →"}
+                      </Link>
                     </td>
                     <td style={{ padding: "8px 6px", textAlign: "right", verticalAlign: "middle" }}>
                       <button
                         type="button"
                         aria-label={`Delete run ${r.run_id}`}
-                        disabled={deletingRunId === r.run_id}
+                        disabled={
+                          deletingRunId === r.run_id ||
+                          (r.job_status !== "completed" &&
+                            r.job_status !== "failed" &&
+                            r.job_status !== "cancelled")
+                        }
+                        title={r.job_status !== "completed" ? "Only completed runs can be deleted from history" : undefined}
                         onClick={() => {
                           if (!window.confirm(`Delete run ${r.run_id}? This cannot be undone.`)) return;
                           void onDeleteRun(r.run_id);
@@ -1349,6 +1076,7 @@ export function HistoryPage() {
                             setRunIdA(r.run_id);
                             setCompareError(null);
                           }}
+                          disabled={r.job_status !== "completed"}
                           style={{
                             padding: "4px 8px",
                             fontSize: 11,
@@ -1369,6 +1097,7 @@ export function HistoryPage() {
                             setRunIdB(r.run_id);
                             setCompareError(null);
                           }}
+                          disabled={r.job_status !== "completed"}
                           style={{
                             padding: "4px 8px",
                             fontSize: 11,
@@ -1429,6 +1158,7 @@ export function HistoryPage() {
               Run A
             </span>
             <select
+              aria-label="Compare run A"
               value={runIdA}
               onChange={(e) => setRunIdA(e.target.value)}
               style={{ padding: "var(--spacing-12)", borderRadius: "var(--radius-inputs)", border: "1px solid var(--color-stone-border)" }}
@@ -1446,6 +1176,7 @@ export function HistoryPage() {
               Run B
             </span>
             <select
+              aria-label="Compare run B"
               value={runIdB}
               onChange={(e) => setRunIdB(e.target.value)}
               style={{ padding: "var(--spacing-12)", borderRadius: "var(--radius-inputs)", border: "1px solid var(--color-stone-border)" }}

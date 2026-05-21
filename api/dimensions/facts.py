@@ -44,7 +44,6 @@ def _maybe_int(v: Any) -> Optional[int]:
 
 
 _FIELD_TO_INFO_KEY = {
-    "currency": "currency",
     "exchange": "exchange",
     "sector": "sector",
     "industry": "industry",
@@ -196,15 +195,21 @@ def extract_facts(ticker: str, as_of_date: str) -> Tuple[FactSnapshot, List[str]
         raise FactExtractionError(f"yfinance error for {ticker}: {exc}") from exc
 
     flags: List[str] = []
+    raw_currency = info.get("currency")
+    currency = (
+        str(raw_currency).strip()
+        if isinstance(raw_currency, str) and str(raw_currency).strip()
+        else "USD"
+    )
     payload: dict = {
         "as_of_date": as_of_date,
-        "currency": str(info.get("currency") or "USD"),
+        "currency": currency,
         "analyst_count": _maybe_int(info.get("numberOfAnalystOpinions")),
     }
 
     for field, key in _FIELD_TO_INFO_KEY.items():
         raw = info.get(key)
-        if field in {"currency", "exchange", "sector", "industry"}:
+        if field in {"exchange", "sector", "industry"}:
             payload[field] = str(raw) if isinstance(raw, str) and raw else None
         else:
             payload[field] = _maybe_float(raw)

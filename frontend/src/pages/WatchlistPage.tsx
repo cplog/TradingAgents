@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { dashboardPath } from "../navigation/routes";
+import { PageFrame, PageHeader } from "../components/PageFrame";
 
 const STORAGE_KEY = "ta:watchlist";
 
@@ -56,14 +58,11 @@ export function WatchlistPage() {
   }
 
   return (
-    <div style={{ maxWidth: 720 }}>
-      <h1 style={{ fontSize: "var(--text-heading-md)", fontWeight: 600 }}>
-        Watchlists
-      </h1>
-      <p style={{ color: "var(--color-ash-gray)", marginBottom: "var(--spacing-24)" }}>
-        Stored locally in this browser ({STORAGE_KEY}). Use links to open the Analysis
-        page with a ticker pre-filled.
-      </p>
+    <PageFrame>
+      <PageHeader
+        title="Watchlists"
+        description={`Stored locally in this browser (${STORAGE_KEY}). Use links to open Analysis with a ticker pre-filled.`}
+      />
 
       <div
         style={{
@@ -95,9 +94,9 @@ export function WatchlistPage() {
           style={{
             padding: "var(--spacing-8) var(--spacing-16)",
             borderRadius: "var(--radius-md)",
-            border: "none",
-            background: "var(--color-chartwell-blue)",
-            color: "#fff",
+            background: "var(--color-phosphor-glow)",
+            color: "var(--color-phosphor)",
+            border: "1px solid var(--color-phosphor-dim)",
             fontWeight: 600,
             cursor: "pointer",
           }}
@@ -130,7 +129,7 @@ export function WatchlistPage() {
               </span>
               <span style={{ display: "flex", gap: "var(--spacing-8)" }}>
                 <Link
-                  to={`/dashboard?ticker=${encodeURIComponent(t)}`}
+                  to={dashboardPath({ ticker: t })}
                   style={{
                     color: "var(--color-chartwell-blue)",
                     fontWeight: 600,
@@ -157,6 +156,6 @@ export function WatchlistPage() {
           ))}
         </ul>
       )}
-    </div>
+    </PageFrame>
   );
 }

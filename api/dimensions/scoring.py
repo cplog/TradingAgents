@@ -162,16 +162,28 @@ def score_pillars(
         "Pillar structured output returned %s; retrying via plain llm.invoke + JSON parse",
         type(result).__name__,
     )
+    raw_text_for_log: str = ""
     try:
         raw = llm.invoke(_messages_with_json_fallback_hint(messages))
         coerced = _pillar_scores_from_invoke_result(raw)
         if coerced is not None:
             return coerced
         text = _block_content_to_text(getattr(raw, "content", raw)).strip()
+        raw_text_for_log = text
         if not text:
             raise ValueError("empty content from llm.invoke")
         return PillarScores.model_validate(_first_json_object(text))
     except Exception as exc:
+        # Surface what the model actually emitted — the previous error message
+        # ("Unexpected scoring result type: NoneType") buried the fallback
+        # failure and made Ollama issues impossible to diagnose from the run
+        # record. Truncate to keep flag strings manageable.
+        snippet = raw_text_for_log[:500].replace("\n", " ")
+        if raw_text_for_log:
+            logger.warning(
+                "Pillar scoring fallback output (truncated 500c): %s", snippet
+            )
         raise PillarScoringError(
-            f"Unexpected scoring result type: {type(result).__name__}"
+            f"Pillar scoring fallback failed after structured returned "
+            f"{type(result).__name__}: {exc}"
         ) from exc

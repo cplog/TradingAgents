@@ -180,6 +180,9 @@ def _is_yfinance_style_no_global_news(result: object) -> bool:
     return s.startswith("No global news found for ") or s.startswith("Error fetching global news")
 
 
+_MACRO_SOFT_ERROR_METHODS = frozenset({"get_macro_data", "list_akshare_endpoints"})
+
+
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     category = get_category_for_method(method)
@@ -213,5 +216,12 @@ def route_to_vendor(method: str, *args, **kwargs):
             continue
 
     if last_exc is not None:
+        if method in _MACRO_SOFT_ERROR_METHODS:
+            return (
+                f"## AKShare tool error\n\n"
+                f"`{last_exc}`\n\n"
+                "Call `list_akshare_endpoints` and pass an exact `macro_*` or `stock_*` name "
+                "to `get_macro_data`."
+            )
         raise RuntimeError(f"No available vendor for '{method}': {last_exc}") from last_exc
     raise RuntimeError(f"No available vendor for '{method}'")

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Dict, List, Literal, Optional
 
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class FactSnapshot(BaseModel):
@@ -16,6 +16,15 @@ class FactSnapshot(BaseModel):
     sector: Optional[str] = None
     industry: Optional[str] = None
     market_cap_usd: Optional[float] = None
+
+    @field_validator("currency", mode="before")
+    @classmethod
+    def _default_currency(cls, value: object) -> str:
+        if value is None:
+            return "USD"
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return "USD"
 
     price: Optional[float] = None
     price_52w_high: Optional[float] = None

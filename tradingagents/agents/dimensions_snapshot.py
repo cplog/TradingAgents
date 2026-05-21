@@ -63,11 +63,15 @@ def create_dimensions_snapshot_node(
         }
 
         try:
+            from api.llm_clients import adapt_for_structured_output
+
+            provider = str(cfg.get("llm_provider") or "openai")
+            llm = adapt_for_structured_output(quick_llm, provider)
             dimensions = build_dimensions(
                 ticker=ticker,
                 as_of_date=trade_date,
                 analyst_reports=analyst_reports,
-                llm=quick_llm,
+                llm=llm,
                 config=cfg,
             )
             payload = dimensions.model_dump()

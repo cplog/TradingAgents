@@ -265,14 +265,22 @@ Global layout + nav: [`frontend/src/components/Layout.tsx`](frontend/src/compone
 
 ## 13. Future UX (not in repo)
 
-Items that appear in [PRODUCT.md](PRODUCT.md) / older drafts but **are still not** implemented:
+Items that appear in [PRODUCT.md](PRODUCT.md) / older drafts but **are still not** fully implemented:
 
 - Separate SPA surfaces per analyst stage, **signals** hub, or sentiment/Kronos-only routes beyond dashboard tabs.
-- Extra LangGraph analysts (hot money, policy, lockup) and **Kronos** charts wired to this UI.
-- PDF / Draw.io / ZIP export pipelines from the SPA.
+- **OHLCV candlestick panel**, **Kronos forecast band**, and **interactive evidence-chain map** (Draw.io / graph) — dashboard shows placeholder cards until job payloads expose these artifacts.
+- PDF / Draw.io / ZIP export pipelines from the SPA (HTML + markdown export exist on dashboard).
 - Push notifications (“reflection ready”, gateway outages).
 - Dedicated mobile layouts and global keyboard shortcuts (specified in code).
 
-*`/runs/:jobId/*`, `/watchlists`, `/history/stats`, `/api/analyze`, `/settings` → `/system`, and `/configure` are now implemented — remove from this list when updating downstream docs.*
+**Recently shipped in this repo (2026-05):**
+
+- Retro digital design tokens + shared `.ui-*` primitives on Dashboard, News, Screener, Batch.
+- Dashboard **pipeline stage list** with per-stage elapsed times and heartbeat copy during long LangGraph runs.
+- **Sentiment timeline** chart on `/news`; **rating distribution** chart on `/history/stats`.
+- **Dimensions radar** hero on dashboard results when dimensions are present.
+- **Batch ↔ Screener** cross-links and screener → batch handoff via `?tickers=`.
+
+*`/runs/:jobId/*`, `/watchlists`, `/history/stats`, `/api/analyze`, `/settings` → `/system`, and `/configure` are implemented.*
 
 When further items ship, update **Version** above and merge relevant bullets back into sections 2–7.

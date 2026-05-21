@@ -157,12 +157,21 @@ export async function fetchProviderModels(
   return apiJson(`/providers/${encodeURIComponent(provider)}/models${suffix}`);
 }
 
+/** Future PRODUCT.md visuals — optional fields when backend adds them. */
+export type JobVisualArtifacts = {
+  ohlcv_series?: { date: string; open: number; high: number; low: number; close: number; volume?: number }[];
+  kronos_forecast?: { date: string; point: number; lower?: number; upper?: number }[];
+  evidence_chain_xml?: string | null;
+};
+
 export type JobResultPayload = {
   ticker: string;
   date: string;
   rating: string;
   confidence?: number | null;
   reports: Record<string, string>;
+  /** Optional chart/map payloads (not yet populated by default API builds). */
+  visual_artifacts?: JobVisualArtifacts | null;
   /** Present when the job used explicit analyst selection (API path). */
   analyst_coverage?: Record<
     string,
@@ -196,6 +205,7 @@ export type JobStatus = {
   resumable?: boolean;
   last_graph_step?: number | null;
   checkpoint_thread_id?: string | null;
+  provenance?: RunProvenance | null;
 };
 
 export async function submitAnalyze(body: {
@@ -303,6 +313,21 @@ export async function postRuntimeConfig(
   if (!res.ok) throw new Error(await res.text());
 }
 
+export type RunProvenance = {
+  llm_provider?: string | null;
+  llm_deep?: string | null;
+  llm_quick?: string | null;
+  data_routing?: string | null;
+  analysts_selected?: string[];
+  analysts_ok?: number;
+  analysts_empty?: number;
+  analysts_failed?: number;
+  analysts_total?: number;
+  source_pillars?: number;
+  vendor_count?: number;
+  bias_warnings?: string[];
+};
+
 export type HistoryRunRef = {
   run_id: string;
   job_id?: string | null;
@@ -318,6 +343,7 @@ export type HistoryRunRef = {
   facts_industry?: string | null;
   has_dimensions?: boolean | null;
   has_commentary?: boolean | null;
+  provenance?: RunProvenance | null;
 };
 
 /** Aggregated persisted-run counts per sector/industry (D1 history only). */
@@ -358,6 +384,7 @@ export type HistoryRunDetail = {
   created_at?: string | null;
   batch_id?: string | null;
   config_snapshot: Record<string, unknown>;
+  provenance?: RunProvenance | null;
   analyst_coverage?: Record<string, { status?: string; section_key?: string }> | null;
   dimensions?: StockDimensions | null;
   dimensions_commentary?: DimensionsCommentary | null;
@@ -408,6 +435,23 @@ export async function fetchHistoryRuns(params?: {
 
 export async function fetchHistoryCoverage(): Promise<HistoryCoverageRow[]> {
   return apiJson<HistoryCoverageRow[]>("/api/history/coverage");
+}
+
+/** Yahoo sector/industry catalog freshness — counts + newest updated_at. */
+export type CatalogStatus = {
+  d1_enabled: boolean;
+  buckets: number;
+  constituents_total: number;
+  constituents_us: number;
+  constituents_hk: number;
+  /** POSIX seconds (server time) of newest bucket row's updated_at. */
+  latest_bucket_refreshed_at?: number | null;
+  /** POSIX seconds (server time) of newest constituent row's updated_at. */
+  latest_constituent_refreshed_at?: number | null;
+};
+
+export async function fetchCatalogStatus(): Promise<CatalogStatus> {
+  return apiJson<CatalogStatus>("/api/catalog/status");
 }
 
 export async function fetchIndustryConstituents(params: {

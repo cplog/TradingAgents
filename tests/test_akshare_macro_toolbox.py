@@ -83,7 +83,7 @@ def test_get_macro_akshare_usa_bank_rate_alias(monkeypatch):
         tail_rows=5,
     )
     assert "macro_bank_usa_interest_rate" in out
-    assert "resolved_from_alias" in out
+    assert "resolved_from_alias" in out or "normalize" in out
     assert "5.25" in out
 
 
@@ -103,12 +103,8 @@ def test_get_macro_akshare_usa_irate_alias(monkeypatch):
         tail_rows=5,
     )
     assert "macro_bank_usa_interest_rate" in out
-    assert "resolved_from_alias" in out
+    assert "resolved_from_alias" in out or "normalize" in out
     assert "5.25" in out
-
-
-@pytest.mark.unit
-def test_get_macro_akshare_unknown_fn_returns_hint(monkeypatch):
     fake_ak = SimpleNamespace(
         macro_bank_usa_interest_rate=lambda: pd.DataFrame({"x": [1]}),
         macro_usa_ppi=lambda: pd.DataFrame({"x": [1]}),
@@ -126,5 +122,32 @@ def test_get_macro_akshare_rejects_non_allowed_prefix(monkeypatch):
     fake_ak = SimpleNamespace(foo=lambda: pd.DataFrame({"x": [1]}))
     monkeypatch.setattr(akshare_macro, "_import_akshare", lambda: fake_ak)
 
-    with pytest.raises(DataVendorUnavailable, match="must start with 'macro_' or 'stock_'"):
-        akshare_macro.get_macro_akshare(function_name="foo")
+    out = akshare_macro.get_macro_akshare(function_name="foo")
+    assert "invalid function_name" in out
+    assert "macro_" in out
+    assert "list_akshare_endpoints" in out
+
+
+@pytest.mark.unit
+def test_get_macro_akshare_auto_prefix_bare_cnbs(monkeypatch):
+    fake_ak = SimpleNamespace(
+        macro_cnbs=lambda: pd.DataFrame({"date": ["2024-01-01"], "v": [1.0]}),
+    )
+    monkeypatch.setattr(akshare_macro, "_import_akshare", lambda: fake_ak)
+
+    out = akshare_macro.get_macro_akshare(function_name="cnbs")
+    assert "macro_cnbs" in out
+    assert "normalize" in out
+
+
+@pytest.mark.unit
+def test_get_macro_akshare_bare_fed_rate_alias(monkeypatch):
+    fake_ak = SimpleNamespace(
+        macro_bank_usa_interest_rate=lambda: pd.DataFrame({"日期": ["2024-01-01"], "今值": [5.25]}),
+    )
+    monkeypatch.setattr(akshare_macro, "_import_akshare", lambda: fake_ak)
+
+    out = akshare_macro.get_macro_akshare(function_name="fed_rate")
+    assert "macro_bank_usa_interest_rate" in out
+    assert "5.25" in out
+

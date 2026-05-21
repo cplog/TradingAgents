@@ -51,10 +51,12 @@ def build_service_config() -> Dict[str, Any]:
     from the last completed node. Set ``TRADINGAGENTS_CHECKPOINT_ENABLED=false``
     to disable.
     """
+    from api.llm_config_normalize import normalize_llm_config
+
     cfg = build_fresh_config()
     if os.environ.get("TRADINGAGENTS_CHECKPOINT_ENABLED") is None:
         cfg["checkpoint_enabled"] = True
-    return cfg
+    return normalize_llm_config(cfg, in_place=True)
 
 
 def validate_api_key(config: Dict[str, Any]) -> None:
@@ -107,4 +109,6 @@ def merge_request_config(
             cfg[key] = deepcopy(value)
         else:
             cfg[key] = value
-    return cfg
+    from api.llm_config_normalize import normalize_llm_config
+
+    return normalize_llm_config(cfg, in_place=True)
