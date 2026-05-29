@@ -3,7 +3,20 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
+import { JobsTrackerProvider } from "./contexts/JobsTrackerContext";
 import { HistoryPage } from "./pages/HistoryPage";
+
+function renderHistoryPage(el: HTMLElement, initialEntries = ["/history"]) {
+  return createRoot(el).render(
+    <StrictMode>
+      <MemoryRouter initialEntries={initialEntries}>
+        <JobsTrackerProvider>
+          <HistoryPage />
+        </JobsTrackerProvider>
+      </MemoryRouter>
+    </StrictMode>,
+  );
+}
 
 describe("HistoryPage", () => {
   beforeEach(() => {
@@ -48,13 +61,7 @@ describe("HistoryPage", () => {
     document.body.appendChild(el);
 
     await act(async () => {
-      createRoot(el).render(
-        <StrictMode>
-          <MemoryRouter initialEntries={["/history"]}>
-            <HistoryPage />
-          </MemoryRouter>
-        </StrictMode>
-      );
+      renderHistoryPage(el);
     });
 
     await act(async () => {
@@ -115,13 +122,7 @@ describe("HistoryPage", () => {
     document.body.appendChild(el);
 
     await act(async () => {
-      createRoot(el).render(
-        <StrictMode>
-          <MemoryRouter>
-            <HistoryPage />
-          </MemoryRouter>
-        </StrictMode>
-      );
+      renderHistoryPage(el);
     });
 
     await act(async () => {
@@ -173,13 +174,7 @@ describe("HistoryPage", () => {
     document.body.appendChild(el);
 
     await act(async () => {
-      createRoot(el).render(
-        <StrictMode>
-          <MemoryRouter>
-            <HistoryPage />
-          </MemoryRouter>
-        </StrictMode>
-      );
+      renderHistoryPage(el);
     });
 
     await act(async () => {
@@ -218,13 +213,7 @@ describe("HistoryPage", () => {
     document.body.appendChild(el);
 
     await act(async () => {
-      createRoot(el).render(
-        <StrictMode>
-          <MemoryRouter>
-            <HistoryPage />
-          </MemoryRouter>
-        </StrictMode>
-      );
+      renderHistoryPage(el);
     });
 
     await act(async () => {
@@ -270,13 +259,7 @@ describe("HistoryPage", () => {
     document.body.appendChild(el);
 
     await act(async () => {
-      createRoot(el).render(
-        <StrictMode>
-          <MemoryRouter>
-            <HistoryPage />
-          </MemoryRouter>
-        </StrictMode>
-      );
+      renderHistoryPage(el);
     });
 
     await act(async () => {
@@ -327,13 +310,7 @@ describe("HistoryPage", () => {
     const el = document.createElement("div");
     document.body.appendChild(el);
     await act(async () => {
-      createRoot(el).render(
-        <StrictMode>
-          <MemoryRouter>
-            <HistoryPage />
-          </MemoryRouter>
-        </StrictMode>,
-      );
+      renderHistoryPage(el);
     });
     await act(async () => {
       await Promise.resolve();
@@ -354,6 +331,25 @@ describe("HistoryPage", () => {
 
     await act(async () => {
       rerunBtn.click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const copyBtn = el.querySelector(".rerun-setup-dialog__link") as HTMLButtonElement | null;
+    expect(copyBtn).toBeTruthy();
+    await act(async () => {
+      copyBtn!.click();
+      await Promise.resolve();
+    });
+
+    const startBtn = el.querySelector(
+      ".rerun-setup-dialog .ui-btn--primary",
+    ) as HTMLButtonElement;
+    expect(startBtn).toBeTruthy();
+    await act(async () => {
+      startBtn.click();
       await Promise.resolve();
     });
     await act(async () => {
@@ -397,13 +393,7 @@ describe("HistoryPage", () => {
     const el = document.createElement("div");
     document.body.appendChild(el);
     await act(async () => {
-      createRoot(el).render(
-        <StrictMode>
-          <MemoryRouter>
-            <HistoryPage />
-          </MemoryRouter>
-        </StrictMode>,
-      );
+      renderHistoryPage(el);
     });
     await act(async () => {
       await Promise.resolve();
@@ -419,7 +409,7 @@ describe("HistoryPage", () => {
     }
 
     const bulkBtn = [...el.querySelectorAll("button")].find((b) =>
-      b.textContent?.startsWith("Re-run ("),
+      b.textContent?.startsWith("Re-run tickers ("),
     ) as HTMLButtonElement;
     expect(bulkBtn).toBeTruthy();
 
@@ -428,7 +418,24 @@ describe("HistoryPage", () => {
       await Promise.resolve();
     });
 
-    expect(submitB).toHaveBeenCalledWith({ tickers: expect.arrayContaining(["AAPL", "MSFT"]) });
+    const startBatch = el.querySelector(
+      ".rerun-setup-dialog .ui-btn--primary",
+    ) as HTMLButtonElement;
+    expect(startBatch).toBeTruthy();
+    await act(async () => {
+      startBatch.click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(submitB).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tickers: expect.arrayContaining(["AAPL", "MSFT"]),
+        config_overrides: expect.objectContaining({ llm_provider: expect.any(String) }),
+      }),
+    );
   });
 
 });

@@ -3,6 +3,7 @@ from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_macro_data,
     get_indicators,
+    invoke_tool_chain_with_openrouter_fallback,
     get_language_instruction,
     list_akshare_endpoints,
     get_stock_data,
@@ -20,6 +21,8 @@ def create_market_analyst(llm):
     def market_analyst_node(state):
         current_date = state["trade_date"]
         instrument_context = build_instrument_context(state["company_of_interest"])
+        execution_context = (state.get("execution_context") or "").strip()
+        execution_block = f"\n\n{execution_context}\n" if execution_context else ""
 
         tools = [
             get_stock_data,
@@ -77,8 +80,9 @@ Volume-Based Indicators:
             + """ Browse with list_akshare_endpoints(prefix="macro_", include_stock=true), then get_macro_data(function_name, params_json, tail_rows). Example endpoints include macro_cnbs, stock_ebs_lg, stock_buffett_index_lg, stock_a_congestion_lg, stock_a_gxl_lg, and stock_hk_gxl_lg.
 - Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
-            + """ Accuracy and discipline: (1) Every stated percentage change must follow from the prices and dates returned by your tools—show old price, new price, and the implied return; if it disagrees with a quick sanity check, fix it before finalizing. (2) Do not contradict yourself in the same narrative (for example, do not describe the same moving-average relationship as both bullish and bearish). (3) Do not invent dates, tickers, volumes, or events that do not appear in tool outputs. (4) Prefer plain, technical language; avoid filler metaphors or fictional scenarios."""
+            + """ Accuracy and discipline: (1) Every stated percentage change must follow from the prices and dates returned by your tools—show old price, new price, and the implied return; if it disagrees with a quick sanity check, fix it before finalizing. (2) Do not contradict yourself in the same narrative (for example, do not describe the same moving-average relationship as both bullish and bearish). (3) Do not invent dates, tickers, volumes, or events that do not appear in tool outputs. (4) Prefer plain, technical language; avoid filler metaphors or fictional scenarios. (5) State the current/live price from the execution context block when available and note whether price is above or below key moving averages/support."""
             + get_language_instruction()
+            + execution_block
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -104,8 +108,9 @@ Volume-Based Indicators:
         prompt = prompt.partial(instrument_context=instrument_context)
 
         chain = prompt | llm.bind_tools(tools)
-
-        result = chain.invoke(state["messages"])
+        result = invoke_tool_chain_with_openrouter_fallback(
+            chain, llm, state["messages"]
+        )
 
         report = ""
 

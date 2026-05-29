@@ -139,6 +139,22 @@ class AnalysisResult(BaseModel):
         default=None,
         description="True when LangGraph serialized a dimensions snapshot before the PM step.",
     )
+    confidence_raw_tier: Optional[float] = Field(
+        default=None,
+        description="Pre-calibration confidence from rating tier alone (0..1).",
+    )
+    confidence_breakdown: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Calibration breakdown: tier, coherence_penalty, data_quality_penalty, peer_penalty.",
+    )
+    confidence_inputs: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Inputs that fed calibration: supporting/conflicting factors, weak_data, peer_scope.",
+    )
+    live_context_at_run: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Live quote and plan comparison captured when the graph started.",
+    )
 
 
 class AnalyzeResponse(BaseModel):
@@ -157,6 +173,54 @@ class JobDimensionsResponse(BaseModel):
     error: Optional[str] = Field(
         default=None,
         description="Populated when the dimensions post-pass failed but the job still completed.",
+    )
+
+
+class LiveQuoteSnapshot(BaseModel):
+    ticker: str
+    price: Optional[float] = None
+    currency: Optional[str] = None
+    fetched_at: str
+    source: str = "yfinance_regularMarketPrice"
+    error: Optional[str] = None
+
+
+class PlanLevelsSnapshot(BaseModel):
+    entry: Optional[float] = None
+    stop_loss: Optional[float] = None
+    price_target: Optional[float] = None
+
+
+class PlanComparisonSnapshot(BaseModel):
+    status: str
+    guidance: str
+    live_price: Optional[float] = None
+    entry: Optional[float] = None
+    stop_loss: Optional[float] = None
+    price_target: Optional[float] = None
+    delta_vs_entry_pct: Optional[float] = None
+    delta_vs_stop_pct: Optional[float] = None
+    delta_vs_target_pct: Optional[float] = None
+    run_time_price: Optional[float] = None
+    suggest_refresh: Optional[bool] = None
+
+
+class JobLiveContextResponse(BaseModel):
+    """GET /jobs/{job_id}/live-context — live quote vs persisted plan levels."""
+
+    quote: LiveQuoteSnapshot
+    report_close: Optional[float] = None
+    trade_date: Optional[str] = None
+    levels: PlanLevelsSnapshot
+    comparison: PlanComparisonSnapshot
+    run_time_quote: Optional[LiveQuoteSnapshot] = None
+    levels_anchored_at_run: Optional[bool] = Field(
+        default=None,
+        description="False when entry was >5% above the live quote captured at run start.",
+    )
+    historical_rating_note: str = (
+        "Rating and levels below are from the completed run; live guidance reflects "
+        "current market price."
     )
 
 

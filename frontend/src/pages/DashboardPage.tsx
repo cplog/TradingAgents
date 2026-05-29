@@ -13,6 +13,7 @@ import {
   submitAnalyze,
 } from "../api";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { useJobsRefresh } from "../contexts/JobsTrackerContext";
 
 const ANALYST_OPTIONS = [
   { id: "market", label: "Market" },
@@ -60,6 +61,7 @@ function hydrateFromServerConfig(
 export function DashboardPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const refreshJobsRibbon = useJobsRefresh();
   const tickerFromQs = searchParams.get("ticker")?.trim() ?? "";
   const jobFromQs = searchParams.get("job")?.trim() ?? "";
   const [ticker, setTicker] = useState(() => tickerFromQs || "AAPL");
@@ -129,7 +131,7 @@ export function DashboardPage() {
       .catch(() => {
         if (!cancelled) {
           setConfigHint(
-            "Could not load /config (is the API running on :8000 with Vite proxy?). Using local placeholders."
+            "Could not load /config (is the API running on :8808 with Vite proxy?). Using local placeholders."
           );
         }
       });
@@ -158,7 +160,7 @@ export function DashboardPage() {
       if (dropped.length) {
         setJobNotice(
           `Unsupported analyst(s) on this API — omitted from request: ${dropped.join(", ")}. ` +
-            `Run the API from this repo (\`pip install -e .\`, then \`uvicorn api.main:app --port 8000\`) so all focus areas are accepted.`
+            `Run the API from this repo (\`pip install -e .\`, then \`uvicorn api.main:app --port 8808\`) so all focus areas are accepted.`
         );
       }
       const r = await submitAnalyze({
@@ -168,6 +170,7 @@ export function DashboardPage() {
         analysts: analystsPayload,
         report_format: reportFormat as "markdown" | "json" | "structured",
       });
+      refreshJobsRibbon();
       activeJobIdRef.current = r.job_id;
       navigate(runsPath(r.job_id), { replace: true });
     } finally {

@@ -1,8 +1,9 @@
 /** API base: same origin in prod (served by FastAPI); Vite dev proxies /api, /analyze, … */
 
 import type { StockDimensions, DimensionsCommentary } from './dimensions-types';
+import type { JobLiveContext } from './utils/livePlanContext';
 
-/** When Vite’s dev proxy misfires, set `VITE_API_ORIGIN=http://127.0.0.1:8000` in `frontend/.env.local`. */
+/** When Vite’s dev proxy misfires, set `VITE_API_ORIGIN=http://127.0.0.1:8808` in `frontend/.env.local`. */
 export function resolveApiUrl(path: string): string {
   if (!path.startsWith("/")) return path;
   const raw =
@@ -42,13 +43,13 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
       path.startsWith("/jobs") ||
       path.startsWith("/providers") ||
       path.startsWith("/dimensions")
-        ? "Start the FastAPI API on port 8000 (e.g. `uvicorn api.main:app --port 8000`) so Vite can proxy this path. "
+        ? "Start the FastAPI API on port 8808 (e.g. `uvicorn api.main:app --port 8808`) so Vite can proxy this path. "
         : "";
     throw new Error(
       `Expected JSON from ${url}, got HTML (usually index.html: API not reached). ${apiHint}` +
         `If you use \`vite preview\`, set the same \`preview.proxy\` as dev (see frontend/vite.config.ts).` +
         (typeof import.meta !== "undefined" && import.meta.env?.DEV
-          ? " Or set VITE_API_ORIGIN=http://127.0.0.1:8000 in frontend/.env.local to bypass the proxy."
+          ? " Or set VITE_API_ORIGIN=http://127.0.0.1:8808 in frontend/.env.local to bypass the proxy."
           : ""),
     );
   }
@@ -58,7 +59,7 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("Unexpected token") && text.trimStart().startsWith("<")) {
       throw new Error(
-        `Expected JSON from ${url}, got HTML/markup. Start the API on :8000 or fix the dev proxy. First bytes: ${JSON.stringify(text.slice(0, 160))}`
+        `Expected JSON from ${url}, got HTML/markup. Start the API on :8808 or fix the dev proxy. First bytes: ${JSON.stringify(text.slice(0, 160))}`
       );
     }
     throw new Error(`${msg} (response from ${url}, first bytes: ${JSON.stringify(text.slice(0, 120))})`);
@@ -184,6 +185,19 @@ export type JobResultPayload = {
   dimensions_commentary?: DimensionsCommentary | null;
   dimensions_error?: string | null;
   dimensions_in_graph?: boolean | null;
+  confidence_raw_tier?: number | null;
+  confidence_breakdown?: {
+    tier?: number;
+    coherence_penalty?: number;
+    data_quality_penalty?: number;
+    peer_penalty?: number;
+  } | null;
+  confidence_inputs?: {
+    supporting_factors?: { key: string; score: number }[];
+    conflicting_factors?: { key: string; score: number }[];
+    weak_data?: string[];
+    peer_scope?: string | null;
+  } | null;
 };
 
 export type JobDimensionsBundle = {
@@ -488,8 +502,8 @@ export async function fetchIndustryConstituents(params: {
         throw new Error(
           `${msg}\n` +
             "If the API is running, the Vite dev proxy may be returning this 404. " +
-            "Create frontend/.env.local with VITE_API_ORIGIN=http://127.0.0.1:8000 (or your API port), restart npm run dev, and try again. " +
-            "Verify the route exists: curl -sS 'http://127.0.0.1:8000/openapi.json' | grep industry-constituents",
+            "Create frontend/.env.local with VITE_API_ORIGIN=http://127.0.0.1:8808 (or your API port), restart npm run dev, and try again. " +
+            "Verify the route exists: curl -sS 'http://127.0.0.1:8808/openapi.json' | grep industry-constituents",
         );
       }
       throw lastErr;
@@ -560,6 +574,14 @@ export async function postClearCache(adminKey: string, mode = "checkpoints"): Pr
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export async function getJobLiveContext(jobId: string): Promise<JobLiveContext> {
+  return apiJson(`/api/jobs/${encodeURIComponent(jobId)}/live-context`);
+}
+
+export async function getHistoryRunLiveContext(runId: string): Promise<JobLiveContext> {
+  return apiJson(`/api/history/runs/${encodeURIComponent(runId)}/live-context`);
 }
 
 export async function getJobDimensions(jobId: string): Promise<JobDimensionsBundle> {

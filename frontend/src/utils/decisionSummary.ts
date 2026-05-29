@@ -1,4 +1,5 @@
 import { normalizeRatingTier, ratingGuideFor } from "./ratingGuide";
+import { livePracticalNote, type JobLiveContext } from "./livePlanContext";
 import { deriveTradingPlan } from "./tradingPlan";
 
 export type DecisionSummary = {
@@ -13,6 +14,8 @@ export type DecisionSummary = {
   whyNow: string[];
   invalidation: string;
   horizon: string;
+  /** Warning-only note when live price diverges from plan (does not override rating). */
+  livePracticalNote: string | null;
 };
 
 function cleanLine(raw: string): string {
@@ -62,6 +65,7 @@ export function deriveDecisionSummary(
   reports: Record<string, string> | undefined,
   rating: string | null | undefined,
   confidence: number | null | undefined,
+  liveContext?: JobLiveContext | null,
 ): DecisionSummary {
   const guide = ratingGuideFor(rating);
   const actionNow = actionFromRating(rating);
@@ -124,5 +128,6 @@ export function deriveDecisionSummary(
     whyNow,
     invalidation,
     horizon,
+    livePracticalNote: livePracticalNote(liveContext),
   };
 }

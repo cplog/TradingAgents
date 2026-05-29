@@ -5,13 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 
 BACKEND_HOST="${BACKEND_HOST:-0.0.0.0}"
-BACKEND_PORT="${BACKEND_PORT:-8000}"
+BACKEND_PORT="${BACKEND_PORT:-8808}"
 FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
-FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+FRONTEND_PORT="${FRONTEND_PORT:-53173}"
 
 BACKEND_CMD="${BACKEND_CMD:-uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}}"
 FRONTEND_CMD="${FRONTEND_CMD:-npm run dev -- --host ${FRONTEND_HOST} --port ${FRONTEND_PORT}}"
-# Default 0: an old uvicorn on :8000 causes POST /analyze 422 on hot_money/policy/lockup/kronos.
+# Default 0: an old uvicorn on :8808 causes POST /analyze 422 on hot_money/policy/lockup/kronos.
 # Opt in to reuse: REUSE_BACKEND_IF_BUSY=1 ./scripts/dev_up.sh
 REUSE_BACKEND_IF_BUSY="${REUSE_BACKEND_IF_BUSY:-0}"
 

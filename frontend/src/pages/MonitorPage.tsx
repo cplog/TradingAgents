@@ -142,7 +142,7 @@ export function MonitorPage() {
           {(error.includes("404") || error.includes("405")) && (
             <>
               {" "}
-              Restart the FastAPI server on port 8000 — an older uvicorn process may be running without{" "}
+              Restart the FastAPI server on port 8808 — an older uvicorn process may be running without{" "}
               <code>/api/monitor</code> routes.
             </>
           )}

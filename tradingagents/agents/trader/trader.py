@@ -39,13 +39,18 @@ def create_trader(llm):
                 f"\n\n**Standardized dimensions snapshot:** unavailable ({dim_err}).\n"
             )
 
+        execution_context = (state.get("execution_context") or "").strip()
+        execution_note = f"\n\n{execution_context}\n" if execution_context else ""
+
         messages = [
             {
                 "role": "system",
                 "content": (
                     "You are a trading agent analyzing market data to make investment decisions. "
                     "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
-                    "Anchor your reasoning in the analysts' reports and the research plan."
+                    "Anchor your reasoning in the analysts' reports and the research plan. "
+                    "When live quote context is provided, set entry_price and stop_loss relative to "
+                    "that price and note in reasoning what to do if price is already below stop."
                     + get_language_instruction()
                 ),
             },
@@ -57,7 +62,7 @@ def create_trader(llm):
                     f"insights from current technical market trends, macroeconomic indicators, and "
                     f"social media sentiment. Use this plan as a foundation for evaluating your next "
                     f"trading decision.\n\nProposed Investment Plan: {investment_plan}\n"
-                    f"{dim_note}\n"
+                    f"{dim_note}{execution_note}\n"
                     f"Leverage these insights to make an informed and strategic decision."
                 ),
             },

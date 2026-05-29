@@ -110,6 +110,12 @@ def _d1_query(
     return rows if isinstance(rows, list) else []
 
 
+def warmup_history_storage() -> None:
+    """Apply D1 DDL once at process startup (no-op when D1 is not configured)."""
+    if d1_history_enabled():
+        _ensure_d1_schema()
+
+
 def _ensure_d1_schema() -> None:
     global _d1_initialized
     if _d1_initialized:

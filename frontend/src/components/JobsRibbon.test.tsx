@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { JobsRibbon } from "./JobsRibbon";
+import { JobsTrackerProvider } from "../contexts/JobsTrackerContext";
 import type { JobStatus } from "../api";
 import * as api from "../api";
 
@@ -45,7 +46,15 @@ describe("JobsRibbon", () => {
     render(
       <MemoryRouter initialEntries={["/start"]}>
         <Routes>
-          <Route path="*" element={<><JobsRibbon /><LocationProbe /></>} />
+          <Route
+            path="*"
+            element={
+              <JobsTrackerProvider>
+                <JobsRibbon />
+                <LocationProbe />
+              </JobsTrackerProvider>
+            }
+          />
         </Routes>
       </MemoryRouter>,
     );
@@ -73,7 +82,9 @@ describe("JobsRibbon", () => {
 
     const { container } = render(
       <MemoryRouter>
-        <JobsRibbon />
+        <JobsTrackerProvider>
+          <JobsRibbon />
+        </JobsTrackerProvider>
       </MemoryRouter>,
     );
 
@@ -92,7 +103,9 @@ describe("JobsRibbon", () => {
 
     render(
       <MemoryRouter>
-        <JobsRibbon />
+        <JobsTrackerProvider>
+          <JobsRibbon />
+        </JobsTrackerProvider>
       </MemoryRouter>,
     );
 

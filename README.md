@@ -197,12 +197,14 @@ cd frontend && npm install && npm run build && cd ..
 
 2. Run the API (serves REST + OpenAPI at `/docs` and the production SPA from `frontend/dist` when present):
 ```bash
-uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8808
 ```
 
-3. For interactive UI development with hot reload, run Vite separately (proxies API calls to port 8000):
+3. For interactive UI development with hot reload, run Vite separately (proxies API calls to port 8808; UI on **53173**):
+
 ```bash
-cd frontend && npm run dev
+./scripts/dev_up.sh
+# or: cd frontend && npm run dev
 ```
 
 Environment variables (see `.env.example`):
@@ -211,7 +213,7 @@ Environment variables (see `.env.example`):
 - `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_KV_NAMESPACE_ID`, `CLOUDFLARE_API_TOKEN` — optional; when set, runtime config and persisted secrets use Workers KV instead of `~/.tradingagents/api_state.json`.
 - `TRADINGAGENTS_API_STATE_FILE` — optional path override for the local JSON state file.
 
-Docker Compose profile `api` still runs `uvicorn api.main:app` on port 8000; build the frontend before building the image if you want the bundled SPA.
+Docker Compose profile `api` runs `uvicorn api.main:app` on port **8808**; build the frontend before building the image if you want the bundled SPA.
 
 ### Standardized stock dimensions
 

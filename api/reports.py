@@ -147,6 +147,107 @@ def rating_to_confidence(rating: str) -> float:
     return 0.5
 
 
+# Direction of factors when paired with a bullish (long) call.
+# +1 = supports bullish, -1 = a bullish call expects the inverse, 0 = neutral.
+_FACTOR_BULL_DIRECTION = {
+    "value": 1,
+    "growth": 1,
+    "quality": 1,
+    "momentum": 1,
+    "low_risk": 1,
+    "sentiment": 1,
+}
+
+
+def _rating_direction(rating: str) -> int:
+    """+1 bullish (Buy/Overweight), -1 bearish (Underweight/Sell), 0 neutral (Hold)."""
+    r = (rating or "").strip().lower()
+    if "buy" in r or "overweight" in r:
+        return 1
+    if "sell" in r or "underweight" in r:
+        return -1
+    return 0
+
+
+def calibrate_confidence(
+    rating: str,
+    factor_scores: Optional[Dict[str, Any]] = None,
+    data_quality_flags: Optional[List[str]] = None,
+    conflicting_dimensions: Optional[List[str]] = None,
+    peer_scope: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Produce a calibrated confidence score with auditable inputs.
+
+    Returns: {
+      raw_tier: float,            # original rating-tier confidence (0..1)
+      score: float,               # calibrated 0..1
+      breakdown: {tier, coherence_penalty, data_quality_penalty, peer_penalty},
+      inputs: {
+        supporting_factors: [{key, score}],
+        conflicting_factors: [{key, score}],
+        weak_data: [str],         # data_quality_flags that reduced score
+        peer_scope: str|None,
+      }
+    }
+    """
+    base = rating_to_confidence(rating)
+    direction = _rating_direction(rating)
+    flags = list(data_quality_flags or [])
+
+    supporting: List[Dict[str, Any]] = []
+    conflicting: List[Dict[str, Any]] = []
+
+    if factor_scores and direction != 0:
+        for key, dirn in _FACTOR_BULL_DIRECTION.items():
+            entry = factor_scores.get(key) if isinstance(factor_scores, dict) else None
+            score = None
+            if isinstance(entry, dict):
+                score = entry.get("score")
+            elif isinstance(entry, (int, float)):
+                score = float(entry)
+            if score is None:
+                continue
+            # Align direction with rating: bull call wants high factor; bear call wants low.
+            adjusted = score if direction == 1 else (100 - score)
+            row = {"key": key, "score": float(score)}
+            if adjusted >= 60:
+                supporting.append(row)
+            elif adjusted <= 40:
+                conflicting.append(row)
+
+    # Factor-coherence penalty: 8 pts per conflicting factor, capped at 25.
+    coherence_penalty = min(0.25, 0.08 * len(conflicting))
+
+    # Data-quality penalty: 4 pts per flag, capped at 20.
+    data_quality_penalty = min(0.20, 0.04 * len(flags))
+
+    # Peer-scope penalty for thin peer comparability.
+    peer_penalty = 0.0
+    if peer_scope in ("unavailable", None):
+        peer_penalty = 0.10
+    elif peer_scope == "global_fallback":
+        peer_penalty = 0.05
+
+    score = max(0.0, base - coherence_penalty - data_quality_penalty - peer_penalty)
+
+    return {
+        "raw_tier": round(base, 3),
+        "score": round(score, 3),
+        "breakdown": {
+            "tier": round(base, 3),
+            "coherence_penalty": round(coherence_penalty, 3),
+            "data_quality_penalty": round(data_quality_penalty, 3),
+            "peer_penalty": round(peer_penalty, 3),
+        },
+        "inputs": {
+            "supporting_factors": supporting,
+            "conflicting_factors": conflicting,
+            "weak_data": flags,
+            "peer_scope": peer_scope,
+        },
+    }
+
+
 def build_result(
     final_state: Dict[str, Any],
     rating: str,
@@ -235,6 +336,40 @@ def build_result(
     }
     if analyst_coverage is not None:
         payload["analyst_coverage"] = analyst_coverage
+
+    from tradingagents.agents.utils.execution_context import (
+        build_run_execution_annotation,
+        derive_plan_levels,
+        parse_run_snapshot_json,
+    )
+
+    run_snap = parse_run_snapshot_json(final_state.get("live_quote_at_run_json"))
+    ref_price: Optional[float] = None
+    if isinstance(run_snap, dict):
+        q = run_snap.get("quote") or {}
+        raw_px = q.get("price")
+        if raw_px is not None:
+            try:
+                ref_price = float(raw_px)
+            except (TypeError, ValueError):
+                ref_price = None
+    structured_payload = structured if structured else None
+    plan_levels = derive_plan_levels(
+        reports,
+        structured=structured_payload,
+        reference_price=ref_price,
+    )
+    payload["plan_levels"] = plan_levels
+    annotation = build_run_execution_annotation(
+        reports,
+        run_snap,
+        payload["completed_at"],
+        structured=structured_payload,
+        plan_levels=plan_levels,
+    )
+    if annotation:
+        payload["live_context_at_run"] = annotation
+
     return payload
 
 

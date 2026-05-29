@@ -1093,6 +1093,36 @@ class Worker:
                             stage=stage,
                         )
 
+                # Calibrate confidence from dimensions + commentary + rating tier.
+                try:
+                    from api.reports import calibrate_confidence
+
+                    dims_snap = result.get("dimensions") or {}
+                    factor_scores = (dims_snap.get("factor_scores") or {}) if isinstance(dims_snap, dict) else {}
+                    data_quality_flags = (
+                        dims_snap.get("data_quality_flags") or []
+                        if isinstance(dims_snap, dict) else []
+                    )
+                    peer_scope = dims_snap.get("peer_scope") if isinstance(dims_snap, dict) else None
+                    commentary = result.get("dimensions_commentary") or {}
+                    conflicting = (
+                        commentary.get("conflicting_dimensions") or []
+                        if isinstance(commentary, dict) else []
+                    )
+                    calib = calibrate_confidence(
+                        rating=rating,
+                        factor_scores=factor_scores,
+                        data_quality_flags=data_quality_flags,
+                        conflicting_dimensions=conflicting,
+                        peer_scope=peer_scope,
+                    )
+                    result["confidence_raw_tier"] = calib["raw_tier"]
+                    result["confidence"] = calib["score"]
+                    result["confidence_breakdown"] = calib["breakdown"]
+                    result["confidence_inputs"] = calib["inputs"]
+                except Exception as exc:  # never let calibration fail the run
+                    logger.warning("Confidence calibration skipped for %s: %s", job_id, exc)
+
                 if self.store.is_cancellation_requested(job_id):
                     self.store.set_result(job_id, result)
                     self.store.append_progress(
@@ -1220,11 +1250,38 @@ class Worker:
                 )
 
                 def _seeded_create_initial_state(
-                    company_name, trade_date, past_context=""
+                    company_name,
+                    trade_date,
+                    past_context="",
+                    execution_context="",
+                    live_quote_at_run_json="",
+                    **kwargs: Any,
                 ):
-                    state = original_create(
-                        company_name, trade_date, past_context=past_context,
-                    )
+                    # Support both old and new propagator signatures.
+                    # Newer versions accept execution_context/live_quote_at_run_json;
+                    # older fakes/wrappers only accept past_context.
+                    try:
+                        state = original_create(
+                            company_name,
+                            trade_date,
+                            past_context=past_context,
+                            execution_context=execution_context,
+                            live_quote_at_run_json=live_quote_at_run_json,
+                            **kwargs,
+                        )
+                    except TypeError as exc:
+                        msg = str(exc)
+                        if (
+                            "unexpected keyword argument 'execution_context'" not in msg
+                            and "unexpected keyword argument 'live_quote_at_run_json'" not in msg
+                        ):
+                            raise
+                        state = original_create(
+                            company_name,
+                            trade_date,
+                            past_context=past_context,
+                            **kwargs,
+                        )
                     state["kronos_report"] = kronos_md
                     if overnight_signal:
                         state["overnight_signal"] = json.dumps(

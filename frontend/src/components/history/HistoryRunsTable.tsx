@@ -124,6 +124,8 @@ export type HistoryRunsTableProps = {
   onSelectCompareB: (runId: string) => void;
   onRetryFailed?: (row: HistoryTableRow) => void;
   retryingRunId?: string | null;
+  onRerunRun?: (row: HistoryTableRow) => void;
+  rerunPendingRunId?: string | null;
 };
 
 export function HistoryRunsTable({
@@ -144,6 +146,8 @@ export function HistoryRunsTable({
   onSelectCompareB,
   onRetryFailed,
   retryingRunId = null,
+  onRerunRun,
+  rerunPendingRunId = null,
 }: HistoryRunsTableProps) {
   const [bodyRef] = useAutoAnimate();
 
@@ -320,6 +324,18 @@ export function HistoryRunsTable({
                         onClick={() => onRetryFailed(r)}
                       >
                         {retryingRunId === r.run_id ? "…" : "Retry"}
+                      </button>
+                    ) : null}
+                    {r.job_status === "completed" && onRerunRun ? (
+                      <button
+                        type="button"
+                        className="ui-btn-secondary"
+                        style={{ fontSize: "var(--text-ui-sm)", padding: "2px 8px" }}
+                        disabled={rerunPendingRunId === r.run_id}
+                        title="Re-run with same ticker, date, and analysts — choose models in the dialog"
+                        onClick={() => onRerunRun(r)}
+                      >
+                        {rerunPendingRunId === r.run_id ? "…" : "Re-run"}
                       </button>
                     ) : null}
                     <Link

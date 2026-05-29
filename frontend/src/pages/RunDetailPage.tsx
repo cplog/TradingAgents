@@ -21,10 +21,18 @@ import {
   submitAnalyze,
 } from "../api";
 import { useRunDetail } from "../hooks/useRunDetail";
+import { useLivePlanContext } from "../hooks/useLivePlanContext";
 import { useReportExport } from "../hooks/useReportExport";
 import { useActiveSection } from "../hooks/useActiveSection";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import { buildRerunAnalyzePayload } from "../utils/historyRerun";
+import { useJobsRefresh } from "../contexts/JobsTrackerContext";
+import {
+  buildRerunAnalyzePayload,
+  formatPriorRunLlmLabel,
+  withLlmOverrides,
+} from "../utils/historyRerun";
+import { RerunSetupDialog } from "../components/RerunSetupDialog";
+import type { LlmConfig } from "../components/LlmPicker";
 import {
   REPORT_SECTION_LABELS,
   orderedReportSectionKeys,
@@ -35,6 +43,7 @@ export function RunDetailPage() {
   const { jobId: routeJobId } = useParams<{ jobId: string }>();
   const runId = routeJobId?.trim() ?? "";
   const navigate = useNavigate();
+  const refreshJobsRibbon = useJobsRefresh();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabFromQs = searchParams.get("tab");
   const { job, historyDetail, events, notice, loading, jobActive } = useRunDetail(runId);
@@ -83,6 +92,13 @@ export function RunDetailPage() {
   );
   const showAnalysisTabs = showDimensionalStudy && showAgentReports;
 
+  const livePlanEnabled = job?.status === "completed" && Boolean(result?.reports);
+  const {
+    context: liveContext,
+    loading: liveContextLoading,
+    error: liveContextError,
+  } = useLivePlanContext(runId, livePlanEnabled);
+
   const { handleExportHtml, handleExportPng, handlePrint, markdownHref, exportDisabled, decisionSummary } =
     useReportExport({
       reportBodyRef,
@@ -93,6 +109,7 @@ export function RunDetailPage() {
       date: tradeDate,
       confidence: result?.confidence ?? historyDetail?.confidence ?? null,
       reports: result?.reports,
+      liveContext,
       canExportHtml: showAgentReports,
     });
 
@@ -143,18 +160,25 @@ export function RunDetailPage() {
     }
   }, [job?.status]);
 
-  const onRerun = useCallback(async () => {
-    const base = historyDetail;
-    if (!base) return;
-    setActionLoading(true);
-    try {
-      const body = buildRerunAnalyzePayload(base);
-      const r = await submitAnalyze(body);
-      navigate(runsPath(r.job_id));
-    } finally {
-      setActionLoading(false);
-    }
-  }, [historyDetail, navigate]);
+  const [rerunOpen, setRerunOpen] = useState(false);
+
+  const onConfirmRerun = useCallback(
+    async (llm: LlmConfig) => {
+      const base = historyDetail;
+      if (!base) return;
+      setActionLoading(true);
+      try {
+        const body = withLlmOverrides(buildRerunAnalyzePayload(base), llm);
+        const r = await submitAnalyze(body);
+        refreshJobsRibbon();
+        setRerunOpen(false);
+        navigate(runsPath(r.job_id));
+      } finally {
+        setActionLoading(false);
+      }
+    },
+    [historyDetail, navigate],
+  );
 
   const onResume = useCallback(async () => {
     if (!runId) return;
@@ -221,8 +245,13 @@ export function RunDetailPage() {
       {(historyDetail && job?.status === "completed") || (job?.resumable && job.status === "failed") ? (
         <div className="run-detail-page__actions">
           {historyDetail && job?.status === "completed" && (
-            <button type="button" className="ui-btn-secondary" disabled={actionLoading} onClick={() => void onRerun()}>
-              Rerun with same setup
+            <button
+              type="button"
+              className="ui-btn-secondary"
+              disabled={actionLoading}
+              onClick={() => setRerunOpen(true)}
+            >
+              Re-run…
             </button>
           )}
           {job?.resumable && job.status === "failed" && (
@@ -263,6 +292,22 @@ export function RunDetailPage() {
                 confidencePct={decisionSummary.confidencePct}
                 summary={decisionSummary}
                 reports={result?.reports}
+                liveContext={liveContext}
+                liveContextLoading={liveContextLoading}
+                liveContextError={liveContextError}
+                tradeDate={tradeDate}
+                calibration={
+                  result?.confidence_inputs || result?.confidence_breakdown
+                    ? {
+                        rawTierPct:
+                          result?.confidence_raw_tier != null
+                            ? Math.round(result.confidence_raw_tier * 100)
+                            : null,
+                        breakdown: result?.confidence_breakdown ?? null,
+                        inputs: result?.confidence_inputs ?? null,
+                      }
+                    : null
+                }
               />
             </div>
             <div className="run-detail-page__meta">
@@ -374,6 +419,25 @@ export function RunDetailPage() {
         <div className="panel panel--error" role="alert">
           {job.error}
         </div>
+      )}
+
+      {historyDetail && (
+        <RerunSetupDialog
+          open={rerunOpen}
+          title="Re-run analysis"
+          description="Choose LLM provider and models. Ticker, date, and analysts stay the same as this run."
+          runSummary={`${ticker}${tradeDate ? ` · ${tradeDate}` : ""}`}
+          priorRunLlm={formatPriorRunLlmLabel(
+            historyDetail.config_snapshot,
+            historyDetail.provenance ?? provenance,
+          )}
+          configSnapshot={historyDetail.config_snapshot ?? null}
+          submitting={actionLoading}
+          onClose={() => {
+            if (!actionLoading) setRerunOpen(false);
+          }}
+          onConfirm={onConfirmRerun}
+        />
       )}
     </PageFrame>
   );

@@ -19,12 +19,16 @@ def create_research_manager(llm):
     def research_manager_node(state) -> dict:
         instrument_context = build_instrument_context(state["company_of_interest"])
         history = state["investment_debate_state"].get("history", "")
+        execution_context = (state.get("execution_context") or "").strip()
 
         investment_debate_state = state["investment_debate_state"]
+
+        execution_note = f"\n\n{execution_context}\n" if execution_context else ""
 
         prompt = f"""As the Research Manager and debate facilitator, your role is to critically evaluate this round of debate and deliver a clear, actionable investment plan for the trader.
 
 {instrument_context}
+{execution_note}
 
 ---
 
@@ -36,6 +40,8 @@ def create_research_manager(llm):
 - **Sell**: Strong conviction in the bear thesis; recommend exiting or avoiding the position
 
 Commit to a clear stance whenever the debate's strongest arguments warrant one; reserve Hold for situations where the evidence on both sides is genuinely balanced.
+
+In **Strategic Actions**, include explicit entry/stop/target levels anchored to the live quote when provided above, and one sentence on what to do if price is already below a proposed stop or above target at decision time.
 
 ---
 

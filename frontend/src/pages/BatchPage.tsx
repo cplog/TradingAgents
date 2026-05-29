@@ -19,6 +19,7 @@ import { topicPath, paths } from "../navigation/routes";
 import type { FactorScores, StockDimensions } from "../dimensions-types";
 import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { useJobsRefresh } from "../contexts/JobsTrackerContext";
 
 const ANALYST_OPTIONS = [
   { id: "market", label: "Market" },
@@ -64,6 +65,7 @@ function readInitialTickers(): string {
 }
 
 export function BatchPage() {
+  const refreshJobsRibbon = useJobsRefresh();
   const [batchBodyRef] = useAutoAnimate();
   const [rawTickers, setRawTickers] = useState<string>(() => readInitialTickers());
   const [selectedAnalysts, setSelectedAnalysts] = useState<string[]>(() =>
@@ -193,6 +195,7 @@ export function BatchPage() {
       analysts: analystsPayload,
       config_overrides: llmConfigToOverrides(llmConfig),
     });
+    refreshJobsRibbon();
     setBatchId(r.batch_id);
     setDimsByJob({});
   }

@@ -232,3 +232,20 @@ def test_history_delete_all_matching_filters(api_client: TestClient):
     )
     assert wipe.status_code == 200
     assert api_client.get("/api/history/runs").json() == []
+
+
+@pytest.mark.unit
+def test_lifespan_calls_warmup_history_storage(monkeypatch):
+    """D1 DDL should run at startup, not on the first GET /api/history/runs."""
+    calls: list[str] = []
+
+    def _record():
+        calls.append("warmup")
+
+    monkeypatch.setattr("api.history.warmup_history_storage", _record)
+
+    from api.main import app
+
+    with TestClient(app) as client:
+        client.get("/health")
+    assert calls == ["warmup"]

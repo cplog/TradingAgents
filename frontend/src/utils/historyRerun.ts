@@ -1,4 +1,5 @@
 import type { AnalyzeRequestBody, HistoryRunDetail, JobStatus } from "../api";
+import { llmConfigToOverrides, type LlmConfig } from "../components/LlmPicker";
 
 const ANALYST_REPORT_KEYS = [
   "market",
@@ -96,4 +97,66 @@ export function buildRerunAnalyzePayloadFromJob(job: JobStatus): AnalyzeRequestB
   }
 
   return body;
+}
+
+/** Map persisted run config into LlmPicker fields (for “copy from previous run”). */
+export function llmConfigFromSnapshot(
+  snap: Record<string, unknown> | null | undefined,
+): Partial<LlmConfig> {
+  if (!snap || typeof snap !== "object") return {};
+  const partial: Partial<LlmConfig> = {};
+  const prov = snap.llm_provider;
+  if (typeof prov === "string" && prov.trim()) {
+    partial.provider = prov === "ollama" ? "ollama-local" : prov;
+  }
+  if (typeof snap.deep_think_llm === "string" && snap.deep_think_llm.trim()) {
+    partial.deepModel = snap.deep_think_llm;
+  }
+  if (typeof snap.quick_think_llm === "string" && snap.quick_think_llm.trim()) {
+    partial.quickModel = snap.quick_think_llm;
+  }
+  if (typeof snap.backend_url === "string") {
+    partial.backendUrl = snap.backend_url;
+  }
+  if (typeof snap.openrouter_free_only === "boolean") {
+    partial.openrouterFreeOnly = snap.openrouter_free_only;
+  }
+  return partial;
+}
+
+/** Human-readable prior-run LLM line for the rerun dialog. */
+export function formatPriorRunLlmLabel(
+  snap: Record<string, unknown> | null | undefined,
+  provenance?: { llm_provider?: string | null; llm_deep?: string | null; llm_quick?: string | null } | null,
+): string | null {
+  const prov =
+    (typeof snap?.llm_provider === "string" && snap.llm_provider) ||
+    provenance?.llm_provider ||
+    null;
+  const deep =
+    (typeof snap?.deep_think_llm === "string" && snap.deep_think_llm) ||
+    provenance?.llm_deep ||
+    null;
+  const quick =
+    (typeof snap?.quick_think_llm === "string" && snap.quick_think_llm) ||
+    provenance?.llm_quick ||
+    null;
+  if (!prov && !deep && !quick) return null;
+  const models =
+    deep && quick && deep !== quick ? `${deep} / ${quick}` : deep || quick || "";
+  return models ? `${prov ?? "unknown"} · ${models}` : String(prov);
+}
+
+/** Apply the user’s LLM picker choice onto a rerun / retry analyze body. */
+export function withLlmOverrides(
+  body: AnalyzeRequestBody,
+  llm: LlmConfig,
+): AnalyzeRequestBody {
+  return {
+    ...body,
+    config_overrides: {
+      ...(body.config_overrides ?? {}),
+      ...llmConfigToOverrides(llm),
+    },
+  };
 }

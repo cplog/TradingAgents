@@ -5,7 +5,7 @@ import { sortActiveJobs } from "../utils/activeJobsDisplay";
 /**
  * Lightweight cross-page jobs tracker for the persistent jobs ribbon.
  *
- * Polls `/jobs?limit=20` on an interval (2s while anything is in-flight,
+ * Polls `/jobs?limit=100` on an interval (2s while anything is in-flight,
  * 15s when everything is quiet) and reports:
  *   - active: queued/running/resuming jobs
  *   - recentlyCompleted: jobs that finished within the past hour
@@ -49,6 +49,8 @@ function jobEndedAtMs(job: JobStatus): number {
 export type JobsTracker = {
   active: JobStatus[];
   recentlyCompleted: JobStatus[];
+  /** Latest poll payload (for history merge; avoids a second /api/jobs on Runs). */
+  jobsSnapshot: JobStatus[];
   /** Job ids that became terminal on the most recent fetch (one-shot). */
   justCompletedIds: string[];
   loading: boolean;
@@ -60,6 +62,7 @@ export type JobsTracker = {
 export function useJobsTracker(): JobsTracker {
   const [active, setActive] = useState<JobStatus[]>([]);
   const [recentlyCompleted, setRecentlyCompleted] = useState<JobStatus[]>([]);
+  const [jobsSnapshot, setJobsSnapshot] = useState<JobStatus[]>([]);
   const [justCompletedIds, setJustCompletedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -73,8 +76,9 @@ export function useJobsTracker(): JobsTracker {
 
     async function tick(): Promise<void> {
       try {
-        const jobs = await fetchJobs(20);
+        const jobs = await fetchJobs(100);
         if (cancelled) return;
+        setJobsSnapshot(jobs);
         const now = Date.now();
         const nextActive: JobStatus[] = [];
         const nextRecent: JobStatus[] = [];
@@ -105,7 +109,9 @@ export function useJobsTracker(): JobsTracker {
         setRecentlyCompleted(nextRecent);
         setJustCompletedIds(newlyCompleted);
         setError(null);
-        const wait = nextActive.length > 0 ? 2000 : 15000;
+        // Fast poll while jobs are in-flight (heartbeats + step labels). Slower when idle
+        // so a stray submit still appears within a few seconds without hammering the API.
+        const wait = nextActive.length > 0 ? 2000 : 5000;
         timer = setTimeout(() => void tick(), wait);
       } catch (e: unknown) {
         if (cancelled) return;
@@ -128,5 +134,13 @@ export function useJobsTracker(): JobsTracker {
     setPulse((n) => n + 1);
   }
 
-  return { active, recentlyCompleted, justCompletedIds, loading, error, refresh };
+  return {
+    active,
+    recentlyCompleted,
+    jobsSnapshot,
+    justCompletedIds,
+    loading,
+    error,
+    refresh,
+  };
 }

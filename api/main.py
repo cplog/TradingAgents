@@ -67,6 +67,7 @@ from api.models import (
     HistoryRunDetail,
     HistoryRunRef,
     JobDimensionsResponse,
+    JobLiveContextResponse,
     JobStatusResponse,
     MonitorTickerRequest,
     MonitorWatchlistSetRequest,
@@ -621,6 +622,15 @@ async def lifespan(app: FastAPI):
         state_store=get_state_store(),
     )
     restarted = await _worker.restart_queued_jobs()
+
+    from api.history import warmup_history_storage
+
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, warmup_history_storage)
+        logger.info("History storage warmup complete")
+    except Exception:
+        logger.exception("History storage warmup failed (first list query may retry DDL)")
 
     logger.info(
         "TradingAgents API started | provider=%s | deep=%s | quick=%s | concurrency=%d | restarted_jobs=%d",
@@ -1264,6 +1274,47 @@ def _job_dimensions_from_result(result: Optional[Dict[str, Any]]) -> JobDimensio
     return JobDimensionsResponse(dimensions=dimensions, commentary=commentary, error=err_str)
 
 
+@app.get("/jobs/{job_id}/live-context", response_model=JobLiveContextResponse)
+@app.get("/api/jobs/{job_id}/live-context", response_model=JobLiveContextResponse)
+async def get_job_live_context(job_id: str) -> JobLiveContextResponse:
+    """Live quote vs entry/stop/target from a completed job's reports."""
+    record = _worker.store.get(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if record.status != "completed" or not record.result:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is {record.status}; live context requires a completed report",
+        )
+    from tradingagents.agents.utils.execution_context import build_live_context_payload
+
+    ticker = str(record.ticker or "").strip()
+    trade_date = str(record.date or "").strip()
+    reports = record.result.get("reports") if isinstance(record.result, dict) else None
+    run_snapshot = (
+        record.result.get("live_context_at_run") if isinstance(record.result, dict) else None
+    )
+    completed_at = (
+        record.result.get("completed_at") if isinstance(record.result, dict) else None
+    )
+    structured = (
+        record.result.get("structured") if isinstance(record.result, dict) else None
+    )
+    plan_levels = (
+        record.result.get("plan_levels") if isinstance(record.result, dict) else None
+    )
+    payload = build_live_context_payload(
+        ticker,
+        trade_date,
+        reports,
+        run_snapshot=run_snapshot,
+        completed_at=str(completed_at) if completed_at else None,
+        structured=structured if isinstance(structured, dict) else None,
+        plan_levels=plan_levels if isinstance(plan_levels, dict) else None,
+    )
+    return JobLiveContextResponse.model_validate(payload)
+
+
 @app.get("/jobs/{job_id}/dimensions", response_model=JobDimensionsResponse)
 async def get_job_dimensions(job_id: str) -> JobDimensionsResponse:
     record = _worker.store.get(job_id)
@@ -1471,6 +1522,32 @@ async def history_get_run(run_id: str) -> HistoryRunDetail:
             cfg, cov if isinstance(cov, dict) else None
         )
     return HistoryRunDetail.model_validate(payload)
+
+
+@app.get("/api/history/runs/{run_id}/live-context", response_model=JobLiveContextResponse)
+async def history_run_live_context(run_id: str) -> JobLiveContextResponse:
+    from tradingagents.agents.utils.execution_context import build_live_context_payload
+
+    raw = get_run(get_state_store(), run_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail="Run not found")
+    ticker = str(raw.get("ticker") or "").strip()
+    trade_date = str(raw.get("date") or raw.get("trade_date") or "").strip()
+    reports = raw.get("reports") if isinstance(raw.get("reports"), dict) else None
+    run_snapshot = raw.get("live_context_at_run") if isinstance(raw, dict) else None
+    completed_at = raw.get("completed_at") if isinstance(raw, dict) else None
+    structured = raw.get("structured") if isinstance(raw.get("structured"), dict) else None
+    plan_levels = raw.get("plan_levels") if isinstance(raw.get("plan_levels"), dict) else None
+    payload = build_live_context_payload(
+        ticker,
+        trade_date,
+        reports,
+        run_snapshot=run_snapshot,
+        completed_at=str(completed_at) if completed_at else None,
+        structured=structured,
+        plan_levels=plan_levels,
+    )
+    return JobLiveContextResponse.model_validate(payload)
 
 
 def _purge_job_after_history_delete(run_id: str) -> bool:

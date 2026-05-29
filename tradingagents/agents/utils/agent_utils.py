@@ -1,3 +1,5 @@
+import logging
+
 from langchain_core.messages import HumanMessage, RemoveMessage
 
 # Import tools from separate utility files
@@ -26,6 +28,8 @@ from tradingagents.agents.utils.macro_data_tools import (
     list_akshare_endpoints,
     get_macro_data,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_language_instruction() -> str:
@@ -87,4 +91,32 @@ def create_msg_delete():
     return delete_messages
 
 
-        
+def invoke_tool_chain_with_openrouter_fallback(chain, llm, messages):
+    """Invoke a tool-bound chain, with OpenRouter fallback when no tool route exists.
+
+    Some OpenRouter routes return:
+    ``No endpoints found that support tool use``.
+    In that case we retry once without tool binding so the run completes
+    (with reduced grounding) instead of crashing the whole graph.
+    """
+    try:
+        return chain.invoke(messages)
+    except Exception as exc:
+        from tradingagents.dataflows.config import get_config
+
+        provider = str(get_config().get("llm_provider", "")).strip().lower()
+        if provider != "openrouter":
+            raise
+        err = str(exc)
+        if "No endpoints found that support tool use" not in err:
+            raise
+        logger.warning(
+            "OpenRouter route rejected tool use; retrying analyst step without tools"
+        )
+        fallback_instruction = HumanMessage(
+            content=(
+                "Tool endpoints are unavailable on this route. Continue without tool calls, "
+                "state that limitation briefly, and avoid fabricating tool outputs."
+            )
+        )
+        return llm.invoke([*messages, fallback_instruction])

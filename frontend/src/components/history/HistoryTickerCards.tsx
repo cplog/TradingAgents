@@ -251,7 +251,7 @@ export function HistoryTickerCards({
                   title={
                     !roll.latestCompletedRun
                       ? "No completed run to re-run yet"
-                      : "Re-run with the same config as the latest completed run"
+                      : "Re-run with the same ticker, date, and analysts — choose models in the dialog"
                   }
                   style={{
                     padding: "8px 14px",

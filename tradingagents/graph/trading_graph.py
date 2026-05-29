@@ -396,8 +396,25 @@ class TradingAgentsGraph:
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM.
         past_context = self.memory_log.get_past_context(company_name)
+        import json
+
+        from tradingagents.agents.utils.execution_context import build_run_execution_snapshot
+
+        run_snapshot = build_run_execution_snapshot(company_name, str(trade_date))
+        execution_context = run_snapshot["markdown"]
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date, past_context=past_context
+            company_name,
+            trade_date,
+            past_context=past_context,
+            execution_context=execution_context,
+            live_quote_at_run_json=json.dumps(
+                {
+                    "quote": run_snapshot["quote"],
+                    "report_close": run_snapshot["report_close"],
+                    "trade_date": str(trade_date),
+                },
+                ensure_ascii=False,
+            ),
         )
         args = self.propagator.get_graph_args()
 

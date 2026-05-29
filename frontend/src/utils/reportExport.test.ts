@@ -2,29 +2,60 @@ import { describe, expect, it } from "vitest";
 import { buildStandaloneReportHtml } from "./reportExport";
 
 describe("buildStandaloneReportHtml", () => {
-  it("inlines the rendered report body and decision summary into one document", () => {
+  it("inlines decision brief fields and the rendered report body", () => {
     const html = buildStandaloneReportHtml({
       ticker: "NVDA",
-      rating: "Strong Buy",
+      rating: "Buy",
       date: "2026-05-19",
-      confidencePct: 78,
-      decisionRows: [
-        ["What to do now", "Buy now"],
-        ["Conviction", "78% · High conviction"],
-        ["FOMO risk", "Low"],
-        ["Time horizon", "3–6 months"],
+      confidencePct: 92,
+      ratingPlain: "Highest conviction bullish view",
+      ratingPosture: "Open or add a full position when risk limits allow",
+      actionNow: "Add or open position",
+      executiveSummary: "Enter on pull-back toward the 50-SMA at $15.00-$15.20.",
+      levelRows: [
+        ["Entry / buy zone", "15.1"],
+        ["Price target", "16.8"],
+        ["Stop / risk level", "14.8"],
+        ["Position size", "5-7% of portfolio"],
+        ["Time horizon", "3-4 weeks"],
+        ["Trader action", "Buy"],
       ],
       whyNow: ["Earnings beat", "Channel checks strong"],
       invalidation: "Daily close below $850 invalidates thesis.",
       reportBodyHtml: '<h2 id="market">Market</h2><p>Sample paragraph.</p>',
       generatedAt: "2026-05-20T00:00:00.000Z",
+      liveContext: {
+        quote: {
+          ticker: "NVDA",
+          price: 13.1,
+          currency: "USD",
+          fetched_at: "2026-05-29T00:00:00Z",
+        },
+        report_close: 15.0,
+        trade_date: "2026-05-19",
+        levels: { entry: 15.1, stop_loss: 14.8, price_target: 16.8 },
+        comparison: {
+          status: "below_stop",
+          guidance: "The tactical setup from this run is invalidated.",
+          live_price: 13.1,
+          entry: 15.1,
+          stop_loss: 14.8,
+          price_target: 16.8,
+        },
+      },
     });
-    expect(html.startsWith("<!doctype html>")).toBe(true);
+    expect(html).toMatch(/^<!doctype html>/);
     expect(html).toContain("<title>NVDA — Agent report</title>");
-    expect(html).toContain("Strong Buy");
-    expect(html).toContain("2026-05-19");
-    expect(html).toContain("Confidence (heuristic): 78%");
-    expect(html).toContain("Buy now");
+    expect(html).toContain("Buy");
+    expect(html).toContain("Highest conviction bullish view");
+    expect(html).toContain("Add or open position");
+    expect(html).toContain("Conviction (heuristic): 92%");
+    expect(html).toContain("Enter on pull-back toward the 50-SMA");
+    expect(html).toContain("Entry / buy zone");
+    expect(html).toContain("5-7% of portfolio");
+    expect(html).not.toContain("FINAL TRANSACTION PROPOSAL");
+    expect(html).toContain("Live now");
+    expect(html).toContain("invalidated");
     expect(html).toContain("Earnings beat");
     expect(html).toContain("Daily close below $850 invalidates thesis.");
     expect(html).toContain('<h2 id="market">Market</h2>');
@@ -37,7 +68,8 @@ describe("buildStandaloneReportHtml", () => {
       rating: "<script>alert(1)</script>",
       date: null,
       confidencePct: null,
-      decisionRows: [["Bad", '"hacky" & <evil>']],
+      actionNow: '"hacky" & <evil>',
+      levelRows: [["Bad", "<img src=x onerror=1>"]],
       whyNow: ["<img src=x onerror=1>"],
       invalidation: null,
       reportBodyHtml: "<p><strong>kept</strong></p>",
@@ -50,21 +82,21 @@ describe("buildStandaloneReportHtml", () => {
     expect(html).toContain("<p><strong>kept</strong></p>");
   });
 
-  it("omits confidence and date when missing, omits invalidation section when null", () => {
+  it("omits optional blocks when missing", () => {
     const html = buildStandaloneReportHtml({
       ticker: "ZZZ",
       rating: null,
       date: null,
       confidencePct: null,
-      decisionRows: [["What to do now", "Watchlist"]],
       whyNow: [],
       invalidation: null,
       reportBodyHtml: "<p>body</p>",
       generatedAt: "2026-05-20T00:00:00.000Z",
     });
     expect(html).not.toContain("As of");
-    expect(html).not.toContain("Confidence");
+    expect(html).not.toContain("Conviction (heuristic)");
+    expect(html).not.toMatch(/<h2>Why now<\/h2>/);
     expect(html).not.toMatch(/<h2>Invalidation<\/h2>/);
-    expect(html).toContain("No concise reason lines found");
+    expect(html).not.toContain("class=\"levels\"");
   });
 });

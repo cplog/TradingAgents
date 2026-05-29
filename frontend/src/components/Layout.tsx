@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Link, NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
 import { useRouteTransitionMotion } from "../hooks/useRouteTransitionMotion";
 import { JobsRibbon } from "./JobsRibbon";
+import { JobsTrackerProvider } from "../contexts/JobsTrackerContext";
 import { isRunsWorkflowPath, paths } from "../navigation/routes";
 
 type NavItem = {
@@ -114,6 +115,7 @@ export function Layout() {
   const inRunsWorkflow = isRunsWorkflowPath(pathname);
 
   return (
+    <JobsTrackerProvider>
     <div className="app-shell">
       <aside className="app-shell__nav" aria-label="Application navigation">
         <Link to={paths.dashboard} className="app-shell__brand">
@@ -169,5 +171,6 @@ export function Layout() {
         </main>
       </div>
     </div>
+    </JobsTrackerProvider>
   );
 }

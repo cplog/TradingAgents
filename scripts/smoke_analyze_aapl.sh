@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Smoke-test: local pydantic accepts extended analysts + POST /analyze returns 200 (not 422).
-# Usage: from repo root, API already on API_URL (default http://127.0.0.1:8000).
+# Usage: from repo root, API already on API_URL (default http://127.0.0.1:8808).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
-API="${API_URL:-http://127.0.0.1:8000}"
+API="${API_URL:-http://127.0.0.1:8808}"
 DATE="$(date +%Y-%m-%d)"
 
 echo "=== 1) Pydantic: AnalyzeRequest with hot_money (must succeed) ==="
@@ -54,8 +54,8 @@ cat /tmp/ta_analyze_resp.json | python -m json.tool 2>/dev/null || cat /tmp/ta_a
 echo
 
 if [[ "${resp}" != "200" ]]; then
-  echo "FAILED — fix stale uvicorn (kill :8000) then:" >&2
-  echo "  cd \"${ROOT}\" && pip install -e '.[api]' && PYTHONPATH=\"${ROOT}\" uvicorn api.main:app --port 8000" >&2
+  echo "FAILED — fix stale uvicorn (kill :8808) then:" >&2
+  echo "  cd \"${ROOT}\" && pip install -e '.[api]' && PYTHONPATH=\"${ROOT}\" uvicorn api.main:app --port 8808" >&2
   echo "Or restart dev stack without reusing a busy port:" >&2
   echo "  REUSE_BACKEND_IF_BUSY=0 ./scripts/dev_up.sh" >&2
   echo >&2

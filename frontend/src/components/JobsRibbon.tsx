@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { runsPath } from "../navigation/routes";
 import { fetchConfig, type JobStatus } from "../api";
-import { useJobsTracker } from "../hooks/useJobsTracker";
+import { useJobsTrackerContext } from "../contexts/JobsTrackerContext";
 import {
   formatElapsedSince,
   jobChipStep,
@@ -88,7 +88,7 @@ function JobChip({ job, index, nowMs, onOpen }: JobChipProps) {
 
 export function JobsRibbon() {
   const navigate = useNavigate();
-  const { active, recentlyCompleted, justCompletedIds, error } = useJobsTracker();
+  const { active, recentlyCompleted, justCompletedIds, error } = useJobsTrackerContext();
   const [maxConcurrency, setMaxConcurrency] = useState<number | null>(null);
   const [toasts, setToasts] = useState<ToastSpec[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());

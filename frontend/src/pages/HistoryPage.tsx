@@ -10,7 +10,6 @@ import {
   deleteHistoryRun,
   fetchHistoryRun,
   fetchHistoryRuns,
-  fetchJobs,
   getDimensionsByTicker,
   postHistoryCompare,
   submitAnalyze,
@@ -22,7 +21,13 @@ import { HistoryRunsTable } from "../components/history/HistoryRunsTable";
 import { HistoryTickerCards } from "../components/history/HistoryTickerCards";
 import { PageFrame, PageHeader, Panel } from "../components/PageFrame";
 import type { TickerRollup } from "../utils/historyRollup";
-import { buildRerunAnalyzePayload } from "../utils/historyRerun";
+import {
+  buildRerunAnalyzePayload,
+  formatPriorRunLlmLabel,
+  withLlmOverrides,
+} from "../utils/historyRerun";
+import { RerunSetupDialog } from "../components/RerunSetupDialog";
+import { llmConfigToOverrides, type LlmConfig } from "../components/LlmPicker";
 import { retryAllFailedRuns, retryFailedRun } from "../utils/failedJobRetry";
 import {
   hasActiveHistoryRows,
@@ -32,17 +37,14 @@ import {
   type HistoryTableRow,
 } from "../utils/historyDisplay";
 import { DimensionsRadar } from "../components/dimensions/DimensionsRadar";
-import type { FactorScores, StockDimensions } from "../dimensions-types";
+import type { StockDimensions } from "../dimensions-types";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import {
+  useJobsRefresh,
+  useJobsTrackerContext,
+} from "../contexts/JobsTrackerContext";
+import { useThumbDimensions } from "../hooks/useThumbDimensions";
 
-const FACTOR_KEYS: (keyof FactorScores)[] = [
-  "value",
-  "growth",
-  "quality",
-  "momentum",
-  "low_risk",
-  "sentiment",
-];
 import type { Components } from "react-markdown";
 import { prepareReportMarkdown } from "../utils/reportMarkdown";
 
@@ -61,12 +63,14 @@ function pct(conf: number | null | undefined): string {
 
 export function HistoryPage() {
   const navigate = useNavigate();
+  const refreshJobsRibbon = useJobsRefresh();
+  const { jobsSnapshot } = useJobsTrackerContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlRunHandled = useRef(false);
   useDocumentTitle("Runs");
-  /** Rows the user deleted this session — filters live-job merge until refresh clears worker. */
-  const hiddenRunIdsRef = useRef<Set<string>>(new Set());
-  const [runs, setRuns] = useState<HistoryTableRow[]>([]);
+  /** Rows deleted this session — hidden until a full history refresh. */
+  const [hiddenRunIds, setHiddenRunIds] = useState<Set<string>>(() => new Set());
+  const [historyRows, setHistoryRows] = useState<HistoryRunRef[]>([]);
   const [sortKey, setSortKey] = useState<HistorySortKey>(
     () => (searchParams.get("sort") as HistorySortKey | null) ?? "processing_desc",
   );
@@ -100,55 +104,49 @@ export function HistoryPage() {
   const [rerunPendingTickers, setRerunPendingTickers] = useState<Set<string>>(new Set());
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [bulkRerunSubmitting, setBulkRerunSubmitting] = useState(false);
+  const [rerunTarget, setRerunTarget] = useState<
+    | { kind: "single"; runId: string; ticker: string }
+    | { kind: "bulk"; tickers: string[] }
+    | { kind: "bulk-runs"; runIds: string[] }
+    | null
+  >(null);
+  const [rerunDialogDetail, setRerunDialogDetail] = useState<{
+    snapshot?: Record<string, unknown>;
+    date?: string | null;
+    priorLlm?: string | null;
+  } | null>(null);
   const [failedOnly, setFailedOnly] = useState(
     () => searchParams.get("failed") === "1",
   );
   const [bulkRetrySubmitting, setBulkRetrySubmitting] = useState(false);
   const [failedRetryRunId, setFailedRetryRunId] = useState<string | null>(null);
   const [retrySummary, setRetrySummary] = useState<string | null>(null);
-  // Lazy-fetched per-row factor scores (facts-only preview) keyed by ticker
-  const [thumbDims, setThumbDims] = useState<Record<string, StockDimensions | null>>({});
-  // Compare-side dimensions, fetched by ticker for each side
   const [compareDims, setCompareDims] = useState<{
     a: StockDimensions | null;
     b: StockDimensions | null;
   }>({ a: null, b: null });
 
-  // Lazy-fetch thumbnail dimensions for each unique ticker visible in the table.
-  // Falls back silently per ticker; failed fetches are remembered as null so we don't refetch.
-  useEffect(() => {
-    if (!runs.length) return;
-    let cancelled = false;
-    const uniqueTickers = Array.from(new Set(
-      runs
-        .filter((r) => {
-          if (!r.ticker) return false;
-          const hasRunSnapshot = FACTOR_KEYS.some((k) => {
-            const v = r.factor_scores?.[k];
-            return typeof v === "number" && Number.isFinite(v);
-          });
-          return !hasRunSnapshot;
-        })
-        .map((r) => r.ticker)
-        .filter((t): t is string => Boolean(t))
-    ));
-    const missing = uniqueTickers.filter((t) => !(t in thumbDims));
-    if (!missing.length) return;
-    missing.forEach((t) => {
-      void getDimensionsByTicker(t)
-        .then((d) => {
-          if (cancelled) return;
-          setThumbDims((prev) => ({ ...prev, [t]: d }));
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setThumbDims((prev) => ({ ...prev, [t]: null }));
-        });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [runs, thumbDims]);
+  const mergeFilters = useMemo(
+    () => ({
+      ticker: tickerFilter.trim() || undefined,
+      dateFrom: dateFrom.trim() || undefined,
+      dateTo: dateTo.trim() || undefined,
+      trigger: overnightOnly ? "overnight" : undefined,
+    }),
+    [tickerFilter, dateFrom, dateTo, overnightOnly],
+  );
+
+  const runs = useMemo(() => {
+    const merged = mergeHistoryAndJobs(
+      historyRows,
+      includeLiveJobs ? jobsSnapshot : [],
+      mergeFilters,
+    );
+    if (!hiddenRunIds.size) return merged;
+    return merged.filter((r) => !hiddenRunIds.has(r.run_id));
+  }, [historyRows, jobsSnapshot, includeLiveJobs, mergeFilters, hiddenRunIds]);
+
+  const thumbDims = useThumbDimensions(runs, viewMode === "table");
 
   // Fetch compare-side dimensions (by ticker) when a compare response loads
   useEffect(() => {
@@ -197,32 +195,20 @@ export function HistoryPage() {
     setLoading(true);
     setError(null);
     try {
-      const filters = {
-        ticker: tickerFilter.trim() || undefined,
-        dateFrom: dateFrom.trim() || undefined,
-        dateTo: dateTo.trim() || undefined,
-        trigger: overnightOnly ? "overnight" : undefined,
-      };
-      const [history, jobs] = await Promise.all([
-        fetchHistoryRuns({
-          ticker: filters.ticker,
-          limit: 100,
-          date_from: filters.dateFrom,
-          date_to: filters.dateTo,
-        }),
-        includeLiveJobs ? fetchJobs(80) : Promise.resolve([]),
-      ]);
-      const merged = mergeHistoryAndJobs(history, jobs, filters).filter(
-        (r) => !hiddenRunIdsRef.current.has(r.run_id),
-      );
-      setRuns(merged);
+      const history = await fetchHistoryRuns({
+        ticker: mergeFilters.ticker,
+        limit: 100,
+        date_from: mergeFilters.dateFrom,
+        date_to: mergeFilters.dateTo,
+      });
+      setHistoryRows(history);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
-      setRuns([]);
+      setHistoryRows([]);
     } finally {
       setLoading(false);
     }
-  }, [tickerFilter, dateFrom, dateTo, includeLiveJobs, overnightOnly]);
+  }, [mergeFilters]);
 
   const sortedRuns = useMemo(
     () => sortHistoryRows(runs, sortKey),
@@ -327,8 +313,11 @@ export function HistoryPage() {
 
   function pruneAfterDeletes(deletedIds: string[]) {
     const gone = new Set(deletedIds);
-    deletedIds.forEach((id) => hiddenRunIdsRef.current.add(id));
-    setRuns((prev) => prev.filter((r) => !gone.has(r.run_id)));
+    setHiddenRunIds((prev) => {
+      const next = new Set(prev);
+      deletedIds.forEach((id) => next.add(id));
+      return next;
+    });
     setSelectedRunIds((prev) => {
       const next = new Set(prev);
       deletedIds.forEach((id) => next.delete(id));
@@ -491,27 +480,119 @@ export function HistoryPage() {
     });
   }
 
-  async function onCardRerun(rollup: TickerRollup) {
+  function openRerunDialog(runId: string, ticker: string) {
+    setRerunError(null);
+    setRerunDialogDetail(null);
+    setRerunTarget({ kind: "single", runId, ticker });
+    void fetchHistoryRun(runId)
+      .then((detail) => {
+        setRerunDialogDetail({
+          snapshot: detail.config_snapshot,
+          date: detail.date,
+          priorLlm: formatPriorRunLlmLabel(detail.config_snapshot, detail.provenance),
+        });
+      })
+      .catch(() => {
+        setRerunDialogDetail({ priorLlm: null });
+      });
+  }
+
+  function onCardRerun(rollup: TickerRollup) {
     const baseRun = rollup.latestCompletedRun;
     if (!baseRun) return;
+    openRerunDialog(baseRun.run_id, rollup.ticker);
+  }
+
+  function onTableRerun(row: HistoryTableRow) {
+    if (row.job_status !== "completed") return;
+    const ticker = (row.ticker ?? "").trim().toUpperCase() || "?";
+    openRerunDialog(row.run_id, ticker);
+  }
+
+  const selectedCompletedRunIds = useMemo(
+    () =>
+      [...selectedRunIds].filter((id) => {
+        const row = sortedRuns.find((r) => r.run_id === id);
+        return row?.job_status === "completed";
+      }),
+    [selectedRunIds, sortedRuns],
+  );
+
+  function onBulkRerunSelectedRuns() {
+    if (!selectedCompletedRunIds.length) return;
     setRerunError(null);
-    setRerunPendingTickers((prev) => {
-      const next = new Set(prev);
-      next.add(rollup.ticker);
-      return next;
-    });
+    setRerunDialogDetail(null);
+    setRerunTarget({ kind: "bulk-runs", runIds: selectedCompletedRunIds });
+  }
+
+  async function onConfirmRerun(llm: LlmConfig) {
+    if (!rerunTarget) return;
+    setRerunError(null);
+
+    if (rerunTarget.kind === "bulk-runs") {
+      setBulkRerunSubmitting(true);
+      const errors: string[] = [];
+      let lastJobId: string | null = null;
+      try {
+        for (const runId of rerunTarget.runIds) {
+          try {
+            const detail = await fetchHistoryRun(runId);
+            const body = withLlmOverrides(buildRerunAnalyzePayload(detail), llm);
+            const r = await submitAnalyze(body);
+            lastJobId = r.job_id;
+          } catch (e: unknown) {
+            errors.push(
+              `${runId}: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
+        refreshJobsRibbon();
+        setSelectedRunIds(new Set());
+        setRerunTarget(null);
+        if (errors.length) {
+          setRerunError(errors.slice(0, 3).join(" · "));
+        }
+        if (lastJobId) navigate(runsPath(lastJobId));
+      } finally {
+        setBulkRerunSubmitting(false);
+      }
+      return;
+    }
+
+    if (rerunTarget.kind === "bulk") {
+      setBulkRerunSubmitting(true);
+      try {
+        const r = await submitBatch({
+          tickers: rerunTarget.tickers,
+          config_overrides: llmConfigToOverrides(llm),
+        });
+        refreshJobsRibbon();
+        setSelectedTickers(new Set());
+        setRerunTarget(null);
+        navigate(`/batch?id=${encodeURIComponent(r.batch_id)}`);
+      } catch (e: unknown) {
+        setRerunError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBulkRerunSubmitting(false);
+      }
+      return;
+    }
+
+    const { runId, ticker } = rerunTarget;
+    setRerunPendingTickers((prev) => new Set(prev).add(ticker));
     try {
-      const detailPayload = await fetchHistoryRun(baseRun.run_id);
-      const body = buildRerunAnalyzePayload(detailPayload);
+      const detailPayload = await fetchHistoryRun(runId);
+      const body = withLlmOverrides(buildRerunAnalyzePayload(detailPayload), llm);
       const r = await submitAnalyze(body);
-      // Send the user to the live run page; ribbon will keep showing chip too.
+      refreshJobsRibbon();
+      setRerunTarget(null);
       navigate(runsPath(r.job_id));
     } catch (e: unknown) {
       setRerunError(e instanceof Error ? e.message : String(e));
     } finally {
       setRerunPendingTickers((prev) => {
         const next = new Set(prev);
-        next.delete(rollup.ticker);
+        next.delete(ticker);
         return next;
       });
     }
@@ -580,27 +661,12 @@ export function HistoryPage() {
     }
   }
 
-  async function onBulkRerunSelected() {
+  function onBulkRerunSelected() {
     const tickers = [...selectedTickers].filter(Boolean);
     if (!tickers.length) return;
-    if (
-      !window.confirm(
-        `Submit a batch re-run for ${tickers.length} ticker${tickers.length === 1 ? "" : "s"}? Defaults from /admin will apply.`,
-      )
-    ) {
-      return;
-    }
     setRerunError(null);
-    setBulkRerunSubmitting(true);
-    try {
-      const r = await submitBatch({ tickers });
-      setSelectedTickers(new Set());
-      navigate(`/batch?id=${encodeURIComponent(r.batch_id)}`);
-    } catch (e: unknown) {
-      setRerunError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBulkRerunSubmitting(false);
-    }
+    setRerunDialogDetail(null);
+    setRerunTarget({ kind: "bulk", tickers });
   }
 
 
@@ -773,10 +839,26 @@ export function HistoryPage() {
                   className="ui-btn-primary"
                   disabled={bulkRerunSubmitting || selectedTickers.size === 0}
                   onClick={() => void onBulkRerunSelected()}
+                  title="Batch re-run latest completed run per selected ticker"
                 >
                   {bulkRerunSubmitting
                     ? "Submitting…"
-                    : `Re-run (${selectedTickers.size})`}
+                    : `Re-run tickers (${selectedTickers.size})`}
+                </button>
+              )}
+              {viewMode === "table" && (
+                <button
+                  type="button"
+                  className="ui-btn-primary"
+                  disabled={
+                    bulkRerunSubmitting || selectedCompletedRunIds.length === 0
+                  }
+                  onClick={() => onBulkRerunSelectedRuns()}
+                  title="Re-run each selected completed run with its stored date and analysts"
+                >
+                  {bulkRerunSubmitting
+                    ? "Submitting…"
+                    : `Re-run runs (${selectedCompletedRunIds.length})`}
                 </button>
               )}
               <button
@@ -864,6 +946,10 @@ export function HistoryPage() {
             }}
             onRetryFailed={(row) => void onRetryOneFailed(row)}
             retryingRunId={failedRetryRunId}
+            onRerunRun={onTableRerun}
+            rerunPendingRunId={
+              rerunTarget?.kind === "single" ? rerunTarget.runId : null
+            }
           />
         )}
       </Panel>
@@ -1247,6 +1333,56 @@ export function HistoryPage() {
           </div>
         )}
       </Panel>
+      <RerunSetupDialog
+        open={rerunTarget != null}
+        title={
+          rerunTarget?.kind === "bulk"
+            ? "Batch re-run (tickers)"
+            : rerunTarget?.kind === "bulk-runs"
+              ? "Re-run selected runs"
+              : "Re-run analysis"
+        }
+        description={
+          rerunTarget?.kind === "bulk"
+            ? `Choose models for ${rerunTarget.tickers.length} ticker${rerunTarget.tickers.length === 1 ? "" : "s"}. Dates and analysts follow each ticker’s latest completed run; batch submits tickers only.`
+            : rerunTarget?.kind === "bulk-runs"
+              ? `Choose models for ${rerunTarget.runIds.length} run${rerunTarget.runIds.length === 1 ? "" : "s"}. Each run keeps its own ticker, trade date, and analyst set.`
+              : "Choose LLM provider and models for this run. Ticker, date, and analysts stay the same as the previous completed run."
+        }
+        runSummary={
+          rerunTarget?.kind === "single"
+            ? `${rerunTarget.ticker}${rerunDialogDetail?.date ? ` · ${rerunDialogDetail.date}` : ""}`
+            : rerunTarget?.kind === "bulk"
+              ? rerunTarget.tickers.join(", ")
+              : rerunTarget?.kind === "bulk-runs"
+                ? `${rerunTarget.runIds.length} selected run${rerunTarget.runIds.length === 1 ? "" : "s"}`
+                : null
+        }
+        priorRunLlm={rerunDialogDetail?.priorLlm ?? null}
+        configSnapshot={rerunDialogDetail?.snapshot ?? null}
+        submitting={
+          rerunTarget?.kind === "bulk" || rerunTarget?.kind === "bulk-runs"
+            ? bulkRerunSubmitting
+            : rerunTarget?.kind === "single"
+              ? rerunPendingTickers.has(rerunTarget.ticker)
+              : false
+        }
+        confirmLabel={
+          rerunTarget?.kind === "bulk"
+            ? "Start batch"
+            : rerunTarget?.kind === "bulk-runs"
+              ? "Start runs"
+              : "Start run"
+        }
+        onClose={() => {
+          if (bulkRerunSubmitting) return;
+          if (rerunTarget?.kind === "single" && rerunPendingTickers.has(rerunTarget.ticker)) {
+            return;
+          }
+          setRerunTarget(null);
+        }}
+        onConfirm={onConfirmRerun}
+      />
     </PageFrame>
   );
 }

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { analystsFromHistoryDetail, buildRerunAnalyzePayload, buildRerunAnalyzePayloadFromJob } from "./historyRerun";
+import {
+  analystsFromHistoryDetail,
+  buildRerunAnalyzePayload,
+  buildRerunAnalyzePayloadFromJob,
+  llmConfigFromSnapshot,
+  withLlmOverrides,
+} from "./historyRerun";
 import type { HistoryRunDetail, JobStatus } from "../api";
 
 function baseDetail(overrides: Partial<HistoryRunDetail> = {}): HistoryRunDetail {
@@ -82,5 +88,24 @@ describe("historyRerun", () => {
     expect(payload.analysts).toEqual(["market", "news"]);
     expect(payload.mode).toBe("scan");
     expect(payload.config_overrides?.llm_provider).toBe("ollama-remote");
+  });
+
+  it("withLlmOverrides replaces snapshot LLM with picker choice", () => {
+    const base = buildRerunAnalyzePayload(
+      baseDetail({ config_snapshot: { llm_provider: "openai", quick_think_llm: "gpt-4" } }),
+    );
+    const merged = withLlmOverrides(base, {
+      provider: "moonshot",
+      deepModel: "moonshot-v1-8k",
+      quickModel: "moonshot-v1-8k",
+      backendUrl: "",
+      openrouterFreeOnly: false,
+    });
+    expect(merged.config_overrides?.llm_provider).toBe("moonshot");
+    expect(merged.config_overrides?.quick_think_llm).toBe("moonshot-v1-8k");
+  });
+
+  it("llmConfigFromSnapshot maps ollama to ollama-local", () => {
+    expect(llmConfigFromSnapshot({ llm_provider: "ollama" }).provider).toBe("ollama-local");
   });
 });
