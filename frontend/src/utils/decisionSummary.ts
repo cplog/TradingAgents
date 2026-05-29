@@ -1,5 +1,12 @@
+import { normalizeRatingTier, ratingGuideFor } from "./ratingGuide";
+import { deriveTradingPlan } from "./tradingPlan";
+
 export type DecisionSummary = {
-  actionNow: "Buy now" | "Watchlist" | "Avoid for now";
+  /** Short desk instruction derived from the 5-tier rating. */
+  actionNow: string;
+  ratingPlain: string | null;
+  ratingPosture: string | null;
+  executiveSummary: string | null;
   confidencePct: number | null;
   confidenceLabel: string;
   fomoLabel: "Low" | "Medium" | "High";
@@ -33,18 +40,32 @@ function firstMeaningfulLines(text: string, limit = 3): string[] {
   return out;
 }
 
+function actionFromRating(rating: string | null | undefined): string {
+  const tier = normalizeRatingTier(rating);
+  switch (tier) {
+    case "Buy":
+      return "Add or open position";
+    case "Overweight":
+      return "Build on dips";
+    case "Hold":
+      return "Hold; wait for a better setup";
+    case "Underweight":
+      return "Trim or avoid new buys";
+    case "Sell":
+      return "Reduce or exit";
+    default:
+      return "Review full report";
+  }
+}
+
 export function deriveDecisionSummary(
   reports: Record<string, string> | undefined,
   rating: string | null | undefined,
   confidence: number | null | undefined,
 ): DecisionSummary {
-  const r = (rating || "").toLowerCase();
-  const actionNow: DecisionSummary["actionNow"] =
-    r.includes("buy") || r.includes("overweight")
-      ? "Buy now"
-      : r.includes("sell") || r.includes("underweight")
-        ? "Avoid for now"
-        : "Watchlist";
+  const guide = ratingGuideFor(rating);
+  const actionNow = actionFromRating(rating);
+  const plan = deriveTradingPlan(reports);
 
   const confidencePct =
     confidence != null && Number.isFinite(confidence)
@@ -66,8 +87,10 @@ export function deriveDecisionSummary(
     (count, term) => count + (socialText.includes(term) || newsText.includes(term) ? 1 : 0),
     0,
   );
+  const tier = normalizeRatingTier(rating);
+  const isBullishAction = tier === "Buy" || tier === "Overweight";
   const fomoLabel: DecisionSummary["fomoLabel"] =
-    hypeHits >= 2 || (actionNow === "Buy now" && (confidencePct ?? 0) < 60)
+    hypeHits >= 2 || (isBullishAction && (confidencePct ?? 0) < 60)
       ? "High"
       : hypeHits >= 1
         ? "Medium"
@@ -88,7 +111,18 @@ export function deriveDecisionSummary(
 
   const pmText = reports?.portfolio_decision || "";
   const horizonMatch = pmText.match(/\*\*Time Horizon\*\*:\s*([^\n]+)/i);
-  const horizon = horizonMatch?.[1]?.trim() || "3-6 months";
+  const horizon = plan.timeHorizon ?? horizonMatch?.[1]?.trim() ?? "3-6 months";
 
-  return { actionNow, confidencePct, confidenceLabel, fomoLabel, whyNow, invalidation, horizon };
+  return {
+    actionNow,
+    ratingPlain: guide?.plain ?? null,
+    ratingPosture: guide?.posture ?? null,
+    executiveSummary: plan.executiveSummary,
+    confidencePct,
+    confidenceLabel,
+    fomoLabel,
+    whyNow,
+    invalidation,
+    horizon,
+  };
 }

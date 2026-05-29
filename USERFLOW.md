@@ -19,6 +19,7 @@
 | **Analysts (configurable)** | `market`, `social` (sentiment), `news`, `fundamentals` — see [`api/models.py`](api/models.py) `AnalystId` |
 | **LangGraph** | Selected analysts → tool-using nodes → bull/bear debate → research manager → trader → risk debate → portfolio manager; optional **dimensions** pass ([`tradingagents/graph/setup.py`](tradingagents/graph/setup.py)) |
 | **Watchlists** | Browser-local list (`localStorage` key `ta:watchlist`) on **`/watchlists`** — links to **`/dashboard?ticker=`** |
+| **Monitor** | Server-side overnight scanner on **`/monitor`** — AKShare US drop scan ∩ server watchlist → score ≥ threshold → scan jobs (`trigger=overnight_monitor`) |
 | **History stats** | **`/history/stats`** — client-side aggregates over `GET /api/history/runs?limit=500` (rating distribution, avg confidence) |
 
 ---
@@ -32,12 +33,13 @@
 5. [Flow D: History](#5-flow-d-history)
 6. [Flow E: System & Admin](#6-flow-e-system--admin)
 7. [Flow F: News, Sectors & Watchlists](#7-flow-f-news-sectors--watchlists)
-8. [API Quick Reference](#8-api-quick-reference)
-9. [Server-side pipeline (behind the dashboard)](#9-server-side-pipeline-behind-the-dashboard)
-10. [Errors & Edge Cases](#10-errors--edge-cases)
-11. [State Machine (job-centric)](#11-state-machine-job-centric)
-12. [Screen Inventory](#12-screen-inventory)
-13. [Future UX (not in repo)](#13-future-ux-not-in-repo)
+8. [Flow G: Overnight Monitor](#8-flow-g-overnight-monitor)
+9. [API Quick Reference](#9-api-quick-reference)
+10. [Server-side pipeline (behind the dashboard)](#10-server-side-pipeline-behind-the-dashboard)
+11. [Errors & Edge Cases](#11-errors--edge-cases)
+12. [State Machine (job-centric)](#12-state-machine-job-centric)
+13. [Screen Inventory](#13-screen-inventory)
+14. [Future UX (not in repo)](#14-future-ux-not-in-repo)
 
 ---
 
@@ -164,11 +166,60 @@
 
 - **`/news`**: [`NewsPage.tsx`](frontend/src/pages/NewsPage.tsx) — browse news feed via API (`GET /news/{ticker}` etc.).
 - **`/sectors`**: [`SectorIndustryPage.tsx`](frontend/src/pages/SectorIndustryPage.tsx) — sector/industry catalog and related API helpers.
-- **`/watchlists`**: [`WatchlistPage.tsx`](frontend/src/pages/WatchlistPage.tsx) — browser-local symbol list (`localStorage`), links to **`/dashboard?ticker=`**.
+- **`/watchlists`**: [`WatchlistPage.tsx`](frontend/src/pages/WatchlistPage.tsx) — browser-local symbol list (`localStorage`), links to **`/dashboard?ticker=`**. Not used by the overnight monitor.
 
 ---
 
-## 8. API Quick Reference
+## 8. Flow G: Overnight Monitor
+
+**Purpose**: During US extended hours, automatically scan for large daily drops on a **server-side** ticker list and queue lightweight scan-mode analysis jobs when the overnight barbell signal score is high enough.
+
+**Route**: **`/monitor`** — [`MonitorPage.tsx`](frontend/src/pages/MonitorPage.tsx)
+
+### Setup (operator)
+
+1. Set `TRADINGAGENTS_MONITOR_ENABLED=true` in `.env` (default is **off**).
+2. Restart the FastAPI process so the background poll loop starts (`api/main.py` lifespan).
+3. Optional: install AKShare (`pip install akshare` or `tradingagents[china-data]`) for the US spot panic scan.
+
+### User flow
+
+1. Open **`/monitor`** and add US symbols to the **server watchlist** (persisted on the API host via state store or `~/.tradingagents/cache/monitor_watchlist.json`).
+2. During **US pre-market (4:00–9:30 ET)** or **overnight (20:00–4:00 ET)**, the server polls every `monitor_poll_seconds` (default 900s):
+   - AKShare `stock_us_spot_em()` → tickers down ≤ `monitor_min_drop_pct` (default −10%).
+   - Intersect with server watchlist → compute overnight signal (`daily_signals.compute_overnight_signal`).
+   - If score ≥ `monitor_signal_threshold` (default 75), enqueue scan job (`trigger=overnight_monitor`).
+3. View **Recent signals** on `/monitor` or filter **History** (“Overnight / scan triggers only”).
+4. Use **Run poll now** to test manually outside polling windows or when the monitor flag is off.
+
+### Watchlists vs Monitor (common confusion)
+
+| | **`/watchlists`** | **`/monitor` server list** |
+|---|---|---|
+| Storage | Browser `localStorage` | API server / state store |
+| Purpose | Shortcuts to run Analysis manually | Symbols eligible for automated overnight scan |
+| Sync | Per browser | Shared for all clients of that API |
+
+### API
+
+| Action | Method | Path |
+|--------|--------|------|
+| Monitor status | GET | `/api/monitor/status` |
+| Get/set watchlist | GET/PUT | `/api/monitor/watchlist` |
+| Add/remove ticker | POST/DELETE | `/api/monitor/watchlist`, `/api/monitor/watchlist/{ticker}` |
+| Recent signals | GET | `/api/monitor/signals` |
+| Manual poll | POST | `/api/monitor/tick` |
+
+### Verification checklist (local dev)
+
+1. **Disabled state**: With `TRADINGAGENTS_MONITOR_ENABLED` unset or `false`, open `/monitor` — banner shows env var + restart hint; watchlist CRUD and **Run poll now** still work.
+2. **Empty watchlist**: With no server tickers, page shows “Add at least one ticker” and explains why signals are empty.
+3. **Enabled + tickers**: Set `TRADINGAGENTS_MONITOR_ENABLED=true`, restart API, add 1–2 symbols, click **Run poll now** — session panel updates `last_tick`; candidates or errors appear when AKShare is available.
+4. **Signals in History**: After a triggered job (score ≥ threshold during a real hit), row appears under Recent signals and in `/history` with overnight / scan filter.
+
+---
+
+## 9. API Quick Reference
 
 | Action | Method | Path |
 |--------|--------|------|
@@ -189,12 +240,16 @@
 | History compare | POST | `/api/history/compare` |
 | Delete history run | DELETE | `/api/history/runs/{run_id}` |
 | Recompute dimensions | POST | `/api/history/runs/{run_id}/recompute-dimensions` |
+| Monitor status | GET | `/api/monitor/status` |
+| Monitor watchlist | GET/PUT/POST/DELETE | `/api/monitor/watchlist`, `/api/monitor/watchlist/{ticker}` |
+| Monitor signals | GET | `/api/monitor/signals` |
+| Monitor manual poll | POST | `/api/monitor/tick` |
 
 *Prefix note*: In production the SPA is often served from the same origin as FastAPI; Vite dev proxy forwards `/analyze`, `/jobs`, `/api/*`, etc. See [`frontend/src/api.ts`](frontend/src/api.ts).
 
 ---
 
-## 9. Server-side pipeline (behind the dashboard)
+## 10. Server-side pipeline (behind the dashboard)
 
 The browser does **not** expose each LangGraph node as a separate navigable “step.” Rough order after analysts:
 
@@ -210,7 +265,7 @@ For checkpoint/resume behavior, LLM keys, and vendor routing semantics, see [AGE
 
 ---
 
-## 10. Errors & Edge Cases
+## 11. Errors & Edge Cases
 
 | Situation | Expected behavior |
 |-----------|-------------------|
@@ -225,7 +280,7 @@ For checkpoint/resume behavior, LLM keys, and vendor routing semantics, see [AGE
 
 ---
 
-## 11. State Machine (job-centric)
+## 12. State Machine (job-centric)
 
 ```
 [IDLE on /dashboard]
@@ -242,7 +297,7 @@ History persists completed runs for later reopen under `/history`. Opening **`/r
 
 ---
 
-## 12. Screen Inventory
+## 13. Screen Inventory
 
 | # | Screen | Route | Notes |
 |---|--------|-------|--------|
@@ -253,9 +308,10 @@ History persists completed runs for later reopen under `/history`. Opening **`/r
 | 5 | Screener | `/screener` | Dimensions-only table |
 | 6 | Sectors | `/sectors` | Sector/industry helpers |
 | 7 | News | `/news` | News feed UI |
-| 8 | Watchlists | `/watchlists` | Local-only symbol list |
-| 9 | System | `/system` | Health, runtime config, cache (`/settings` redirects here) |
-| 10 | Admin links | `/admin` | Operational shortcuts |
+| 8 | Watchlists | `/watchlists` | Browser-local symbol shortcuts |
+| 9 | Monitor | `/monitor` | Server watchlist + overnight auto-scan |
+| 10 | System | `/system` | Health, runtime config, cache (`/settings` redirects here) |
+| 11 | Admin links | `/admin` | Operational shortcuts |
 | — | Configure shortcut | `/configure` | Redirects to **`/dashboard`** |
 | — | Job deep link | `/runs/:jobId`, `/runs/:jobId/results` | Redirect into dashboard job loader |
 
@@ -263,7 +319,7 @@ Global layout + nav: [`frontend/src/components/Layout.tsx`](frontend/src/compone
 
 ---
 
-## 13. Future UX (not in repo)
+## 14. Future UX (not in repo)
 
 Items that appear in [PRODUCT.md](PRODUCT.md) / older drafts but **are still not** fully implemented:
 

@@ -8,6 +8,10 @@ from tradingagents.agents.utils.agent_utils import (
     get_stock_data,
 )
 from tradingagents.agents.utils.macro_data_tools import AKSHARE_MACRO_DISCOVERY_HINT
+from tradingagents.agents.utils.overnight_tools import (
+    compute_overnight_signal_tool,
+    scan_us_market_drops,
+)
 from tradingagents.dataflows.config import get_config
 
 
@@ -22,10 +26,28 @@ def create_market_analyst(llm):
             get_indicators,
             list_akshare_endpoints,
             get_macro_data,
+            compute_overnight_signal_tool,
+            scan_us_market_drops,
         ]
 
+        extended_hours_playbook = """
+## Daily Extended-Hours Playbook (Barbell Trend Cloud)
+
+When evaluating panic dips or pre-market/after-hours setups on **daily** bars (no intraday data):
+
+1. Call `compute_overnight_signal` for the ticker. Score ≥ 75 suggests a barbell dip worth debating.
+2. Interpret the **structural cloud** (21/55 EMA band minus 1.5× ATR) as left-side support — not minute-level clouds.
+3. **BIAS(6) ≤ -6%** and **BIAS(3) ≤ -4%** confirm oversold stretch on daily closes.
+4. **Amplitude > 8%** flags `wide_range` — treat as poor liquidity proxy; reduce conviction, do not auto-reject.
+5. Optional: `scan_us_market_drops` lists AKShare full-market names down ≥10% to cross-check watchlist ideas.
+
+Do not invent intraday levels; ground all dip/support claims in tool output.
+"""
+
         system_message = (
-            """You are a trading assistant tasked with analyzing financial markets. Your role is to select the **most relevant indicators** for a given market condition or trading strategy from the following list. The goal is to choose up to **8 indicators** that provide complementary insights without redundancy. Categories and each category's indicators are:
+            extended_hours_playbook
+            + """
+You are a trading assistant tasked with analyzing financial markets. Your role is to select the **most relevant indicators** for a given market condition or trading strategy from the following list. The goal is to choose up to **8 indicators** that provide complementary insights without redundancy. Categories and each category's indicators are:
 
 Moving Averages:
 - close_50_sma: 50 SMA: A medium-term trend indicator. Usage: Identify trend direction and serve as dynamic support/resistance. Tips: It lags price; combine with faster indicators for timely signals.

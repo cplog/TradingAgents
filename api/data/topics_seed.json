@@ -1,0 +1,107 @@
+[
+  {
+    "id": "ai-infrastructure",
+    "label": "AI Infrastructure",
+    "query": "AI data center GPU networking power cooling stocks 2026",
+    "cadence": "daily",
+    "pinned": true
+  },
+  {
+    "id": "nuclear-energy",
+    "label": "Nuclear Renaissance",
+    "query": "nuclear power SMR uranium utility stocks investment theme",
+    "cadence": "daily",
+    "pinned": false
+  },
+  {
+    "id": "weight-loss-drugs",
+    "label": "GLP-1 & Obesity",
+    "query": "GLP-1 weight loss obesity drug makers biotech stocks",
+    "cadence": "daily",
+    "pinned": false
+  },
+  {
+    "id": "defense-spending",
+    "label": "Defense & Aerospace",
+    "query": "defense spending aerospace contractors geopolitical stocks",
+    "cadence": "weekly",
+    "pinned": false
+  },
+  {
+    "id": "reshoring-manufacturing",
+    "label": "US Reshoring",
+    "query": "US reshoring manufacturing CHIPS Act industrial stocks",
+    "cadence": "weekly",
+    "pinned": false
+  },
+  {
+    "id": "cybersecurity",
+    "label": "Cybersecurity",
+    "query": "cybersecurity software enterprise breach spending stocks",
+    "cadence": "daily",
+    "pinned": false
+  },
+  {
+    "id": "ev-battery",
+    "label": "EV & Battery",
+    "query": "electric vehicle battery lithium supply chain stocks",
+    "cadence": "weekly",
+    "pinned": false
+  },
+  {
+    "id": "cloud-software",
+    "label": "Cloud SaaS",
+    "query": "cloud SaaS enterprise software AI copilot stocks",
+    "cadence": "daily",
+    "pinned": false
+  },
+  {
+    "id": "biotech-breakthroughs",
+    "label": "Biotech Catalysts",
+    "query": "biotech FDA approval clinical trial breakthrough stocks",
+    "cadence": "daily",
+    "pinned": false
+  },
+  {
+    "id": "rate-cuts-banks",
+    "label": "Rate Cuts & Banks",
+    "query": "interest rate cuts regional banks financial stocks Fed",
+    "cadence": "weekly",
+    "pinned": false
+  },
+  {
+    "id": "crypto-miners",
+    "label": "Bitcoin Miners",
+    "query": "bitcoin mining stocks hashrate energy AI pivot",
+    "cadence": "daily",
+    "pinned": false
+  },
+  {
+    "id": "water-infrastructure",
+    "label": "Water Infrastructure",
+    "query": "water infrastructure utility drought climate stocks",
+    "cadence": "weekly",
+    "pinned": false
+  },
+  {
+    "id": "robotics-automation",
+    "label": "Robotics & Automation",
+    "query": "robotics automation warehouse humanoid industrial stocks",
+    "cadence": "weekly",
+    "pinned": false
+  },
+  {
+    "id": "hk-tech",
+    "label": "Hong Kong Tech",
+    "query": "Hong Kong tech internet platform stocks Hang Seng",
+    "cadence": "daily",
+    "pinned": false
+  },
+  {
+    "id": "copper-critical-minerals",
+    "label": "Copper & Critical Minerals",
+    "query": "copper lithium critical minerals mining electrification stocks",
+    "cadence": "weekly",
+    "pinned": false
+  }
+]

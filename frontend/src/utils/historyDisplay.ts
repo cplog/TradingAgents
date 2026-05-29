@@ -31,6 +31,10 @@ export type HistoryTableRow = HistoryRunRef & {
   processing_at: string | null;
   is_live_job: boolean;
   resumable?: boolean;
+  provenance?: JobStatus["provenance"];
+  trigger?: string | null;
+  signal_score?: number | null;
+  analysts?: string[];
 };
 
 const RATING_RANK: Record<string, number> = {
@@ -107,12 +111,15 @@ function rowFromJob(job: JobStatus): HistoryTableRow {
     is_live_job: status !== "completed",
     resumable: job.resumable,
     provenance: job.provenance ?? null,
+    trigger: job.trigger ?? null,
+    signal_score: job.signal_score ?? null,
+    analysts: job.analysts,
   };
 }
 
 function matchesFilters(
   row: HistoryTableRow,
-  filters: { ticker?: string; dateFrom?: string; dateTo?: string },
+  filters: { ticker?: string; dateFrom?: string; dateTo?: string; trigger?: string },
 ): boolean {
   const ticker = filters.ticker?.trim().toUpperCase();
   if (ticker && String(row.ticker ?? "").toUpperCase() !== ticker) {
@@ -121,6 +128,10 @@ function matchesFilters(
   const d = String(row.date ?? "");
   if (filters.dateFrom && d && d < filters.dateFrom) return false;
   if (filters.dateTo && d && d > filters.dateTo) return false;
+  if (filters.trigger === "overnight") {
+    const t = row.trigger ?? "";
+    if (t !== "overnight_monitor" && t !== "scan") return false;
+  }
   return true;
 }
 
@@ -128,7 +139,7 @@ function matchesFilters(
 export function mergeHistoryAndJobs(
   history: HistoryRunRef[],
   jobs: JobStatus[],
-  filters: { ticker?: string; dateFrom?: string; dateTo?: string } = {},
+  filters: { ticker?: string; dateFrom?: string; dateTo?: string; trigger?: string } = {},
 ): HistoryTableRow[] {
   const byId = new Map<string, HistoryTableRow>();
 
@@ -203,6 +214,77 @@ export function sortHistoryRows(rows: HistoryTableRow[], sortKey: HistorySortKey
     }
   });
   return out;
+}
+
+export function shortenRunId(runId: string, visible = 8): string {
+  const id = runId.trim();
+  if (id.length <= visible) return id;
+  return id.slice(0, visible);
+}
+
+export function ratingTone(
+  rating: string | null | undefined,
+): "positive" | "negative" | "neutral" {
+  if (!rating || rating === "…") return "neutral";
+  if (rating === "Buy" || rating === "Overweight") return "positive";
+  if (rating === "Sell" || rating === "Underweight") return "negative";
+  return "neutral";
+}
+
+export function historyStatusTone(
+  status: HistoryJobStatus,
+): "running" | "queued" | "failed" | "completed" | "cancelled" | "unknown" {
+  switch (status) {
+    case "running":
+      return "running";
+    case "queued":
+      return "queued";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "completed":
+      return "completed";
+    default:
+      return "unknown";
+  }
+}
+
+export type HistorySortableColumn =
+  | "ticker"
+  | "date"
+  | "rating"
+  | "status"
+  | "processing";
+
+const SORT_COLUMN_KEYS: Record<
+  HistorySortableColumn,
+  { asc: HistorySortKey; desc: HistorySortKey }
+> = {
+  ticker: { asc: "ticker_asc", desc: "ticker_desc" },
+  date: { asc: "trade_date_asc", desc: "trade_date_desc" },
+  rating: { asc: "rating_asc", desc: "rating_desc" },
+  status: { asc: "status_asc", desc: "status_desc" },
+  processing: { asc: "processing_asc", desc: "processing_desc" },
+};
+
+export function sortKeyForColumn(
+  column: HistorySortableColumn,
+  current: HistorySortKey,
+): HistorySortKey {
+  const { asc, desc } = SORT_COLUMN_KEYS[column];
+  if (current === desc) return asc;
+  return desc;
+}
+
+export function sortDirectionForColumn(
+  column: HistorySortableColumn,
+  current: HistorySortKey,
+): "asc" | "desc" | null {
+  const { asc, desc } = SORT_COLUMN_KEYS[column];
+  if (current === asc) return "asc";
+  if (current === desc) return "desc";
+  return null;
 }
 
 export function statusLabel(status: HistoryJobStatus): string {

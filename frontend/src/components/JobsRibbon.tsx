@@ -3,6 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { runsPath } from "../navigation/routes";
 import { fetchConfig, type JobStatus } from "../api";
 import { useJobsTracker } from "../hooks/useJobsTracker";
+import {
+  formatElapsedSince,
+  jobChipStep,
+  jobChipTone,
+  jobElapsedAnchorIso,
+  jobStatusLabel,
+  partitionActiveJobs,
+} from "../utils/activeJobsDisplay";
 
 /**
  * Persistent analysis status bar (above main content).
@@ -19,61 +27,6 @@ type ToastSpec = {
   ticker: string;
   outcome: "completed" | "failed" | "canceled";
 };
-
-function statusTone(status: string): {
-  label: string;
-  bg: string;
-  fg: string;
-  border: string;
-  pulse: boolean;
-} {
-  const s = status.toLowerCase();
-  if (s === "running" || s === "resuming") {
-    return {
-      label: status,
-      bg: "rgba(120, 240, 168, 0.14)",
-      fg: "var(--color-phosphor)",
-      border: "1px solid rgba(120, 240, 168, 0.45)",
-      pulse: true,
-    };
-  }
-  if (s === "queued" || s === "pending") {
-    return {
-      label: status,
-      bg: "var(--surface-elevated)",
-      fg: "var(--color-slate-text)",
-      border: "1px solid var(--color-platinum-outline)",
-      pulse: false,
-    };
-  }
-  return {
-    label: status,
-    bg: "var(--surface-elevated)",
-    fg: "var(--color-ash-gray)",
-    border: "1px solid var(--color-platinum-outline)",
-    pulse: false,
-  };
-}
-
-function elapsedSince(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms) || ms < 0) return "";
-  const total = Math.floor(ms / 1000);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  if (m === 0) return `${s}s`;
-  return `${m}m ${s.toString().padStart(2, "0")}s`;
-}
-
-function jobLastStep(job: JobStatus): string | null {
-  const events = job.progress_events ?? [];
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const stage = events[i]?.stage;
-    if (stage && stage.trim()) return stage.trim();
-  }
-  return null;
-}
 
 function countByStatus(jobs: JobStatus[], statuses: string[]): number {
   const want = new Set(statuses.map((s) => s.toLowerCase()));
@@ -94,12 +47,52 @@ function buildStatusSummary(active: JobStatus[], maxConcurrency: number | null):
   return head;
 }
 
+type JobChipProps = {
+  job: JobStatus;
+  index: number;
+  nowMs: number;
+  onOpen: (jobId: string) => void;
+};
+
+function JobChip({ job, index, nowMs, onOpen }: JobChipProps) {
+  const tone = jobChipTone(job.status);
+  const ticker = (job.ticker ?? "—").toUpperCase();
+  const statusText = jobStatusLabel(job.status);
+  const step = jobChipStep(job, nowMs);
+  const elapsed = formatElapsedSince(jobElapsedAnchorIso(job), nowMs);
+  const showStep = step && step.toLowerCase() !== statusText.toLowerCase();
+
+  return (
+    <button
+      key={job.job_id}
+      type="button"
+      role="listitem"
+      className={`analysis-status-bar__item analysis-status-bar__item--${tone}`}
+      data-status={tone}
+      style={{ "--chip-index": index } as React.CSSProperties}
+      onClick={() => onOpen(job.job_id)}
+      title={
+        `${ticker} · ${statusText}${showStep && step ? ` · ${step}` : ""}` +
+        (elapsed ? ` · ${elapsed}` : "") +
+        ` · job ${job.job_id}`
+      }
+    >
+      <span className="analysis-status-bar__item-dot" aria-hidden />
+      <span className="analysis-status-bar__item-ticker">{ticker}</span>
+      <span className="analysis-status-bar__item-status">{statusText}</span>
+      {showStep ? <span className="analysis-status-bar__item-step">{step}</span> : null}
+      {elapsed ? <span className="analysis-status-bar__item-elapsed">{elapsed}</span> : null}
+    </button>
+  );
+}
+
 export function JobsRibbon() {
   const navigate = useNavigate();
   const { active, recentlyCompleted, justCompletedIds, error } = useJobsTracker();
   const [maxConcurrency, setMaxConcurrency] = useState<number | null>(null);
   const [toasts, setToasts] = useState<ToastSpec[]>([]);
-  const [, setNowTick] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const trackRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,9 +114,23 @@ export function JobsRibbon() {
 
   useEffect(() => {
     if (active.length === 0) return;
-    const id = setInterval(() => setNowTick((n) => n + 1), 1000);
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
   }, [active.length]);
+
+  const { running, queued } = useMemo(() => partitionActiveJobs(active), [active]);
+  const runningCount = running.length;
+  const slotCount = maxConcurrency ?? 3;
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el || runningCount === 0) return;
+    if (typeof el.scrollTo === "function") {
+      el.scrollTo({ left: 0, behavior: "smooth" });
+    } else {
+      el.scrollLeft = 0;
+    }
+  }, [runningCount, running[0]?.job_id]);
 
   const toastTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   useEffect(() => {
@@ -173,48 +180,81 @@ export function JobsRibbon() {
     [active, maxConcurrency],
   );
 
+  const openJob = (jobId: string) => navigate(runsPath(jobId));
+
+  let chipIndex = 0;
+
   if (active.length === 0 && toasts.length === 0 && !error) return null;
 
   return (
     <div className="analysis-status-bar" role="region" aria-label="Analysis status">
       <div className="analysis-status-bar__head">
         <span className="analysis-status-bar__title">Analysis</span>
+        {active.length > 0 && slotCount > 0 && (
+          <div
+            className="analysis-status-bar__slots"
+            aria-label={`${runningCount} of ${slotCount} parallel slots in use`}
+          >
+            {Array.from({ length: slotCount }, (_, i) => (
+              <span
+                key={i}
+                className={`analysis-status-bar__slot${i < runningCount ? " analysis-status-bar__slot--live" : ""}`}
+                aria-hidden
+              />
+            ))}
+          </div>
+        )}
         <span className="analysis-status-bar__summary">{statusSummary}</span>
       </div>
 
       {active.length > 0 && (
-        <div className="analysis-status-bar__track" role="list" aria-label="In-progress tickers">
-          {active.map((job) => {
-            const tone = statusTone(job.status);
-            const ticker = (job.ticker ?? "—").toUpperCase();
-            const step = jobLastStep(job);
-            const elapsed = elapsedSince(job.created_at);
-            return (
-              <button
-                key={job.job_id}
-                type="button"
-                role="listitem"
-                className={`analysis-status-bar__item${tone.pulse ? " analysis-status-bar__item--pulse" : ""}`}
-                style={{
-                  background: tone.bg,
-                  color: tone.fg,
-                  border: tone.border,
-                }}
-                onClick={() => navigate(runsPath(job.job_id))}
-                title={
-                  `${ticker} · ${tone.label}${step ? ` · ${step}` : ""}` +
-                  (elapsed ? ` · ${elapsed}` : "") +
-                  ` · job ${job.job_id}`
-                }
-              >
-                <span className="analysis-status-bar__item-dot" aria-hidden />
-                <span className="analysis-status-bar__item-ticker">{ticker}</span>
-                <span className="analysis-status-bar__item-status">{tone.label}</span>
-                {step ? <span className="analysis-status-bar__item-step">{step}</span> : null}
-                {elapsed ? <span className="analysis-status-bar__item-elapsed">{elapsed}</span> : null}
-              </button>
-            );
-          })}
+        <div
+          ref={trackRef}
+          className="analysis-status-bar__track"
+          role="list"
+          aria-label="In-progress tickers"
+        >
+          {running.length > 0 && (
+            <div className="analysis-status-bar__group" role="presentation">
+              <span className="analysis-status-bar__group-label">Running</span>
+              <div className="analysis-status-bar__group-chips" role="list">
+                {running.map((job) => {
+                  const idx = chipIndex++;
+                  return (
+                    <JobChip
+                      key={job.job_id}
+                      job={job}
+                      index={idx}
+                      nowMs={nowMs}
+                      onOpen={openJob}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {running.length > 0 && queued.length > 0 && (
+            <span className="analysis-status-bar__divider" aria-hidden />
+          )}
+          {queued.length > 0 && (
+            <div className="analysis-status-bar__group" role="presentation">
+              <span className="analysis-status-bar__group-label">Queued</span>
+              <div className="analysis-status-bar__group-chips" role="list">
+                {queued.map((job) => {
+                  const idx = chipIndex++;
+                  return (
+                    <JobChip
+                      key={job.job_id}
+                      job={job}
+                      index={idx}
+                      nowMs={nowMs}
+                      onOpen={openJob}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

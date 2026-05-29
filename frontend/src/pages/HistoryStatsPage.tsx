@@ -4,6 +4,7 @@ import { paths } from "../navigation/routes";
 import { PageFrame, PageHeader } from "../components/PageFrame";
 import { HistoryRatingChart } from "../components/charts/HistoryRatingChart";
 import { fetchHistoryRuns, type HistoryRunRef } from "../api";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 function normalizeRating(r: string | null | undefined): string {
   if (!r || typeof r !== "string") return "Unknown";
@@ -14,6 +15,7 @@ export function HistoryStatsPage() {
   const [runs, setRuns] = useState<HistoryRunRef[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  useDocumentTitle("Run stats");
 
   useEffect(() => {
     let cancelled = false;

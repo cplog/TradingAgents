@@ -12,6 +12,7 @@ import {
   mergeSupportedAnalystIds,
   submitAnalyze,
 } from "../api";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 const ANALYST_OPTIONS = [
   { id: "market", label: "Market" },
@@ -82,6 +83,7 @@ export function DashboardPage() {
   const [submitting, setSubmitting] = useState(false);
   const [jobNotice, setJobNotice] = useState<string | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
+  useDocumentTitle(ticker.trim() ? `${ticker.trim().toUpperCase()} — Analysis` : "Analysis");
 
   useEffect(() => {
     if (tickerFromQs) setTicker(tickerFromQs);

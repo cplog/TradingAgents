@@ -44,6 +44,10 @@ from tradingagents.agents.utils.agent_utils import (
     list_akshare_endpoints,
     get_macro_data,
 )
+from tradingagents.agents.utils.overnight_tools import (
+    compute_overnight_signal_tool,
+    scan_us_market_drops,
+)
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
@@ -180,6 +184,8 @@ class TradingAgentsGraph:
                     get_indicators,
                     list_akshare_endpoints,
                     get_macro_data,
+                    compute_overnight_signal_tool,
+                    scan_us_market_drops,
                 ]
             ),
             "social": ToolNode(
@@ -244,6 +250,7 @@ class TradingAgentsGraph:
                     get_indicators,
                 ]
             ),
+            "alt_data": ToolNode([]),
         }
 
     def _resolve_benchmark(self, ticker: str) -> str:

@@ -1,6 +1,7 @@
 from .utils.agent_utils import create_msg_delete
 from .utils.agent_states import AgentState, InvestDebateState, RiskDebateState
 
+from .analysts.alt_data_analyst import create_alt_data_analyst
 from .analysts.fundamentals_analyst import create_fundamentals_analyst
 from .analysts.hot_money_analyst import create_hot_money_analyst
 from .analysts.kronos_analyst import create_kronos_analyst
@@ -42,6 +43,7 @@ __all__ = [
     "create_news_analyst",
     "create_policy_analyst",
     "create_aggressive_debator",
+    "create_alt_data_analyst",
     "create_portfolio_manager",
     "create_conservative_debator",
     "create_sentiment_analyst",

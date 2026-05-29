@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import requests
 from urllib.parse import quote
@@ -30,6 +30,7 @@ ALLOWED_PERSISTED_SECRET_KEYS: frozenset[str] = frozenset(
         "MOONSHOT_API_KEY",
         "KIMI_CODE_API_KEY",
         "ALPHA_VANTAGE_API_KEY",
+        "TAVILY_API_KEY",
     }
 )
 
@@ -55,6 +56,10 @@ class StateStore:
 
     def put_json(self, key: str, value: Any) -> None:
         self.put_str(key, json.dumps(value, ensure_ascii=False))
+
+    def list_keys(self, prefix: str) -> List[str]:
+        """Return all keys starting with prefix. Default scans in-memory fallback only."""
+        return []
 
 
 class FallbackStateStore(StateStore):
@@ -105,6 +110,26 @@ class FallbackStateStore(StateStore):
         if primary_exc is not None and fallback_exc is not None:
             raise primary_exc
 
+    def list_keys(self, prefix: str) -> List[str]:
+        """Merge keys from both primary and fallback, deduplicated."""
+        primary_keys: List[str] = []
+        try:
+            primary_keys = self._primary.list_keys(prefix)
+        except Exception as exc:
+            logger.warning("Primary list_keys failed for %s: %s", prefix, exc)
+        fallback_keys: List[str] = []
+        try:
+            fallback_keys = self._fallback.list_keys(prefix)
+        except Exception as exc:
+            logger.warning("Fallback list_keys failed for %s: %s", prefix, exc)
+        seen = set(primary_keys)
+        out = list(primary_keys)
+        for k in fallback_keys:
+            if k not in seen:
+                seen.add(k)
+                out.append(k)
+        return out
+
 
 class LocalFileStateStore(StateStore):
     """JSON object stored at ~/.tradingagents/api_state.json — keys map to JSON values."""
@@ -152,6 +177,9 @@ class LocalFileStateStore(StateStore):
         except json.JSONDecodeError:
             self._root[key] = value
         self._save()
+
+    def list_keys(self, prefix: str) -> List[str]:
+        return [k for k in self._root.keys() if k.startswith(prefix)]
 
 
 class CloudflareKVStore(StateStore):

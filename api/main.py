@@ -68,11 +68,15 @@ from api.models import (
     HistoryRunRef,
     JobDimensionsResponse,
     JobStatusResponse,
+    MonitorTickerRequest,
+    MonitorWatchlistSetRequest,
     ResumeJobResponse,
     RuntimeConfigUpdateRequest,
+    SCAN_MODE_ANALYSTS,
 )
 from api.news import fetch_news_feed
 from api.state_store import ALLOWED_PERSISTED_SECRET_KEYS, get_state_store
+from api.topics_models import TopicSearchRequest, TopicUpdateRequest
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +155,9 @@ def _record_to_status(rec) -> JobStatusResponse:
         last_graph_step=rec.last_graph_step,
         checkpoint_thread_id=rec.checkpoint_thread_id,
         provenance=provenance,
+        trigger=rec.trigger,
+        signal_score=rec.signal_score,
+        analysts=list(rec.analysts or []),
     )
 
 
@@ -613,15 +620,45 @@ async def lifespan(app: FastAPI):
         ttl_hours=ttl_hours,
         state_store=get_state_store(),
     )
+    restarted = await _worker.restart_queued_jobs()
 
     logger.info(
-        "TradingAgents API started | provider=%s | deep=%s | quick=%s | concurrency=%d",
+        "TradingAgents API started | provider=%s | deep=%s | quick=%s | concurrency=%d | restarted_jobs=%d",
         _service_config.get("llm_provider"),
         _service_config.get("deep_think_llm"),
         _service_config.get("quick_think_llm"),
         max_concurrency,
+        restarted,
     )
+
+    from api.monitor.engine import get_monitor_engine
+
+    monitor = get_monitor_engine(
+        worker=_worker,
+        service_config=_service_config,
+        state_store=get_state_store(),
+    )
+    if bool(_service_config.get("monitor_enabled")) and monitor is not None:
+        await monitor.start()
+        logger.info("Overnight monitor background loop started")
+
+    from api.topics import get_topics_engine
+
+    topics = get_topics_engine(
+        service_config=_service_config,
+        state_store=get_state_store(),
+    )
+    if topics is not None:
+        await topics.start()
+        logger.info("Topics background scheduler started (60s loop)")
+
     yield
+
+    if topics is not None:
+        await topics.stop()
+
+    if monitor is not None:
+        await monitor.stop()
 
     if _worker:
         logger.info("Draining running jobs...")
@@ -759,11 +796,26 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    analysts = request.analysts
+    trigger: Optional[str] = None
+    overnight_signal = request.overnight_signal
+    if request.mode == "scan":
+        trigger = "scan"
+        if analysts is None:
+            analysts = list(SCAN_MODE_ANALYSTS)
+        config = {
+            **config,
+            "max_debate_rounds": 1,
+            "max_risk_discuss_rounds": 1,
+        }
+
     job_id = await _worker.submit(
         ticker=ticker,
         date=analysis_date,
         config=config,
-        analysts=request.analysts,
+        analysts=analysts,
+        trigger=trigger,
+        overnight_signal=overnight_signal,
     )
 
     return AnalyzeResponse(
@@ -854,6 +906,235 @@ async def get_job(job_id: str) -> JobStatusResponse:
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
     return _record_to_status(record)
+
+
+def _monitor_engine():
+    from api.monitor.engine import get_monitor_engine
+
+    eng = get_monitor_engine()
+    if eng is None:
+        raise HTTPException(status_code=503, detail="Monitor not initialized")
+    return eng
+
+
+@app.get("/api/monitor/status")
+async def monitor_status() -> Dict[str, Any]:
+    """Overnight monitor session state and last poll snapshot."""
+    return _monitor_engine().status()
+
+
+@app.get("/api/monitor/watchlist")
+async def monitor_get_watchlist() -> Dict[str, Any]:
+    eng = _monitor_engine()
+    return {"tickers": eng.watchlist.list_tickers()}
+
+
+@app.put("/api/monitor/watchlist")
+async def monitor_set_watchlist(body: MonitorWatchlistSetRequest) -> Dict[str, Any]:
+    eng = _monitor_engine()
+    tickers = eng.watchlist.set_tickers(body.tickers)
+    return {"tickers": tickers}
+
+
+@app.post("/api/monitor/watchlist")
+async def monitor_add_watchlist(body: MonitorTickerRequest) -> Dict[str, Any]:
+    from api.tickers import normalize_ticker
+
+    try:
+        sym = normalize_ticker(body.ticker)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    eng = _monitor_engine()
+    tickers = eng.watchlist.add(sym)
+    return {"tickers": tickers}
+
+
+@app.delete("/api/monitor/watchlist/{ticker}")
+async def monitor_remove_watchlist(ticker: str) -> Dict[str, Any]:
+    eng = _monitor_engine()
+    tickers = eng.watchlist.remove(ticker)
+    return {"tickers": tickers}
+
+
+@app.get("/api/monitor/signals")
+async def monitor_list_signals(limit: int = Query(50, ge=1, le=200)) -> Dict[str, Any]:
+    eng = _monitor_engine()
+    return {"signals": eng.watchlist.list_signals(limit=limit)}
+
+
+@app.post("/api/monitor/tick")
+async def monitor_tick() -> Dict[str, Any]:
+    """Run one monitor poll immediately (manual trigger)."""
+    eng = _monitor_engine()
+    return await eng.tick_once()
+
+
+def _topics_engine():
+    from api.topics import get_topics_engine
+
+    eng = get_topics_engine()
+    if eng is None:
+        raise HTTPException(status_code=503, detail="Topics engine not initialized")
+    return eng
+
+
+def _topics_store():
+    from api.topics_store import get_topics_store
+
+    return get_topics_store(get_state_store())
+
+
+@app.get("/api/topics")
+@app.get("/topics")
+async def topics_list() -> Dict[str, Any]:
+    from api.topics_models import TopicListResponse
+
+    summaries = _topics_store().list_summaries()
+    return TopicListResponse(topics=summaries).model_dump(mode="json")
+
+
+@app.get("/api/topics/{topic_id}")
+@app.get("/topics/{topic_id}")
+async def topics_get(topic_id: str) -> Dict[str, Any]:
+    from api.topics_models import TopicDetailResponse
+
+    store = _topics_store()
+    topic = store.get_topic(topic_id.strip())
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    latest = store.latest_run(topic.id)
+    return TopicDetailResponse(topic=topic, latest_run=latest).model_dump(mode="json")
+
+
+@app.get("/api/topics/{topic_id}/runs")
+@app.get("/topics/{topic_id}/runs")
+async def topics_runs(topic_id: str) -> Dict[str, Any]:
+    from api.topics_models import TopicRunsResponse
+
+    store = _topics_store()
+    if store.get_topic(topic_id.strip()) is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    runs = store.list_runs(topic_id.strip())
+    return TopicRunsResponse(runs=runs).model_dump(mode="json")
+
+
+@app.post("/api/topics/search")
+@app.post("/topics/search")
+async def topics_search(body: TopicSearchRequest) -> Dict[str, Any]:
+    from api.topics import TopicsBudgetExceeded
+    from api.topics_models import TopicDetailResponse
+
+    q = body.query.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="query is required")
+    eng = _topics_engine()
+    try:
+        topic, run = await eng.search_and_run(q, label=body.label, cadence=body.cadence)
+    except TopicsBudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    return TopicDetailResponse(topic=topic, latest_run=run).model_dump(mode="json")
+
+
+@app.post("/api/topics/{topic_id}/refresh")
+@app.post("/topics/{topic_id}/refresh")
+async def topics_refresh(topic_id: str) -> Dict[str, Any]:
+    from api.topics import TopicsBudgetExceeded, TopicsRefreshCooldown
+    from api.topics_models import TopicRefreshResponse
+
+    eng = _topics_engine()
+    if _topics_store().get_topic(topic_id.strip()) is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    try:
+        run = await eng.refresh_topic(topic_id.strip())
+    except TopicsRefreshCooldown as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except TopicsBudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    return TopicRefreshResponse(run=run).model_dump(mode="json")
+
+
+@app.patch("/api/topics/{topic_id}")
+@app.patch("/topics/{topic_id}")
+async def topics_patch(topic_id: str, body: TopicUpdateRequest) -> Dict[str, Any]:
+    from api.topics_models import TopicDetailResponse
+    from api.topics_store import _utc_now_iso
+
+    store = _topics_store()
+    topic = store.get_topic(topic_id.strip())
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    if body.label is not None:
+        topic.label = body.label.strip() or topic.label
+    if body.query is not None:
+        q = body.query.strip()
+        if not q:
+            raise HTTPException(status_code=400, detail="query cannot be empty")
+        topic.query = q
+    if body.cadence is not None:
+        topic.cadence = body.cadence
+    topic.updated_at = _utc_now_iso()
+    store.save_topic(topic)
+    latest = store.latest_run(topic.id)
+    return TopicDetailResponse(topic=topic, latest_run=latest).model_dump(mode="json")
+
+
+@app.post("/api/topics/{topic_id}/pin")
+@app.post("/topics/{topic_id}/pin")
+async def topics_pin(topic_id: str) -> Dict[str, Any]:
+    from api.topics_models import TopicDetailResponse
+    from api.topics_store import _utc_now_iso
+
+    store = _topics_store()
+    topic = store.get_topic(topic_id.strip())
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    topic.pinned = True
+    topic.updated_at = _utc_now_iso()
+    store.save_topic(topic)
+    latest = store.latest_run(topic.id)
+    return TopicDetailResponse(topic=topic, latest_run=latest).model_dump(mode="json")
+
+
+@app.delete("/api/topics/{topic_id}/pin")
+@app.delete("/topics/{topic_id}/pin")
+async def topics_unpin(topic_id: str) -> Dict[str, Any]:
+    from api.topics_models import TopicDetailResponse
+    from api.topics_store import _utc_now_iso
+
+    store = _topics_store()
+    topic = store.get_topic(topic_id.strip())
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    topic.pinned = False
+    topic.updated_at = _utc_now_iso()
+    store.save_topic(topic)
+    latest = store.latest_run(topic.id)
+    return TopicDetailResponse(topic=topic, latest_run=latest).model_dump(mode="json")
+
+
+@app.delete("/api/topics/{topic_id}")
+@app.delete("/topics/{topic_id}")
+async def topics_delete(topic_id: str) -> Dict[str, Any]:
+    from api.topics_models import TopicSource
+
+    store = _topics_store()
+    topic = store.get_topic(topic_id.strip())
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    if topic.source != TopicSource.user:
+        raise HTTPException(status_code=403, detail="Only user-owned topics can be deleted")
+    store.delete_topic(topic.id)
+    return {"deleted": topic.id}
+
+
+@app.get("/api/topics/status")
+@app.get("/topics/status")
+async def topics_status() -> Dict[str, Any]:
+    return _topics_engine().status()
 
 
 @app.post("/jobs/{job_id}/cancel")

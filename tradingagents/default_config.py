@@ -25,6 +25,11 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_PREFER_FREE_DATA_VENDORS": "prefer_free_data_vendors",
     "TRADINGAGENTS_DATA_CACHE_BACKEND": "data_cache_backend",
     "TRADINGAGENTS_DATA_CACHE_AUTO_STOCK_BARS": "data_cache_auto_stock_bars",
+    "TRADINGAGENTS_MONITOR_ENABLED": "monitor_enabled",
+    "TRADINGAGENTS_MONITOR_POLL_SECONDS": "monitor_poll_seconds",
+    "TRADINGAGENTS_MONITOR_SIGNAL_THRESHOLD": "monitor_signal_threshold",
+    "TRADINGAGENTS_MONITOR_SPREAD_MAX_PCT": "monitor_spread_max_pct",
+    "TRADINGAGENTS_MONITOR_COOLDOWN_MINUTES": "monitor_cooldown_minutes",
 }
 
 
@@ -140,6 +145,13 @@ _CONFIG_BASE: dict = {
     "data_cache_auto_stock_bars": False,
     # Override vendor tag stored on ta_stock_bars (default: primary configured core_stock_apis vendor).
     "data_cache_stock_vendor_tag": None,
+    # Overnight monitor (daily barbell; free yfinance + AKShare)
+    "monitor_enabled": False,
+    "monitor_poll_seconds": 900,
+    "monitor_signal_threshold": 75,
+    "monitor_spread_max_pct": 8.0,
+    "monitor_cooldown_minutes": 30,
+    "monitor_min_drop_pct": -10.0,
 }
 
 

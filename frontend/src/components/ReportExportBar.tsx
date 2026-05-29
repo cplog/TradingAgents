@@ -4,6 +4,7 @@
 
 type ReportExportBarProps = {
   onExportHtml: () => void;
+  onExportPng: () => void;
   onPrint: () => void;
   markdownHref: string | null;
   disabled?: boolean;
@@ -15,6 +16,7 @@ type ReportExportBarProps = {
 
 export function ReportExportBar({
   onExportHtml,
+  onExportPng,
   onPrint,
   markdownHref,
   disabled = false,
@@ -37,7 +39,7 @@ export function ReportExportBar({
         <span className="report-export-bar__hint">
           {disabled && disabledHint
             ? disabledHint
-            : "HTML archive · browser PDF · raw markdown"}
+            : "HTML archive · PNG image · browser PDF · raw markdown"}
         </span>
       </div>
       <div className="report-export-bar__actions">
@@ -49,6 +51,15 @@ export function ReportExportBar({
           title="Download a self-contained HTML file (summary + full report)."
         >
           HTML
+        </button>
+        <button
+          type="button"
+          className="ui-btn-secondary"
+          onClick={onExportPng}
+          disabled={disabled}
+          title="Download a high-DPI PNG image of the decision card for sharing."
+        >
+          PNG
         </button>
         <button
           type="button"

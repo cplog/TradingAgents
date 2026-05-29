@@ -7,6 +7,8 @@ import {
   type HealthPayload,
 } from "../api";
 import { PageFrame, PageHeader } from "../components/PageFrame";
+import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 export function SystemPage() {
   const [health, setHealth] = useState<HealthPayload | null>(null);
@@ -17,6 +19,7 @@ export function SystemPage() {
   const [quick, setQuick] = useState("gpt-5.4-mini");
   const [openaiKey, setOpenaiKey] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
+  useDocumentTitle("System");
 
   useEffect(() => {
     void fetchHealth()
@@ -29,7 +32,11 @@ export function SystemPage() {
 
   return (
     <PageFrame>
-      <PageHeader title="System and maintenance" description="Service health, runtime config, and cache controls." />
+      <PageHeader
+        title="System and maintenance"
+        description="Service health, runtime config, and cache controls."
+        meta={<AppBreadcrumbs items={[{ label: "System" }]} />}
+      />
 
       <section className="panel"
         style={{
@@ -233,6 +240,41 @@ export function SystemPage() {
             Clear checkpoint cache
           </button>
         </div>
+      </section>
+
+      <section
+        className="panel"
+        style={{
+          marginTop: "var(--spacing-24)",
+          padding: "var(--spacing-24)",
+          background: "var(--surface-cloud-white)",
+          borderRadius: "var(--radius-lg)",
+          border: "1px solid var(--color-stone-border)",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>External consoles</h2>
+        <p style={{ fontSize: 14, color: "var(--color-ash-gray)" }}>
+          Optional Cloudflare KV for durable API state, or local JSON at{" "}
+          <span className="mono">~/.tradingagents/api_state.json</span>.
+        </p>
+        <ul>
+          <li>
+            <a href="https://dash.cloudflare.com/" target="_blank" rel="noreferrer">
+              Cloudflare Dashboard
+            </a>{" "}
+            (Workers → KV)
+          </li>
+          <li>
+            <a href="https://fastapi.tiangolo.com/" target="_blank" rel="noreferrer">
+              FastAPI docs
+            </a>{" "}
+            for this service at <span className="mono">/docs</span> when the API is running.
+          </li>
+        </ul>
+        <p className="notice">
+          To add Mongo Express or Redis Commander, extend{" "}
+          <span className="mono">docker-compose.yml</span> on your fork; they are not bundled here.
+        </p>
       </section>
     </PageFrame>
   );

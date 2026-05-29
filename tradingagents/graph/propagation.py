@@ -59,6 +59,8 @@ class Propagator:
             "dimensions_summary": "",
             "dimensions_error": "",
             "dimensions_snapshot_json": "",
+            "overnight_signal": "",
+            "alt_data_report": "",
         }
 
     def get_graph_args(self, callbacks: Optional[List] = None) -> Dict[str, Any]:

@@ -1,6 +1,6 @@
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Pressable } from "../components/Pressable";
 import { PageFrame, PageHeader } from "../components/PageFrame";
 import {
@@ -15,7 +15,10 @@ import {
 } from "../api";
 import { FactorBar } from "../components/dimensions/FactorBar";
 import { LlmPicker, llmConfigToOverrides, useLlmConfig } from "../components/LlmPicker";
+import { topicPath, paths } from "../navigation/routes";
 import type { FactorScores, StockDimensions } from "../dimensions-types";
+import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 const ANALYST_OPTIONS = [
   { id: "market", label: "Market" },
@@ -242,13 +245,35 @@ export function BatchPage() {
   );
 
   const estMinutes = useMemo(() => Math.max(1, Math.ceil(tickerCount * 3)), [tickerCount]);
+  const topicFromUrl = searchParams.get("topic")?.trim() || null;
+  useDocumentTitle(batchId ? `Batch ${batchId.slice(0, 8)}` : "Batch");
 
   return (
     <PageFrame wide>
       <PageHeader
         title="Batch analysis"
         description="Full multi-agent LLM run per ticker. Parallelism follows server max_concurrency."
+        meta={
+          <AppBreadcrumbs
+            items={
+              topicFromUrl
+                ? [
+                    { label: "Topics", to: paths.topics },
+                    { label: topicFromUrl, to: topicPath(topicFromUrl) },
+                    { label: "Batch" },
+                  ]
+                : [{ label: "Batch" }]
+            }
+          />
+        }
       />
+      {topicFromUrl ? (
+        <div className="flow-banner topics-batch-banner" role="status">
+          <strong>From topic:</strong> tickers pre-filled from theme{" "}
+          <Link to={topicPath(topicFromUrl)}>{topicFromUrl}</Link>.{" "}
+          <Link to={paths.topics}>Browse all topics</Link>
+        </div>
+      ) : null}
       <div className="flow-banner">
         <strong>High cost / long runtime.</strong> Each ticker runs the full analyst → debate → PM pipeline (~3 min
         each). For a quick factor screen first, use Screener from the sidebar (facts-only, no LLM).

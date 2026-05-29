@@ -1,8 +1,7 @@
-import { useAutoAnimate } from "@formkit/auto-animate/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
-import { runsPath, stocksPath } from "../navigation/routes";
+import { paths, runsPath, stocksPath } from "../navigation/routes";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -19,42 +18,22 @@ import {
   type HistoryCompareResponse,
   type HistoryRunRef,
 } from "../api";
+import { HistoryRunsTable } from "../components/history/HistoryRunsTable";
 import { HistoryTickerCards } from "../components/history/HistoryTickerCards";
-import { RunProvenancePanel } from "../components/history/RunProvenancePanel";
+import { PageFrame, PageHeader, Panel } from "../components/PageFrame";
 import type { TickerRollup } from "../utils/historyRollup";
 import { buildRerunAnalyzePayload } from "../utils/historyRerun";
+import { retryAllFailedRuns, retryFailedRun } from "../utils/failedJobRetry";
 import {
-  formatHistoryTimestampWithZone,
   hasActiveHistoryRows,
   mergeHistoryAndJobs,
   sortHistoryRows,
-  statusLabel,
   type HistorySortKey,
   type HistoryTableRow,
 } from "../utils/historyDisplay";
-import {
-  formatLlmLabel,
-  formatSourcesLabel,
-  hasBiasWarning,
-  provenanceTitle,
-} from "../utils/runProvenance";
-import { DimensionsPanel } from "../components/dimensions/DimensionsPanel";
 import { DimensionsRadar } from "../components/dimensions/DimensionsRadar";
-import { FactorBar } from "../components/dimensions/FactorBar";
 import type { FactorScores, StockDimensions } from "../dimensions-types";
-import type { Components } from "react-markdown";
-import {
-  orderedReportSectionKeys,
-  prepareReportMarkdown,
-} from "../utils/reportMarkdown";
-
-const REPORT_MD_COMPONENTS: Components = {
-  table: ({ children, ...rest }) => (
-    <div className="markdown-table-wrap">
-      <table {...rest}>{children}</table>
-    </div>
-  ),
-};
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 const FACTOR_KEYS: (keyof FactorScores)[] = [
   "value",
@@ -64,60 +43,44 @@ const FACTOR_KEYS: (keyof FactorScores)[] = [
   "low_risk",
   "sentiment",
 ];
+import type { Components } from "react-markdown";
+import { prepareReportMarkdown } from "../utils/reportMarkdown";
+
+const REPORT_MD_COMPONENTS: Components = {
+  table: ({ children, ...rest }) => (
+    <div className="markdown-table-wrap">
+      <table {...rest}>{children}</table>
+    </div>
+  ),
+};
 
 function pct(conf: number | null | undefined): string {
   if (conf == null || !Number.isFinite(conf)) return "—";
   return `${Math.round(conf * 100)}%`;
 }
 
-type RowFactorSource = "run_snapshot" | "live_preview" | "loading" | "unavailable";
-
-function pickRowFactorScore(
-  run: HistoryTableRow,
-  tickerPreview: StockDimensions | null | undefined,
-  key: keyof FactorScores,
-): number | null {
-  const runScore = run.factor_scores?.[key];
-  if (typeof runScore === "number" && Number.isFinite(runScore)) {
-    return runScore;
-  }
-  const previewScore = tickerPreview?.factor_scores[key]?.score;
-  if (typeof previewScore === "number" && Number.isFinite(previewScore)) {
-    return previewScore;
-  }
-  return null;
-}
-
-function inferRowFactorSource(
-  run: HistoryTableRow,
-  tickerPreview: StockDimensions | null | undefined,
-): RowFactorSource {
-  const hasRunSnapshot = FACTOR_KEYS.some((k) => {
-    const v = run.factor_scores?.[k];
-    return typeof v === "number" && Number.isFinite(v);
-  });
-  if (hasRunSnapshot) return "run_snapshot";
-  if (!run.ticker) return "unavailable";
-  if (tickerPreview === undefined) return "loading";
-  if (tickerPreview?.factor_scores) return "live_preview";
-  return "unavailable";
-}
-
 export function HistoryPage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const urlRunHandled = useRef(false);
+  useDocumentTitle("Runs");
   /** Rows the user deleted this session — filters live-job merge until refresh clears worker. */
   const hiddenRunIdsRef = useRef<Set<string>>(new Set());
-  const [runsBodyRef] = useAutoAnimate();
   const [runs, setRuns] = useState<HistoryTableRow[]>([]);
-  const [sortKey, setSortKey] = useState<HistorySortKey>("processing_desc");
-  const [includeLiveJobs, setIncludeLiveJobs] = useState(true);
+  const [sortKey, setSortKey] = useState<HistorySortKey>(
+    () => (searchParams.get("sort") as HistorySortKey | null) ?? "processing_desc",
+  );
+  const [includeLiveJobs, setIncludeLiveJobs] = useState(
+    () => searchParams.get("live") !== "0",
+  );
+  const [overnightOnly, setOvernightOnly] = useState(
+    () => searchParams.get("overnight") === "1",
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tickerFilter, setTickerFilter] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [tickerFilter, setTickerFilter] = useState(() => searchParams.get("ticker") ?? "");
+  const [dateFrom, setDateFrom] = useState(() => searchParams.get("from") ?? "");
+  const [dateTo, setDateTo] = useState(() => searchParams.get("to") ?? "");
   const [runIdA, setRunIdA] = useState("");
   const [runIdB, setRunIdB] = useState("");
   const [compareLoading, setCompareLoading] = useState(false);
@@ -130,11 +93,19 @@ export function HistoryPage() {
   const [showFullPm, setShowFullPm] = useState(false);
   const compareResultsRef = useRef<HTMLElement | null>(null);
 
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+  const [viewMode, setViewMode] = useState<"cards" | "table">(
+    () => (searchParams.get("view") === "table" ? "table" : "cards"),
+  );
   const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
   const [rerunPendingTickers, setRerunPendingTickers] = useState<Set<string>>(new Set());
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [bulkRerunSubmitting, setBulkRerunSubmitting] = useState(false);
+  const [failedOnly, setFailedOnly] = useState(
+    () => searchParams.get("failed") === "1",
+  );
+  const [bulkRetrySubmitting, setBulkRetrySubmitting] = useState(false);
+  const [failedRetryRunId, setFailedRetryRunId] = useState<string | null>(null);
+  const [retrySummary, setRetrySummary] = useState<string | null>(null);
   // Lazy-fetched per-row factor scores (facts-only preview) keyed by ticker
   const [thumbDims, setThumbDims] = useState<Record<string, StockDimensions | null>>({});
   // Compare-side dimensions, fetched by ticker for each side
@@ -230,6 +201,7 @@ export function HistoryPage() {
         ticker: tickerFilter.trim() || undefined,
         dateFrom: dateFrom.trim() || undefined,
         dateTo: dateTo.trim() || undefined,
+        trigger: overnightOnly ? "overnight" : undefined,
       };
       const [history, jobs] = await Promise.all([
         fetchHistoryRuns({
@@ -250,16 +222,56 @@ export function HistoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [tickerFilter, dateFrom, dateTo, includeLiveJobs]);
+  }, [tickerFilter, dateFrom, dateTo, includeLiveJobs, overnightOnly]);
 
   const sortedRuns = useMemo(
     () => sortHistoryRows(runs, sortKey),
     [runs, sortKey],
   );
 
+  const visibleRuns = useMemo(
+    () => (failedOnly ? sortedRuns.filter((r) => r.job_status === "failed") : sortedRuns),
+    [sortedRuns, failedOnly],
+  );
+
+  const failedCount = useMemo(
+    () => sortedRuns.filter((r) => r.job_status === "failed").length,
+    [sortedRuns],
+  );
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Sync filters → URL so back/forward and reload preserve view.
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    const setOrDel = (k: string, v: string | null) => {
+      if (v && v.length) next.set(k, v);
+      else next.delete(k);
+    };
+    setOrDel("ticker", tickerFilter.trim().toUpperCase() || null);
+    setOrDel("from", dateFrom.trim() || null);
+    setOrDel("to", dateTo.trim() || null);
+    setOrDel("sort", sortKey === "processing_desc" ? null : sortKey);
+    setOrDel("live", includeLiveJobs ? null : "0");
+    setOrDel("overnight", overnightOnly ? "1" : null);
+    setOrDel("failed", failedOnly ? "1" : null);
+    setOrDel("view", viewMode === "cards" ? null : viewMode);
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    tickerFilter,
+    dateFrom,
+    dateTo,
+    sortKey,
+    includeLiveJobs,
+    overnightOnly,
+    failedOnly,
+    viewMode,
+  ]);
 
   useEffect(() => {
     if (!includeLiveJobs || !hasActiveHistoryRows(runs)) return;
@@ -303,20 +315,15 @@ export function HistoryPage() {
     openRun(row.job_id);
   }
 
-  function statusBadgeStyle(status: HistoryTableRow["job_status"]): CSSProperties {
-    switch (status) {
-      case "running":
-        return { background: "#dbeafe", color: "#1d4ed8", border: "1px solid #93c5fd" };
-      case "queued":
-        return { background: "#f3f4f6", color: "#374151", border: "1px solid #d1d5db" };
-      case "failed":
-        return { background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca" };
-      case "cancelled":
-        return { background: "#f3f4f6", color: "#6b7280", border: "1px solid #e5e7eb" };
-      default:
-        return { background: "#ecfdf5", color: "#166534", border: "1px solid #bbf7d0" };
+  const liveCounts = useMemo(() => {
+    let running = 0;
+    let queued = 0;
+    for (const r of sortedRuns) {
+      if (r.job_status === "running") running += 1;
+      else if (r.job_status === "queued") queued += 1;
     }
-  }
+    return { running, queued };
+  }, [sortedRuns]);
 
   function pruneAfterDeletes(deletedIds: string[]) {
     const gone = new Set(deletedIds);
@@ -521,6 +528,58 @@ export function HistoryPage() {
     navigate(runsPath(jobId));
   }
 
+  async function onRetryOneFailed(row: HistoryTableRow) {
+    setRerunError(null);
+    setRetrySummary(null);
+    setFailedRetryRunId(row.run_id);
+    try {
+      const result = await retryFailedRun(row);
+      await refresh();
+      navigate(runsPath(result.action === "resumed" ? result.jobId : result.newJobId));
+    } catch (e: unknown) {
+      setRerunError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFailedRetryRunId(null);
+    }
+  }
+
+  async function onRetryAllFailed() {
+    const failed = sortedRuns.filter((r) => r.job_status === "failed");
+    if (!failed.length) return;
+    if (
+      !window.confirm(
+        `Retry ${failed.length} failed job${failed.length === 1 ? "" : "s"}? ` +
+          "Jobs with checkpoints resume where they left off; others start fresh with the same ticker and settings.",
+      )
+    ) {
+      return;
+    }
+    setRerunError(null);
+    setRetrySummary(null);
+    setBulkRetrySubmitting(true);
+    try {
+      const summary = await retryAllFailedRuns(failed);
+      const parts = [
+        summary.resumed ? `${summary.resumed} resumed` : null,
+        summary.submitted ? `${summary.submitted} restarted` : null,
+        summary.errors.length ? `${summary.errors.length} error(s)` : null,
+      ].filter(Boolean);
+      setRetrySummary(parts.join(", ") || "Done");
+      if (summary.errors.length === 1) {
+        setRerunError(`${summary.errors[0].jobId}: ${summary.errors[0].message}`);
+      } else if (summary.errors.length > 1) {
+        setRerunError(
+          summary.errors.slice(0, 3).map((e) => `${e.jobId}: ${e.message}`).join(" · "),
+        );
+      }
+      await refresh();
+    } catch (e: unknown) {
+      setRerunError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBulkRetrySubmitting(false);
+    }
+  }
+
   async function onBulkRerunSelected() {
     const tickers = [...selectedTickers].filter(Boolean);
     if (!tickers.length) return;
@@ -546,99 +605,76 @@ export function HistoryPage() {
 
 
 
-  return (
-    <div className="history-page" style={{ display: "grid", gap: "var(--spacing-24)" }}>
-      <header style={{ display: "grid", gap: "var(--spacing-12)" }}>
-        <div>
-          <h1 style={{ fontSize: "var(--text-heading-lg)", margin: "0 0 8px" }}>
-            Runs &amp; compare
-          </h1>
-          <p style={{ margin: 0, color: "var(--color-ash-gray)", maxWidth: "70ch", lineHeight: 1.55 }}>
-            Durable completed runs plus live jobs (queued/running/failed) from the API worker.
-            Times are shown in <strong>Hong Kong (HKT)</strong>. Default sort is newest processing time first.
-            {" "}
-            <strong>Open run</strong> for the full report; click a <strong>ticker</strong> for stock-level history and compare.
-          </p>
-        </div>
-        <AppBreadcrumbs items={[{ label: "Runs" }]} />
-      </header>
+  const runA = runSelectOptions.find((o) => o.id === runIdA.trim());
+  const runB = runSelectOptions.find((o) => o.id === runIdB.trim());
 
-      <section
-        style={{
-          display: "grid",
-          gap: "var(--spacing-16)",
-          background: "var(--surface-cloud-white)",
-          padding: "var(--card-padding)",
-          borderRadius: "var(--radius-cards)",
-          border: "1px solid var(--color-stone-border)",
-          boxShadow: "var(--shadow-subtle)",
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: "var(--text-heading-sm)" }}>Filters</h2>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-12)", alignItems: "end" }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}>
-            <span style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>Ticker</span>
+  return (
+    <PageFrame className="history-page" wide>
+      <PageHeader
+        title="Runs & compare"
+        description="Completed runs and live jobs in one list. Times in Hong Kong (HKT). Click column headers to sort; use A/B on a row or the compare panel below."
+        meta={
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--spacing-16)", flexWrap: "wrap" }}>
+            <AppBreadcrumbs items={[{ label: "Runs" }]} />
+            <Link to={paths.historyStats} className="ui-link" style={{ fontSize: "var(--text-caption)" }}>
+              View rating statistics →
+            </Link>
+          </div>
+        }
+      />
+
+      <Panel title="Filters">
+        <div className="history-page__filters">
+          <label className="history-page__field">
+            <span className="history-page__field-label">Ticker</span>
             <input
               value={tickerFilter}
               onChange={(e) => setTickerFilter(e.target.value)}
               placeholder="e.g. AAPL"
-              style={{ padding: 8, borderRadius: "var(--radius-inputs)" }}
             />
           </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>From</span>
+          <label className="history-page__field">
+            <span className="history-page__field-label">From</span>
             <input
               type="text"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
               placeholder="YYYY-MM-DD"
               className="mono"
-              style={{ padding: 8, borderRadius: "var(--radius-inputs)", width: 140 }}
             />
           </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>To</span>
+          <label className="history-page__field">
+            <span className="history-page__field-label">To</span>
             <input
               type="text"
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
               placeholder="YYYY-MM-DD"
               className="mono"
-              style={{ padding: 8, borderRadius: "var(--radius-inputs)", width: 140 }}
             />
           </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 220 }}>
-            <span style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>Sort by</span>
+          <label className="history-page__field history-page__field--wide">
+            <span className="history-page__field-label">Sort preset</span>
             <select
               aria-label="Sort history runs"
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value as HistorySortKey)}
-              style={{ padding: 8, borderRadius: "var(--radius-inputs)" }}
             >
-              <option value="processing_desc">Processing time (newest first)</option>
-              <option value="processing_asc">Processing time (oldest first)</option>
+              <option value="processing_desc">Processing (newest)</option>
+              <option value="processing_asc">Processing (oldest)</option>
+              <option value="status_desc">Status (active first)</option>
+              <option value="status_asc">Status (completed first)</option>
               <option value="trade_date_desc">Trade date (newest)</option>
               <option value="trade_date_asc">Trade date (oldest)</option>
               <option value="ticker_asc">Ticker (A→Z)</option>
               <option value="ticker_desc">Ticker (Z→A)</option>
               <option value="rating_desc">Rating (bullish first)</option>
               <option value="rating_asc">Rating (bearish first)</option>
-              <option value="confidence_desc">Confidence (high first)</option>
-              <option value="confidence_asc">Confidence (low first)</option>
-              <option value="status_desc">Status (active first)</option>
-              <option value="status_asc">Status (completed first)</option>
+              <option value="confidence_desc">Confidence (high)</option>
+              <option value="confidence_asc">Confidence (low)</option>
             </select>
           </label>
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              fontSize: "var(--text-caption)",
-              color: "var(--color-steel-gray)",
-              paddingBottom: 8,
-            }}
-          >
+          <label className="history-page__toggle">
             <input
               type="checkbox"
               checked={includeLiveJobs}
@@ -646,63 +682,64 @@ export function HistoryPage() {
             />
             Include in-progress jobs
           </label>
+          <label className="history-page__toggle">
+            <input
+              type="checkbox"
+              checked={overnightOnly}
+              onChange={(e) => setOvernightOnly(e.target.checked)}
+            />
+            Overnight / scan triggers only
+          </label>
+          <label className="history-page__toggle">
+            <input
+              type="checkbox"
+              checked={failedOnly}
+              onChange={(e) => setFailedOnly(e.target.checked)}
+            />
+            Failed only
+          </label>
           <button
             type="button"
+            className="ui-btn-primary"
             onClick={() => void refresh()}
             disabled={loading}
-            style={{
-              padding: "10px 16px",
-              borderRadius: "var(--radius-buttons)",
-              border: "1px solid var(--color-stone-border)",
-              background: "var(--color-chartwell-blue)",
-              color: "white",
-              fontWeight: 600,
-              cursor: loading ? "not-allowed" : "pointer",
-            }}
           >
-            {loading ? "Loading…" : "Apply / refresh"}
+            {loading ? "Loading…" : "Apply"}
           </button>
         </div>
-        {error && (
-          <div style={{ fontSize: "var(--text-caption)", color: "#991b1b" }}>{error}</div>
-        )}
-        {deleteError && (
-          <div style={{ fontSize: "var(--text-caption)", color: "#991b1b" }}>{deleteError}</div>
-        )}
-      </section>
+        {error && <p className="panel__error">{error}</p>}
+        {deleteError && <p className="panel__error">{deleteError}</p>}
+      </Panel>
 
-
-      <section
-        style={{
-          background: "var(--surface-cloud-white)",
-          padding: "var(--card-padding)",
-          borderRadius: "var(--radius-cards)",
-          border: "1px solid var(--color-stone-border)",
-          boxShadow: "var(--shadow-subtle)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "var(--spacing-12)",
-            marginBottom: "var(--spacing-12)",
-          }}
-        >
-          <h2 style={{ margin: 0 }}>Recent runs ({sortedRuns.length})</h2>
+      <Panel>
+        <div className="history-page__toolbar">
+          <div className="history-page__toolbar-title">
+            <h2 className="panel__title" style={{ margin: 0 }}>
+              Recent runs ({visibleRuns.length}
+              {failedOnly && sortedRuns.length !== visibleRuns.length
+                ? ` of ${sortedRuns.length}`
+                : ""}
+              )
+            </h2>
+            {(liveCounts.running > 0 || liveCounts.queued > 0) && (
+              <div className="history-page__count-badges">
+                {liveCounts.running > 0 && (
+                  <span className="history-page__count-badge history-page__count-badge--live">
+                    {liveCounts.running} running
+                  </span>
+                )}
+                {liveCounts.queued > 0 && (
+                  <span className="history-page__count-badge">
+                    {liveCounts.queued} queued
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
           <div
+            className="history-page__view-toggle"
             role="tablist"
             aria-label="Recent runs view mode"
-            style={{
-              display: "inline-flex",
-              padding: 4,
-              gap: 4,
-              background: "var(--surface-canvas-fog)",
-              borderRadius: "var(--radius-cards)",
-              border: "1px solid var(--color-stone-border)",
-            }}
           >
             {(["cards", "table"] as const).map((m) => (
               <button
@@ -711,137 +748,90 @@ export function HistoryPage() {
                 role="tab"
                 aria-selected={viewMode === m}
                 onClick={() => setViewMode(m)}
-                style={{
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  borderRadius: "var(--radius-buttons)",
-                  border:
-                    viewMode === m
-                      ? "1px solid var(--color-chartwell-blue)"
-                      : "1px solid transparent",
-                  background: viewMode === m ? "var(--color-sky-tint)" : "transparent",
-                  color: "var(--color-slate-text)",
-                  cursor: "pointer",
-                  textTransform: "capitalize",
-                }}
               >
                 {m}
               </button>
             ))}
           </div>
           {sortedRuns.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-8)" }}>
+            <div className="history-page__bulk-actions">
+              {failedCount > 0 && (
+                <button
+                  type="button"
+                  className="ui-btn-secondary"
+                  disabled={bulkRetrySubmitting || bulkRerunSubmitting}
+                  onClick={() => void onRetryAllFailed()}
+                >
+                  {bulkRetrySubmitting
+                    ? "Retrying…"
+                    : `Retry failed (${failedCount})`}
+                </button>
+              )}
               {viewMode === "cards" && (
                 <button
                   type="button"
+                  className="ui-btn-primary"
                   disabled={bulkRerunSubmitting || selectedTickers.size === 0}
                   onClick={() => void onBulkRerunSelected()}
-                  title={
-                    selectedTickers.size === 0
-                      ? "Tick one or more ticker cards to enable bulk re-run"
-                      : "Submit a batch of re-runs for the selected tickers"
-                  }
-                  style={{
-                    padding: "8px 14px",
-                    borderRadius: "var(--radius-buttons)",
-                    border: "none",
-                    background:
-                      bulkRerunSubmitting || selectedTickers.size === 0
-                        ? "var(--color-platinum-outline)"
-                        : "var(--color-chartwell-blue)",
-                    color: "white",
-                    fontWeight: 600,
-                    fontSize: "var(--text-caption)",
-                    cursor:
-                      bulkRerunSubmitting || selectedTickers.size === 0 ? "not-allowed" : "pointer",
-                  }}
                 >
                   {bulkRerunSubmitting
                     ? "Submitting…"
-                    : `▶ Re-run selected (${selectedTickers.size})`}
+                    : `Re-run (${selectedTickers.size})`}
                 </button>
               )}
               <button
                 type="button"
+                className="ui-btn-danger"
                 disabled={bulkDeleting || selectedRunIds.size === 0}
                 onClick={() => void onDeleteSelected()}
-                style={{
-                  padding: "8px 14px",
-                  borderRadius: "var(--radius-buttons)",
-                  border: "1px solid #fecaca",
-                  background: selectedRunIds.size === 0 ? "#f3f4f6" : "#fff1f2",
-                  color: "#991b1b",
-                  fontWeight: 600,
-                  fontSize: "var(--text-caption)",
-                  cursor:
-                    bulkDeleting || selectedRunIds.size === 0 ? "not-allowed" : "pointer",
-                }}
               >
-                {bulkDeleting ? "Deleting…" : `Delete selected (${selectedRunIds.size})`}
+                {bulkDeleting ? "Deleting…" : `Delete (${selectedRunIds.size})`}
               </button>
               <button
                 type="button"
+                className="ui-btn-ghost"
                 disabled={bulkDeleting}
                 onClick={() => void onDeleteAllMatchingFilters()}
-                style={{
-                  padding: "8px 14px",
-                  borderRadius: "var(--radius-buttons)",
-                  border: "1px solid #fecaca",
-                  background: "#fff1f2",
-                  color: "#991b1b",
-                  fontWeight: 600,
-                  fontSize: "var(--text-caption)",
-                  cursor: bulkDeleting ? "not-allowed" : "pointer",
-                }}
               >
-                Delete all matching filters
+                Delete all matching
               </button>
             </div>
           )}
         </div>
-        <p className="reading-callout" style={{ margin: "0 0 var(--spacing-8)", maxWidth: "72ch" }}>
-          Compare ratings only when <strong>Model</strong> and <strong>Sources</strong> match — different LLMs or
-          single-vendor setups can shift outcomes more than the ticker thesis.
+
+        <p className="reading-callout">
+          Compare ratings only when <strong>Model</strong> and <strong>Sources</strong> match.
         </p>
-        <p
-          style={{
-            margin: "0 0 var(--spacing-8)",
-            fontSize: "var(--text-caption)",
-            color: "var(--color-steel-gray)",
-            lineHeight: 1.45,
-          }}
-        >
-          <strong>View</strong> opens the run page for that row. Tickers link to the stock-level page.
-        </p>
-        <p
-          style={{
-            margin: "0 0 var(--spacing-12)",
-            fontSize: "var(--text-caption)",
-            color: "var(--color-ash-gray)",
-            lineHeight: 1.5,
-          }}
-        >
-          <strong>Confidence</strong> is a shorthand tied to the final rating tier (for example Buy
-          maps higher than Hold or Sell); it is not statistical certainty or “how good the data is.”
-          <strong style={{ marginLeft: "0.35em" }}>Factors</strong> are six standardized scores
-          (Value, Growth, Quality, Momentum, Low risk, Sentiment). The table now prefers each run&apos;s
-          <em> persisted snapshot</em>; only rows missing stored factors fall back to a fresh
-          facts-only ticker preview.
-          Comparison is <strong>market-local peers first</strong> (exchange + currency + sector +
-          industry), then sector-wide peers on the same listing, then a legacy global Yahoo
-          sector/industry bucket (these broadening steps are surfaced as flags when they happen).
-          Warm universes via{' '}
-          <code style={{ fontSize: "0.95em" }}>scripts/warm_peer_cache.py global|local|sector</code>; when Cloudflare D1 env vars are set, warmed rows also mirror into D1.{' '}
-          <strong>Why factors may show “—”:</strong> without enough cached peers relative scores are withheld to avoid pillar-only guesses; sentiment may still populate.
-        </p>
-        {sortedRuns.length === 0 && !loading ? (
-          <p style={{ color: "var(--color-ash-gray)" }}>
-            No runs yet. Start an analysis from the dashboard — in-progress jobs appear here automatically.
+
+        <details className="history-page__guide">
+          <summary>How to read this table</summary>
+          <div className="history-page__guide-body">
+            <p>
+              <strong>Confidence</strong> follows the final rating tier, not statistical certainty.
+              <strong> Factors</strong> use each run&apos;s persisted snapshot when available; otherwise a live facts-only preview (labeled <em>live</em>).
+            </p>
+            <p>
+              Peer comparison is market-local first, then sector-wide, then a legacy global bucket.
+              Warm caches with{" "}
+              <code>scripts/warm_peer_cache.py global|local|sector</code>.
+            </p>
+          </div>
+        </details>
+
+        {rerunError && <p className="panel__error">{rerunError}</p>}
+        {retrySummary && !rerunError && (
+          <p className="panel__hint" role="status">
+            Retry complete: {retrySummary}.
+          </p>
+        )}
+
+        {visibleRuns.length === 0 && !loading ? (
+          <p className="panel__empty">
+            {failedOnly ? "No failed runs in the current filter." : "No runs yet. Start an analysis from the dashboard."}
           </p>
         ) : viewMode === "cards" ? (
           <HistoryTickerCards
-            rows={sortedRuns}
+            rows={visibleRuns}
             selectedTickers={selectedTickers}
             onToggleTicker={toggleTickerSelection}
             onRerun={(roll) => void onCardRerun(roll)}
@@ -850,308 +840,52 @@ export function HistoryPage() {
             rerunError={rerunError}
           />
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="history-runs-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-              <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid var(--color-stone-border)" }}>
-                  <th style={{ padding: "8px 6px", width: 36 }}>
-                    <input
-                      type="checkbox"
-                      aria-label="Select all visible runs"
-                      checked={allRunsSelected}
-                      onChange={toggleSelectAllVisible}
-                      disabled={bulkDeleting || sortedRuns.length === 0}
-                    />
-                  </th>
-                  <th style={{ padding: "8px 6px" }}>Run ID</th>
-                  <th style={{ padding: "8px 6px" }}>Ticker</th>
-                  <th style={{ padding: "8px 6px" }}>Date</th>
-                  <th style={{ padding: "8px 6px" }}>Rating</th>
-                  <th
-                    style={{ padding: "8px 6px" }}
-                    title="Heuristic from final rating tier (e.g. Buy vs Hold vs Sell), not model uncertainty. See note above."
-                  >
-                    Confidence
-                  </th>
-                  <th style={{ padding: "8px 6px" }} title="LLM provider and models used for this run">
-                    Model
-                  </th>
-                  <th
-                    style={{ padding: "8px 6px" }}
-                    title="Data vendor pillars and analyst breadth — warnings when setup may bias the rating"
-                  >
-                    Sources
-                  </th>
-                  <th
-                    style={{ padding: "8px 6px" }}
-                    title="Mini bars: six 0–100 factor scores. Source priority is persisted run snapshot first; if unavailable, the UI uses a current facts-only ticker preview and labels it."
-                  >
-                    Factors
-                  </th>
-                  <th style={{ padding: "8px 6px" }}>Status</th>
-                  <th
-                    style={{ padding: "8px 6px" }}
-                    title="Job start or completion time, shown in Hong Kong (HKT)"
-                  >
-                    Processing (HKT)
-                  </th>
-                  <th style={{ padding: "8px 6px", textAlign: "right" }} aria-label="Open run detail">
-                    Detail
-                  </th>
-                  <th style={{ padding: "8px 6px", textAlign: "right" }} aria-label="Delete run">
-                    Manage
-                  </th>
-                  <th style={{ padding: "8px 6px", textAlign: "right" }} aria-label="Set side A or B">
-                    Compare
-                  </th>
-                </tr>
-              </thead>
-              <tbody ref={runsBodyRef}>
-                {sortedRuns.map((r) => (
-                  <tr
-                    key={r.run_id}
-                    style={{
-                      borderBottom: "1px solid var(--color-platinum-outline)",
-                      background: r.is_live_job ? "rgba(219, 234, 254, 0.25)" : undefined,
-                    }}
-                  >
-                    <td style={{ padding: "8px 6px", verticalAlign: "middle" }}>
-                      <input
-                        type="checkbox"
-                        aria-label={`Select run ${r.run_id}`}
-                        checked={selectedRunIds.has(r.run_id)}
-                        onChange={() => toggleRunSelection(r.run_id)}
-                        disabled={bulkDeleting || r.job_status !== "completed"}
-                        title={r.job_status !== "completed" ? "Only completed runs can be bulk-deleted" : undefined}
-                      />
-                    </td>
-                    <td style={{ padding: "8px 6px" }} className="mono">
-                      {r.run_id}
-                    </td>
-                    <td style={{ padding: "8px 6px" }}>
-                      {r.ticker ? (
-                        <Link
-                          to={stocksPath(r.ticker)}
-                          className="link-action"
-                          title={`All runs for ${r.ticker}`}
-                        >
-                          {r.ticker}
-                        </Link>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td style={{ padding: "8px 6px" }}>{r.date}</td>
-                    <td style={{ padding: "8px 6px" }}>{r.rating ?? "—"}</td>
-                    <td style={{ padding: "8px 6px" }}>{pct(r.confidence ?? undefined)}</td>
-                    <td
-                      style={{ padding: "8px 6px", maxWidth: 160 }}
-                      className="mono"
-                      title={provenanceTitle(r.provenance)}
-                    >
-                      {formatLlmLabel(r.provenance)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "8px 6px",
-                        maxWidth: 180,
-                        color: hasBiasWarning(r.provenance) ? "#b45309" : undefined,
-                      }}
-                      title={provenanceTitle(r.provenance)}
-                    >
-                      {formatSourcesLabel(r.provenance)}
-                    </td>
-                    <td style={{ padding: "8px 6px" }}>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        {FACTOR_KEYS.map((k) => (
-                          <FactorBar
-                            key={k}
-                            label=""
-                            score={pickRowFactorScore(r, r.ticker ? thumbDims[r.ticker] : null, k)}
-                            width={36}
-                          />
-                        ))}
-                        {(() => {
-                          const source = inferRowFactorSource(
-                            r,
-                            r.ticker ? thumbDims[r.ticker] : null,
-                          );
-                          const label =
-                            source === "run_snapshot"
-                              ? "run"
-                              : source === "live_preview"
-                                ? "live"
-                                : source === "loading"
-                                  ? "loading"
-                                  : "n/a";
-                          return (
-                            <span
-                              style={{
-                                marginTop: 2,
-                                fontSize: 10,
-                                lineHeight: 1.2,
-                                color:
-                                  source === "run_snapshot"
-                                    ? "#166534"
-                                    : source === "live_preview"
-                                      ? "var(--color-steel-gray)"
-                                      : "var(--color-ash-gray)",
-                                textTransform: "uppercase",
-                                letterSpacing: "0.03em",
-                                fontWeight: 600,
-                              }}
-                              title={
-                                source === "run_snapshot"
-                                  ? "Using persisted factor scores captured with this run."
-                                  : source === "live_preview"
-                                    ? "Using current facts-only ticker preview because this run has no stored factors."
-                                    : source === "loading"
-                                      ? "Loading ticker preview factors."
-                                      : "No factors available from run snapshot or ticker preview."
-                              }
-                            >
-                              {label}
-                            </span>
-                          );
-                        })()}
-                      </div>
-                    </td>
-                    <td style={{ padding: "8px 6px" }}>
-                      <span
-                        style={{
-                          display: "inline-block",
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          ...statusBadgeStyle(r.job_status),
-                        }}
-                      >
-                        {statusLabel(r.job_status)}
-                      </span>
-                    </td>
-                    <td style={{ padding: "8px 6px" }} className="mono" title={r.processing_at ?? undefined}>
-                      {formatHistoryTimestampWithZone(r.processing_at)}
-                    </td>
-                    <td style={{ padding: "8px 6px", textAlign: "right", verticalAlign: "middle" }}>
-                      <Link to={runsPath(r.run_id)} className="link-action" style={{ fontSize: 11, fontWeight: 600 }}>
-                        {r.job_status === "completed" ? "Open run →" : "Open job →"}
-                      </Link>
-                    </td>
-                    <td style={{ padding: "8px 6px", textAlign: "right", verticalAlign: "middle" }}>
-                      <button
-                        type="button"
-                        aria-label={`Delete run ${r.run_id}`}
-                        disabled={
-                          deletingRunId === r.run_id ||
-                          (r.job_status !== "completed" &&
-                            r.job_status !== "failed" &&
-                            r.job_status !== "cancelled")
-                        }
-                        title={r.job_status !== "completed" ? "Only completed runs can be deleted from history" : undefined}
-                        onClick={() => {
-                          if (!window.confirm(`Delete run ${r.run_id}? This cannot be undone.`)) return;
-                          void onDeleteRun(r.run_id);
-                        }}
-                        style={{
-                          padding: "4px 10px",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          borderRadius: "var(--radius-inputs)",
-                          border: "1px solid #fecaca",
-                          background: deletingRunId === r.run_id ? "#fee2e2" : "#fff1f2",
-                          color: "#991b1b",
-                          cursor: deletingRunId === r.run_id ? "not-allowed" : "pointer",
-                        }}
-                      >
-                        {deletingRunId === r.run_id ? "Deleting…" : "Delete"}
-                      </button>
-                    </td>
-                    <td style={{ padding: "8px 6px", textAlign: "right", verticalAlign: "middle" }}>
-                      <div style={{ display: "inline-flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
-                        <button
-                          type="button"
-                          aria-label={`Use ${r.ticker ?? r.run_id} run ${r.run_id} as Compare side A`}
-                          onClick={() => {
-                            setRunIdA(r.run_id);
-                            setCompareError(null);
-                          }}
-                          disabled={r.job_status !== "completed"}
-                          style={{
-                            padding: "4px 8px",
-                            fontSize: 11,
-                            fontWeight: 600,
-                            borderRadius: "var(--radius-inputs)",
-                            border: "1px solid var(--color-stone-border)",
-                            background:
-                              runIdA === r.run_id ? "var(--color-sky-tint)" : "var(--surface-cloud-white)",
-                            cursor: "pointer",
-                          }}
-                        >
-                          A
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`Use ${r.ticker ?? r.run_id} run ${r.run_id} as Compare side B`}
-                          onClick={() => {
-                            setRunIdB(r.run_id);
-                            setCompareError(null);
-                          }}
-                          disabled={r.job_status !== "completed"}
-                          style={{
-                            padding: "4px 8px",
-                            fontSize: 11,
-                            fontWeight: 600,
-                            borderRadius: "var(--radius-inputs)",
-                            border: "1px solid var(--color-stone-border)",
-                            background:
-                              runIdB === r.run_id ? "var(--color-sky-tint)" : "var(--surface-cloud-white)",
-                            cursor: "pointer",
-                          }}
-                        >
-                          B
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section
-        style={{
-          display: "grid",
-          gap: "var(--spacing-24)",
-          background: "var(--surface-cloud-white)",
-          padding: "clamp(var(--spacing-24), 3vw, var(--card-padding))",
-          borderRadius: "var(--radius-largecard)",
-          border: "1px solid var(--color-stone-border)",
-          boxShadow: "var(--shadow-subtle)",
-        }}
-      >
-        <header style={{ display: "grid", gap: "var(--spacing-8)" }}>
-          <p
-            style={{
-              margin: 0,
-              fontSize: "var(--text-caption)",
-              fontWeight: 600,
-              letterSpacing: "0.02em",
-              textTransform: "uppercase",
-              color: "var(--color-steel-gray)",
+          <HistoryRunsTable
+            rows={visibleRuns}
+            sortKey={sortKey}
+            onSortKeyChange={setSortKey}
+            thumbDims={thumbDims}
+            selectedRunIds={selectedRunIds}
+            allRunsSelected={allRunsSelected}
+            onToggleSelectAll={toggleSelectAllVisible}
+            onToggleRunSelection={toggleRunSelection}
+            bulkDeleting={bulkDeleting}
+            deletingRunId={deletingRunId}
+            onDeleteRun={(id) => void onDeleteRun(id)}
+            runIdA={runIdA}
+            runIdB={runIdB}
+            onSelectCompareA={(id) => {
+              setRunIdA(id);
+              setCompareError(null);
             }}
+            onSelectCompareB={(id) => {
+              setRunIdB(id);
+              setCompareError(null);
+            }}
+            onRetryFailed={(row) => void onRetryOneFailed(row)}
+            retryingRunId={failedRetryRunId}
+          />
+        )}
+      </Panel>
+
+      <Panel
+        title="Compare two runs"
+        subtitle="Pick A/B on any completed row, or use the dropdowns. Model and sources should match for a fair read."
+      >
+        <div className="history-page__compare-picks">
+          <span>Side A</span>
+          <span
+            className={`history-page__compare-chip${runA ? " history-page__compare-chip--filled" : ""}`}
           >
-            Tools
-          </p>
-          <h2 style={{ margin: 0, fontSize: "var(--text-heading-sm)", fontWeight: 600, color: "var(--color-slate-text)" }}>
-            Compare two runs
-          </h2>
-          <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", maxWidth: "65ch" }}>
-            Choose sides from the table (A/B) or dropdowns, then load a structured pair view below.
-          </p>
-        </header>
+            {runA?.label ?? "Not selected"}
+          </span>
+          <span>Side B</span>
+          <span
+            className={`history-page__compare-chip${runB ? " history-page__compare-chip--filled" : ""}`}
+          >
+            {runB?.label ?? "Not selected"}
+          </span>
+        </div>
         <div style={{ display: "grid", gap: "var(--spacing-16)", maxWidth: 720 }}>
           <label style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-8)" }}>
             <span style={{ fontWeight: 600, fontSize: "var(--text-caption)", color: "var(--color-slate-text)" }}>
@@ -1512,7 +1246,7 @@ export function HistoryPage() {
             </div>
           </div>
         )}
-      </section>
-    </div>
+      </Panel>
+    </PageFrame>
   );
 }

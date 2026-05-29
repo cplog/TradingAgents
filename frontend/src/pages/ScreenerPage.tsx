@@ -6,6 +6,7 @@ import { FactorBar } from "../components/dimensions/FactorBar";
 import { PageFrame, PageHeader } from "../components/PageFrame";
 import { Pressable } from "../components/Pressable";
 import type { FactorScores, StockDimensions } from "../dimensions-types";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 interface Row {
   ticker: string;
@@ -31,6 +32,7 @@ export function ScreenerPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  useDocumentTitle("Screener");
 
   async function run() {
     setError(null);

@@ -539,12 +539,21 @@ def _persist_d1(full: Dict[str, Any]) -> None:
 
 
 def _prepend_ref(store: StateStore, index_key: str, ref: Dict[str, Any], max_len: int) -> None:
-    cur = store.get_json(index_key)
-    rows: List[Dict[str, Any]] = cur if isinstance(cur, list) else []
+    import time
+
     rid = ref.get("run_id") or ref.get("job_id")
-    rows = [r for r in rows if (r.get("run_id") or r.get("job_id")) != rid]
-    rows.insert(0, ref)
-    store.put_json(index_key, rows[:max_len])
+    for attempt in range(3):
+        cur = store.get_json(index_key)
+        rows: List[Dict[str, Any]] = cur if isinstance(cur, list) else []
+        rows = [r for r in rows if (r.get("run_id") or r.get("job_id")) != rid]
+        rows.insert(0, ref)
+        try:
+            store.put_json(index_key, rows[:max_len])
+            return
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def get_run(store: StateStore, run_id: str) -> Optional[Dict[str, Any]]:

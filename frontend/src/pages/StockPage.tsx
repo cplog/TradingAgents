@@ -21,6 +21,7 @@ import {
 } from "../utils/historyDisplay";
 import { fetchJobs } from "../api";
 import { formatLlmLabel, formatSourcesLabel, provenanceTitle } from "../utils/runProvenance";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 function pct(conf: number | null | undefined): string {
   if (conf == null || !Number.isFinite(conf)) return "—";
@@ -39,6 +40,7 @@ export function StockPage() {
   const [compare, setCompare] = useState<HistoryCompareResponse | null>(null);
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareError, setCompareError] = useState<string | null>(null);
+  useDocumentTitle(ticker ? `${ticker} — Stock history` : "Stock");
 
   const load = useCallback(async () => {
     if (!ticker) return;

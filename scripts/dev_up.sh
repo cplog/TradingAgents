@@ -42,6 +42,47 @@ is_port_busy() {
   lsof -iTCP:"${port}" -sTCP:LISTEN -n -P >/dev/null 2>&1
 }
 
+pids_on_port() {
+  local port="$1"
+  lsof -tiTCP:"${port}" -sTCP:LISTEN -n -P 2>/dev/null || true
+}
+
+# Stop whatever is listening on `port` (SIGTERM, then SIGKILL). Exits on failure.
+free_port() {
+  local port="$1"
+  local label="${2:-port ${port}}"
+  local pids pid i
+
+  pids="$(pids_on_port "${port}")"
+  if [[ -z "${pids}" ]]; then
+    return 0
+  fi
+
+  echo "[dev_up] ${label} port ${port} in use — stopping listener(s): ${pids//$'\n'/ }"
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    kill -TERM "${pid}" 2>/dev/null || true
+  done <<< "${pids}"
+
+  for (( i = 0; i < 20; i++ )); do
+    is_port_busy "${port}" || return 0
+    sleep 0.25
+  done
+
+  pids="$(pids_on_port "${port}")"
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    kill -KILL "${pid}" 2>/dev/null || true
+  done <<< "${pids}"
+  sleep 0.5
+
+  if is_port_busy "${port}"; then
+    echo "Error: could not free ${label} port ${port}." >&2
+    lsof -iTCP:"${port}" -sTCP:LISTEN -n -P >&2 || true
+    exit 1
+  fi
+}
+
 # Prefer `python` from an activated venv/conda env. On macOS, bare `python3` is often
 # Homebrew's PEP-668 "externally managed" interpreter even when conda is active.
 resolve_kronos_python() {
@@ -150,18 +191,17 @@ else
 fi
 # ---------------------------------------------------------------------------
 
-if is_port_busy "${FRONTEND_PORT}"; then
-  echo "Error: frontend port ${FRONTEND_PORT} is already in use." >&2
-  echo "Tip: stop the existing frontend or run with FRONTEND_PORT=<port>." >&2
-  exit 1
-fi
+free_port "${FRONTEND_PORT}" "frontend"
 
 trap cleanup EXIT INT TERM
 
+start_backend=1
 if is_port_busy "${BACKEND_PORT}"; then
   if [[ "${REUSE_BACKEND_IF_BUSY}" == "1" ]]; then
+    start_backend=0
     echo "Backend port ${BACKEND_PORT} already in use; reusing existing backend."
-    echo "Tip: if new API routes 404 (e.g. Sectors / GET /api/catalog/industry-constituents), restart that process and re-run this script."
+    echo "Tip: if new API routes 404 (e.g. Monitor /api/monitor/status, Sectors /api/catalog/industry-constituents), restart that process and re-run this script."
+    echo "      POST to missing routes returns 405 from the SPA static handler — same fix."
     echo
     echo "WARNING: An old uvicorn on :${BACKEND_PORT} often causes POST /analyze 422 on hot_money, policy, lockup, kronos"
     echo "         (literal_error for analysts). Stop that process, then from repo root:"
@@ -171,11 +211,11 @@ if is_port_busy "${BACKEND_PORT}"; then
       exit 1
     fi
   else
-    echo "Error: backend port ${BACKEND_PORT} is already in use." >&2
-    echo "Tip: stop the existing backend or run with BACKEND_PORT=<port>." >&2
-    exit 1
+    free_port "${BACKEND_PORT}" "backend"
   fi
-else
+fi
+
+if [[ "${start_backend}" == "1" ]]; then
   if ! command -v uvicorn >/dev/null 2>&1; then
     echo "Error: 'uvicorn' is not in PATH. Activate your Python environment first." >&2
     exit 1

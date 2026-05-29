@@ -1,4 +1,4 @@
-import type { HistoryRunDetail } from "../api";
+import type { AnalyzeRequestBody, HistoryRunDetail, JobStatus } from "../api";
 
 const ANALYST_REPORT_KEYS = [
   "market",
@@ -45,13 +45,7 @@ export function analystsFromHistoryDetail(detail: HistoryRunDetail): string[] {
 }
 
 /** Build POST /analyze body to re-run the same ticker/date with stored settings. */
-export function buildRerunAnalyzePayload(detail: HistoryRunDetail): {
-  ticker: string;
-  date?: string;
-  config_overrides?: Record<string, unknown>;
-  analysts?: string[];
-  report_format: "markdown";
-} {
+export function buildRerunAnalyzePayload(detail: HistoryRunDetail): AnalyzeRequestBody {
   const snap = detail.config_snapshot ?? {};
   const config_overrides: Record<string, unknown> = {};
   for (const key of CONFIG_OVERRIDE_KEYS) {
@@ -67,4 +61,39 @@ export function buildRerunAnalyzePayload(detail: HistoryRunDetail): {
     analysts: analysts.length ? analysts : undefined,
     report_format: "markdown",
   };
+}
+
+/** Build POST /analyze from a live/failed job row (no persisted history detail). */
+export function buildRerunAnalyzePayloadFromJob(job: JobStatus): AnalyzeRequestBody {
+  const prov = job.provenance;
+  const config_overrides: Record<string, unknown> = {};
+  if (prov?.llm_provider) config_overrides.llm_provider = prov.llm_provider;
+  if (prov?.llm_deep) config_overrides.deep_think_llm = prov.llm_deep;
+  if (prov?.llm_quick) config_overrides.quick_think_llm = prov.llm_quick;
+
+  const analysts =
+    job.analysts && job.analysts.length
+      ? job.analysts
+      : prov?.analysts_selected?.length
+        ? prov.analysts_selected
+        : undefined;
+
+  const ticker = (job.ticker ?? "").trim();
+  if (!ticker) {
+    throw new Error("Job has no ticker");
+  }
+
+  const body: AnalyzeRequestBody = {
+    ticker,
+    date: job.date || undefined,
+    config_overrides: Object.keys(config_overrides).length ? config_overrides : undefined,
+    analysts,
+    report_format: "markdown",
+  };
+
+  if (job.trigger === "scan" || job.trigger === "overnight_monitor") {
+    body.mode = "scan";
+  }
+
+  return body;
 }

@@ -38,6 +38,8 @@ class _FakeGraph:
 def api_client(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-placeholder")
     monkeypatch.setenv("TRADINGAGENTS_API_STATE_FILE", str(tmp_path / "api_state.json"))
+    for cf_var in ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_KV_NAMESPACE_ID", "CLOUDFLARE_API_TOKEN"):
+        monkeypatch.delenv(cf_var, raising=False)
     reset_state_store_for_tests()
     monkeypatch.setattr("api.jobs.TradingAgentsGraph", _FakeGraph)
 

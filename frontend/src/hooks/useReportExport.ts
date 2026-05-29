@@ -1,9 +1,12 @@
 import { useCallback, useMemo, type RefObject } from "react";
+import { toPng } from "html-to-image";
 import { deriveDecisionSummary } from "../utils/decisionSummary";
-import { buildStandaloneReportHtml, downloadStandaloneReport } from "../utils/reportExport";
+import { buildStandaloneReportHtml, downloadStandaloneReport, downloadPng } from "../utils/reportExport";
 
 export type UseReportExportOptions = {
   reportBodyRef: RefObject<HTMLDivElement | null>;
+  /** Ref to the element captured for PNG export (e.g. decision brief card). */
+  pngTargetRef?: RefObject<HTMLElement | null>;
   jobId?: string | null;
   ticker: string;
   rating?: string | null;
@@ -16,6 +19,7 @@ export type UseReportExportOptions = {
 
 export function useReportExport({
   reportBodyRef,
+  pngTargetRef,
   jobId,
   ticker,
   rating,
@@ -64,6 +68,24 @@ export function useReportExport({
     downloadStandaloneReport(`agent-report-${tickerSlug}-${dateSlug}.html`, html);
   }, [reportBodyRef, canExportHtml, ticker, date, rating, decisionSummary]);
 
+  const handleExportPng = useCallback(async () => {
+    const node = pngTargetRef?.current;
+    if (!node) return;
+    const dataUrl = await toPng(node, {
+      pixelRatio: 2,
+      cacheBust: true,
+      backgroundColor: "#ffffff",
+    });
+    const tickerSlug =
+      ticker
+        .toString()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "report";
+    const dateSlug = (date ?? new Date().toISOString().slice(0, 10)).replace(/[^0-9-]/g, "");
+    downloadPng(`agent-report-${tickerSlug}-${dateSlug}.png`, dataUrl);
+  }, [pngTargetRef, ticker, date]);
+
   const handlePrint = useCallback(() => {
     if (typeof window !== "undefined") window.print();
   }, []);
@@ -72,6 +94,7 @@ export function useReportExport({
     decisionSummary,
     markdownHref,
     handleExportHtml,
+    handleExportPng,
     handlePrint,
     exportDisabled: !canExportHtml,
   };

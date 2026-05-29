@@ -80,3 +80,6 @@ class AgentState(MessagesState):
     dimensions_summary: NotRequired[str]
     dimensions_error: NotRequired[str]
     dimensions_snapshot_json: NotRequired[str]
+
+    overnight_signal: NotRequired[str]
+    alt_data_report: NotRequired[str]

@@ -6,6 +6,7 @@ from langgraph.prebuilt import ToolNode
 
 from tradingagents.agents import (
     create_aggressive_debator,
+    create_alt_data_analyst,
     create_bear_researcher,
     create_bull_researcher,
     create_conservative_debator,
@@ -43,6 +44,7 @@ ANALYST_NODE_FACTORIES: Dict[str, AnalystNodeFactory] = {
     "policy": create_policy_analyst,
     "lockup": create_lockup_analyst,
     "kronos": create_kronos_analyst,
+    "alt_data": create_alt_data_analyst,
 }
 
 

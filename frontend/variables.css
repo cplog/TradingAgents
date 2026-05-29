@@ -69,6 +69,10 @@
   --spacing-96: 96px;
   --spacing-160: 160px;
 
+  /* Motion */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
   /* Layout */
   --section-gap: 40px;
   --card-padding: 20px;

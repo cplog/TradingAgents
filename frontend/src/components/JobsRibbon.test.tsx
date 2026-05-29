@@ -59,6 +59,11 @@ describe("JobsRibbon", () => {
     expect(screen.getByText("MSFT")).toBeInTheDocument();
     expect(screen.getAllByText(/running|queued/i).length).toBeGreaterThanOrEqual(2);
 
+    const chips = Array.from(
+      document.querySelectorAll(".analysis-status-bar__item-ticker"),
+    ).map((el) => el.textContent);
+    expect(chips.indexOf("NVDA")).toBeLessThan(chips.indexOf("MSFT"));
+
     fireEvent.click(screen.getByText("NVDA").closest("button")!);
     expect(screen.getByTestId("loc").textContent).toBe("/runs/j-1");
   });

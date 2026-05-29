@@ -25,6 +25,7 @@ AnalystId = Literal[
     "policy",
     "lockup",
     "kronos",
+    "alt_data",
 ]
 DEFAULT_ANALYST_ORDER: tuple[AnalystId, ...] = (
     "market",
@@ -36,7 +37,13 @@ DEFAULT_ANALYST_ORDER: tuple[AnalystId, ...] = (
     "lockup",
     "kronos",
 )
-VALID_ANALYST_IDS: frozenset[str] = frozenset(DEFAULT_ANALYST_ORDER)
+SCAN_MODE_ANALYSTS: tuple[AnalystId, ...] = (
+    "market",
+    "news",
+    "fundamentals",
+    "kronos",
+)
+VALID_ANALYST_IDS: frozenset[str] = frozenset([*DEFAULT_ANALYST_ORDER, "alt_data"])
 
 
 def _validate_analyst_list_members(v: Optional[List[str]]) -> Optional[List[str]]:
@@ -69,6 +76,14 @@ class AnalyzeRequest(BaseModel):
     analysts: Optional[List[str]] = Field(
         default=None,
         description="Analysts to run (order preserved). Defaults to all configured analysts.",
+    )
+    mode: Literal["scan", "full"] = Field(
+        default="full",
+        description="scan = lightweight preset (4 analysts, 1 debate round). full = default pipeline.",
+    )
+    overnight_signal: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional precomputed overnight signal dict to seed graph state.",
     )
 
     @field_validator("analysts", mode="before")
@@ -173,6 +188,18 @@ class JobStatusResponse(AnalyzeResponse):
         default=None,
         description="LLM and data-source snapshot for this job (live + completed).",
     )
+    trigger: Optional[str] = Field(
+        default=None,
+        description="Job origin, e.g. overnight_monitor or scan.",
+    )
+    signal_score: Optional[int] = Field(
+        default=None,
+        description="Overnight signal score when triggered by monitor.",
+    )
+    analysts: List[str] = Field(
+        default_factory=list,
+        description="Analyst ids selected for this job (for re-run from History).",
+    )
 
 
 class ResumeJobResponse(BaseModel):
@@ -182,7 +209,15 @@ class ResumeJobResponse(BaseModel):
     status: Literal["queued", "running"]
     resumable: bool = True
     last_graph_step: Optional[int] = None
-    message: str
+    message: str = Field(default="Resume queued.")
+
+
+class MonitorWatchlistSetRequest(BaseModel):
+    tickers: List[str] = Field(default_factory=list)
+
+
+class MonitorTickerRequest(BaseModel):
+    ticker: str = Field(..., min_length=1)
 
 
 class BatchAnalyzeRequest(BaseModel):

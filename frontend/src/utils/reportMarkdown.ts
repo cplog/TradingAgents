@@ -28,6 +28,11 @@ const REPORT_KEYS_ORDER = [
   "portfolio_decision",
 ] as const;
 
+const UNICODE_SPACE_RE = /[\u00a0\u202f\u2009\u2007]/g;
+const FINAL_PROPOSAL_START_RE =
+  /^\*\*FINAL TRANSACTION PROPOSAL:\s*[^*]+\*\*\s*(?:\r?\n+|---\s*\r?\n+)?/i;
+const INTERNAL_FIELD_RE = /\n*_Internal report field:[^\n]*\n*/gi;
+
 /** Ordered section keys that exist and are non-empty; unknown keys last, sorted. */
 export function orderedReportSectionKeys(reports: Record<string, string> | undefined): string[] {
   if (!reports || typeof reports !== "object") return [];
@@ -37,6 +42,35 @@ export function orderedReportSectionKeys(reports: Record<string, string> | undef
   const ordered = REPORT_KEYS_ORDER.filter((k) => present.includes(k));
   const rest = present.filter((k) => !ordered.includes(k)).sort();
   return [...ordered, ...rest];
+}
+
+/** Normalize LLM unicode spaces and trailing hard-break markers for stable GFM parsing. */
+export function normalizeReportWhitespace(text: string): string {
+  return text
+    .replace(UNICODE_SPACE_RE, " ")
+    .replace(/[ \t]+\r?\n/g, "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Analyst nodes sometimes prepend a final proposal line; strip from non-decision sections. */
+export function stripLeadingFinalTransactionProposal(text: string): string {
+  return text.replace(FINAL_PROPOSAL_START_RE, "").trim();
+}
+
+export function stripInternalReportFields(text: string): string {
+  return text.replace(INTERNAL_FIELD_RE, "\n").trim();
+}
+
+/** True when a section is only a stub (e.g. failed Kronos). */
+export function isSectionPlaceholder(sectionKey: string, raw: string): boolean {
+  const t = normalizeReportWhitespace(raw);
+  if (!t) return true;
+  if (sectionKey === "kronos") {
+    return /^(\*\*Status:\*\*\s*empty|_Kronos forecast skipped)/i.test(t);
+  }
+  return false;
 }
 
 /**
@@ -57,16 +91,30 @@ export function collapseConsecutiveDuplicateBlocks(text: string, minLen = 160): 
   return kept.join("\n\n");
 }
 
-export function prepareReportMarkdown(sectionKey: string, raw: string): string {
-  let body = raw.trim();
+/** Clean section body before markdown render (no section title injection). */
+export function sanitizeReportSectionBody(sectionKey: string, raw: string): string {
+  let body = normalizeReportWhitespace(raw);
   if (!body) return "";
+  if (sectionKey !== "trader_plan" && sectionKey !== "portfolio_decision") {
+    body = stripLeadingFinalTransactionProposal(body);
+  }
+  body = stripInternalReportFields(body);
   if (sectionKey === "news") {
     body = collapseConsecutiveDuplicateBlocks(body, 180);
   }
-  // Agent reports usually open with their own heading; avoid duplicating "Market" etc.
+  return body.trim();
+}
+
+export function prepareReportMarkdown(sectionKey: string, raw: string): string {
+  const body = sanitizeReportSectionBody(sectionKey, raw);
+  if (!body) return "";
   if (/^#{1,3}\s+\S/m.test(body)) {
     return body;
   }
   const title = REPORT_SECTION_LABELS[sectionKey] ?? sectionKey.replace(/_/g, " ");
   return `## ${title}\n\n${body}`;
+}
+
+export function reportSectionDomId(sectionKey: string): string {
+  return `report-section-${sectionKey}`;
 }

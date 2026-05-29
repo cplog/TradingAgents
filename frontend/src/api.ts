@@ -206,15 +206,21 @@ export type JobStatus = {
   last_graph_step?: number | null;
   checkpoint_thread_id?: string | null;
   provenance?: RunProvenance | null;
+  trigger?: string | null;
+  signal_score?: number | null;
+  analysts?: string[];
 };
 
-export async function submitAnalyze(body: {
+export type AnalyzeRequestBody = {
   ticker: string;
   date?: string;
   config_overrides?: Record<string, unknown>;
   analysts?: string[];
   report_format?: "markdown" | "json" | "structured";
-}): Promise<{ job_id: string; status: string; created_at: string }> {
+  mode?: "scan" | "full";
+};
+
+export async function submitAnalyze(body: AnalyzeRequestBody): Promise<{ job_id: string; status: string; created_at: string }> {
   return apiJson("/analyze", { method: "POST", body: JSON.stringify(body) });
 }
 
@@ -598,4 +604,174 @@ export async function recomputeDimensions(runId: string) {
     `/api/history/runs/${encodeURIComponent(runId)}/recompute-dimensions`,
     { method: "POST" }
   );
+}
+
+export type MonitorStatus = {
+  enabled: boolean;
+  session: string;
+  should_poll: boolean;
+  poll_seconds: number;
+  threshold: number;
+  watchlist: string[];
+  last_tick: string | null;
+  last_candidates: string[];
+  last_errors: string[];
+  cooldown_tickers: string[];
+};
+
+export type MonitorSignal = {
+  ticker: string;
+  score: number;
+  job_id?: string;
+  at?: string;
+  change_pct?: number | null;
+};
+
+export async function fetchMonitorStatus(): Promise<MonitorStatus> {
+  return apiJson("/api/monitor/status");
+}
+
+export async function fetchMonitorWatchlist(): Promise<{ tickers: string[] }> {
+  return apiJson("/api/monitor/watchlist");
+}
+
+export async function setMonitorWatchlist(tickers: string[]): Promise<{ tickers: string[] }> {
+  return apiJson("/api/monitor/watchlist", {
+    method: "PUT",
+    body: JSON.stringify({ tickers }),
+  });
+}
+
+export async function addMonitorWatchlistTicker(ticker: string): Promise<{ tickers: string[] }> {
+  return apiJson("/api/monitor/watchlist", {
+    method: "POST",
+    body: JSON.stringify({ ticker }),
+  });
+}
+
+export async function removeMonitorWatchlistTicker(ticker: string): Promise<{ tickers: string[] }> {
+  return apiJson(`/api/monitor/watchlist/${encodeURIComponent(ticker)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchMonitorSignals(limit = 50): Promise<{ signals: MonitorSignal[] }> {
+  return apiJson(`/api/monitor/signals?limit=${limit}`);
+}
+
+export async function triggerMonitorTick(): Promise<Record<string, unknown>> {
+  return apiJson("/api/monitor/tick", { method: "POST" });
+}
+
+// --- Topics (Hot Ideas) ---
+
+export type TopicCadence = "daily" | "weekly" | "manual";
+export type TopicSource = "seed" | "user";
+export type TickerMarket = "us" | "hk" | "cn" | "other";
+
+export type TickerCandidate = {
+  ticker: string;
+  company_name?: string | null;
+  confidence: number;
+  rationale?: string | null;
+  market: TickerMarket;
+};
+
+export type TopicArticle = {
+  title: string;
+  url: string;
+  snippet?: string | null;
+  published_at?: string | null;
+  source?: string | null;
+};
+
+export type TopicRun = {
+  run_id: string;
+  topic_id: string;
+  started_at: string;
+  completed_at?: string | null;
+  status: "running" | "completed" | "failed";
+  articles: TopicArticle[];
+  candidates: TickerCandidate[];
+  theme_summary?: string | null;
+  error?: string | null;
+};
+
+export type TopicSummary = {
+  id: string;
+  label: string;
+  query: string;
+  cadence: TopicCadence;
+  pinned: boolean;
+  source: TopicSource;
+  last_run_at?: string | null;
+  candidate_count: number;
+  top_candidates: TickerCandidate[];
+};
+
+export type Topic = {
+  id: string;
+  label: string;
+  query: string;
+  cadence: TopicCadence;
+  pinned: boolean;
+  source: TopicSource;
+  created_at: string;
+  updated_at: string;
+  last_run_at?: string | null;
+  last_refresh_at?: string | null;
+};
+
+export type TopicDetail = {
+  topic: Topic;
+  latest_run: TopicRun | null;
+};
+
+export async function fetchTopics(): Promise<{ topics: TopicSummary[] }> {
+  return apiJson("/api/topics");
+}
+
+export async function fetchTopic(id: string): Promise<TopicDetail> {
+  return apiJson(`/api/topics/${encodeURIComponent(id)}`);
+}
+
+export async function fetchTopicRuns(id: string): Promise<{ runs: TopicRun[] }> {
+  return apiJson(`/api/topics/${encodeURIComponent(id)}/runs`);
+}
+
+export async function searchTopic(body: {
+  query: string;
+  label?: string;
+  cadence?: TopicCadence;
+}): Promise<TopicDetail> {
+  return apiJson("/api/topics/search", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function refreshTopic(id: string): Promise<{ run: TopicRun }> {
+  return apiJson(`/api/topics/${encodeURIComponent(id)}/refresh`, { method: "POST" });
+}
+
+export async function updateTopic(
+  id: string,
+  body: { label?: string; query?: string; cadence?: TopicCadence },
+): Promise<TopicDetail> {
+  return apiJson(`/api/topics/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function pinTopic(id: string): Promise<TopicDetail> {
+  return apiJson(`/api/topics/${encodeURIComponent(id)}/pin`, { method: "POST" });
+}
+
+export async function unpinTopic(id: string): Promise<TopicDetail> {
+  return apiJson(`/api/topics/${encodeURIComponent(id)}/pin`, { method: "DELETE" });
+}
+
+export async function deleteTopic(id: string): Promise<{ deleted: string }> {
+  return apiJson(`/api/topics/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

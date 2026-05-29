@@ -38,15 +38,9 @@ const navGroups: { label: string; items: NavItem[] }[] = [
       {
         to: paths.history,
         label: "Runs",
-        hint: "Index, compare, open reports",
+        hint: "Index, compare, stats, open reports",
         end: true,
-        activePrefixes: ["/runs/", "/stocks/"],
-      },
-      {
-        to: paths.historyStats,
-        label: "Run stats",
-        hint: "Rating distribution",
-        end: true,
+        activePrefixes: ["/runs/", "/stocks/", "/history/"],
       },
     ],
   },
@@ -56,14 +50,15 @@ const navGroups: { label: string; items: NavItem[] }[] = [
       { to: paths.screener, label: "Screener", hint: "Facts-only screen", end: true },
       { to: paths.sectors, label: "Sectors", hint: "Industry rollups", end: true },
       { to: paths.news, label: "News", hint: "Headlines feed", end: true },
-      { to: paths.watchlists, label: "Watchlists", hint: "Saved tickers", end: true },
+      { to: paths.topics, label: "Topics", hint: "Hot ideas & themes", end: true },
+      { to: paths.watchlists, label: "Watchlists", hint: "Browser shortcuts", end: true },
+      { to: paths.monitor, label: "Monitor", hint: "Overnight auto-scan", end: true },
     ],
   },
   {
     label: "System",
     items: [
-      { to: paths.system, label: "System", hint: "API & health", end: true },
-      { to: paths.admin, label: "Admin links", hint: "External consoles", end: true },
+      { to: paths.system, label: "System", hint: "API, health, external consoles", end: true },
     ],
   },
 ];

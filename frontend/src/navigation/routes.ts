@@ -21,10 +21,15 @@ export const paths = {
   screener: "/screener",
   sectors: "/sectors",
   news: "/news",
+  topics: "/topics",
   watchlists: "/watchlists",
+  monitor: "/monitor",
   system: "/system",
-  admin: "/admin",
 } as const;
+
+export function topicPath(id: string): string {
+  return `/topics/${encodeURIComponent(id.trim())}`;
+}
 
 /** True when pathname is under the runs workflow (index, detail, or stock drill-down). */
 export function isRunsWorkflowPath(pathname: string): boolean {

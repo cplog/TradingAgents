@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import threading
+from functools import partial
 from typing import Any, Dict, List, Optional
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -231,6 +232,9 @@ class JobRecord:
     resumable: bool = False
     last_graph_step: Optional[int] = None
     checkpoint_thread_id: Optional[str] = None
+    trigger: Optional[str] = None
+    signal_score: Optional[int] = None
+    overnight_signal: Optional[Dict[str, Any]] = None
 
 
 class JobStore:
@@ -261,6 +265,9 @@ class JobStore:
             "resumable": rec.resumable,
             "last_graph_step": rec.last_graph_step,
             "checkpoint_thread_id": rec.checkpoint_thread_id,
+            "trigger": rec.trigger,
+            "signal_score": rec.signal_score,
+            "overnight_signal": rec.overnight_signal,
         }
 
     def _json_to_record(self, raw: Dict[str, Any]) -> Optional[JobRecord]:
@@ -299,6 +306,15 @@ class JobStore:
                 checkpoint_thread_id=str(raw.get("checkpoint_thread_id")).strip()
                 if raw.get("checkpoint_thread_id")
                 else None,
+                trigger=str(raw.get("trigger")).strip()
+                if raw.get("trigger") is not None
+                else None,
+                signal_score=int(raw["signal_score"])
+                if raw.get("signal_score") is not None
+                else None,
+                overnight_signal=raw.get("overnight_signal")
+                if isinstance(raw.get("overnight_signal"), dict)
+                else None,
             )
         except Exception:
             return None
@@ -314,7 +330,15 @@ class JobStore:
                 f"{_JOBS_PERSIST_PREFIX}{job_id}",
                 self._record_to_json(rec),
             )
-            if touch_index:
+        except Exception:
+            logger.exception("Could not persist job record for %s", job_id)
+            return
+        if not touch_index:
+            return
+        # Retry index update independently — a missing index is worse than a
+        # stale record because it breaks restart recovery.
+        for attempt in range(3):
+            try:
                 ids = self._state_store.get_json(_JOBS_PERSIST_INDEX_KEY) or []
                 if not isinstance(ids, list):
                     ids = []
@@ -323,15 +347,49 @@ class JobStore:
                     _JOBS_PERSIST_INDEX_KEY,
                     new_ids[:_MAX_PERSISTED_JOB_IDS],
                 )
-        except Exception:
-            logger.exception("Could not persist job snapshot for %s", job_id)
+                return
+            except Exception:
+                if attempt == 2:
+                    logger.exception(
+                        "Could not persist job index for %s (attempt %d)",
+                        job_id,
+                        attempt + 1,
+                    )
+                else:
+                    import time
+
+                    time.sleep(0.1 * (attempt + 1))
 
     def _load_from_state(self) -> None:
         assert self._state_store is not None
         try:
             ids = self._state_store.get_json(_JOBS_PERSIST_INDEX_KEY) or []
             if not isinstance(ids, list):
-                return
+                ids = []
+            # Always scan for jobs:record:* keys and merge with index.
+            # The index can be partially corrupted (some entries missing due to
+            # 429 rate limits) while still non-empty, which would orphan jobs.
+            try:
+                scanned = self._state_store.list_keys(_JOBS_PERSIST_PREFIX)
+                scanned_ids = [
+                    k.replace(_JOBS_PERSIST_PREFIX, "")
+                    for k in scanned
+                    if k.startswith(_JOBS_PERSIST_PREFIX)
+                ]
+                # Merge: index order first, then any scanned ids not in index
+                index_set = set(ids)
+                merged = list(ids) + [s for s in scanned_ids if s not in index_set]
+                if len(merged) > len(ids):
+                    logger.info(
+                        "Recovered %d additional job ids from key scan "
+                        "(index had %d, scan found %d total)",
+                        len(merged) - len(ids),
+                        len(ids),
+                        len(merged),
+                    )
+                ids = merged
+            except Exception:
+                logger.exception("Key scan fallback failed during job load")
             loaded = 0
             for raw_id in ids[:_MAX_PERSISTED_JOB_IDS]:
                 job_id = str(raw_id).strip()
@@ -343,7 +401,7 @@ class JobStore:
                 rec = self._json_to_record(payload)
                 if rec is None or not rec.job_id:
                     continue
-                if rec.status in ("queued", "running"):
+                if rec.status == "running":
                     rec.status = "failed"
                     _refresh_checkpoint_metadata(rec)
                     if rec.resumable:
@@ -366,6 +424,15 @@ class JobStore:
                             "message": rec.error or "Service restarted before this job finished.",
                         }
                     )
+                elif rec.status == "queued":
+                    # Keep queued so Worker.restart_queued_jobs() can restart them.
+                    rec.progress_events.append(
+                        {
+                            "ts": datetime.utcnow().isoformat() + "Z",
+                            "stage": "queued",
+                            "message": "Service restarted while queued; will restart shortly.",
+                        }
+                    )
                 self._jobs[rec.job_id] = rec
                 loaded += 1
             if loaded:
@@ -382,6 +449,9 @@ class JobStore:
         *,
         batch_id: Optional[str] = None,
         analysts: Optional[list] = None,
+        trigger: Optional[str] = None,
+        signal_score: Optional[int] = None,
+        overnight_signal: Optional[Dict[str, Any]] = None,
     ) -> str:
         job_id = str(uuid.uuid4())[:8]
         selected = _coerce_analyst_ids(analysts)
@@ -395,6 +465,9 @@ class JobStore:
                 config_snapshot=_merge_job_config_snapshot(config),
                 batch_id=batch_id,
                 analysts=selected,
+                trigger=trigger,
+                signal_score=signal_score,
+                overnight_signal=overnight_signal,
             )
             self._persist_locked(job_id, touch_index=True)
         return job_id
@@ -451,6 +524,9 @@ class JobStore:
             resumable=rec.resumable,
             last_graph_step=rec.last_graph_step,
             checkpoint_thread_id=rec.checkpoint_thread_id,
+            trigger=rec.trigger,
+            signal_score=rec.signal_score,
+            overnight_signal=rec.overnight_signal,
         )
 
     def update_status(self, job_id: str, status: str) -> None:
@@ -648,6 +724,35 @@ class Worker:
         self.semaphore = asyncio.Semaphore(max_concurrency)
         self.store = JobStore(ttl_hours=ttl_hours, state_store=state_store)
 
+    async def restart_queued_jobs(self) -> int:
+        """Re-submit any queued jobs restored from persistent state."""
+        restarted = 0
+        for job_id in self.store.list_ids():
+            rec = self.store.get(job_id)
+            if rec and rec.status == "queued":
+                self.store.append_progress(
+                    job_id,
+                    "Restarting queued job after service restart…",
+                    stage="queued",
+                )
+                asyncio.create_task(
+                    self._run(
+                        job_id=job_id,
+                        ticker=rec.ticker,
+                        date=rec.date,
+                        config=dict(rec.config_snapshot),
+                        analysts=list(rec.analysts) if rec.analysts else None,
+                        resumed=False,
+                        trigger=rec.trigger,
+                        signal_score=rec.signal_score,
+                        overnight_signal=rec.overnight_signal,
+                    )
+                )
+                restarted += 1
+        if restarted:
+            logger.info("Restarted %d queued jobs from persistent state", restarted)
+        return restarted
+
     async def submit(
         self,
         ticker: str,
@@ -656,19 +761,39 @@ class Worker:
         analysts: Optional[list] = None,
         *,
         batch_id: Optional[str] = None,
+        trigger: Optional[str] = None,
+        signal_score: Optional[int] = None,
+        overnight_signal: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Enqueue a job and return its id."""
         cfg = dict(config)
         if os.environ.get("TRADINGAGENTS_CHECKPOINT_ENABLED") is None:
             cfg.setdefault("checkpoint_enabled", True)
         job_id = self.store.create(
-            ticker, date, cfg, batch_id=batch_id, analysts=analysts
+            ticker,
+            date,
+            cfg,
+            batch_id=batch_id,
+            analysts=analysts,
+            trigger=trigger,
+            signal_score=signal_score,
+            overnight_signal=overnight_signal,
         )
         self.store.append_progress(
             job_id, f"Job {job_id} queued for {ticker} @ {date}", stage="queued"
         )
         asyncio.create_task(
-            self._run(job_id, ticker, date, cfg, analysts, resumed=False)
+            self._run(
+                job_id,
+                ticker,
+                date,
+                cfg,
+                analysts,
+                resumed=False,
+                trigger=trigger,
+                signal_score=signal_score,
+                overnight_signal=overnight_signal,
+            )
         )
         return job_id
 
@@ -703,6 +828,9 @@ class Worker:
         analysts: Optional[list],
         *,
         resumed: bool = False,
+        trigger: Optional[str] = None,
+        signal_score: Optional[int] = None,
+        overnight_signal: Optional[Dict[str, Any]] = None,
     ) -> None:
         async with self.semaphore:
             self.store.update_status(job_id, "running")
@@ -773,14 +901,21 @@ class Worker:
                             )
 
                 hb_task = asyncio.create_task(_heartbeat())
+                job_rec = self.store.get(job_id)
+                overnight_sig = overnight_signal or (
+                    job_rec.overnight_signal if job_rec else None
+                )
                 try:
                     final_state, rating = await loop.run_in_executor(
                         None,
-                        self._propagate_sync,
-                        ticker,
-                        date,
-                        config,
-                        analysts,
+                        partial(
+                            self._propagate_sync,
+                            ticker,
+                            date,
+                            config,
+                            analysts,
+                            overnight_signal=overnight_sig,
+                        ),
                     )
                 finally:
                     stop_hb.set()
@@ -987,7 +1122,8 @@ class Worker:
                         )
                 except Exception:
                     logger.exception("History persistence failed for job %s", job_id)
-                    raise
+                    # Do NOT raise — the job already succeeded in JobStore.
+                    # History is best-effort; failing it should not poison the job.
                 self.store.append_progress(
                     job_id,
                     f"Completed. Rating: {rating}",
@@ -1016,6 +1152,8 @@ class Worker:
         date: str,
         config: Dict[str, Any],
         analysts: Optional[list],
+        *,
+        overnight_signal: Optional[Dict[str, Any]] = None,
     ) -> tuple:
         logger.info(
             "propagate() starting | ticker=%s date=%s provider=%s",
@@ -1088,6 +1226,10 @@ class Worker:
                         company_name, trade_date, past_context=past_context,
                     )
                     state["kronos_report"] = kronos_md
+                    if overnight_signal:
+                        state["overnight_signal"] = json.dumps(
+                            overnight_signal, ensure_ascii=False, indent=2
+                        )
                     return state
 
                 propagator.create_initial_state = _seeded_create_initial_state

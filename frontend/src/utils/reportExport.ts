@@ -280,3 +280,14 @@ export function downloadStandaloneReport(filename: string, html: string): void {
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+/** Trigger a browser download of a PNG data URL. No-op outside a DOM. */
+export function downloadPng(filename: string, dataUrl: string): void {
+  if (typeof document === "undefined") return;
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}

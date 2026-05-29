@@ -188,7 +188,9 @@ describe("HistoryPage", () => {
 
     await switchToTable(el);
 
-    const deleteBtn = [...el.querySelectorAll("button")].find((b) => b.textContent === "Delete");
+    const deleteBtn = [...el.querySelectorAll("button")].find(
+      (b) => b.textContent === "Del" || b.textContent === "Delete",
+    );
     expect(deleteBtn).toBeTruthy();
 
     await act(async () => {
@@ -240,7 +242,7 @@ describe("HistoryPage", () => {
     });
 
     const bulkBtn = [...el.querySelectorAll("button")].find((b) =>
-      b.textContent?.startsWith("Delete selected"),
+      b.textContent?.startsWith("Delete ("),
     );
     expect(bulkBtn).toBeTruthy();
 
@@ -285,7 +287,7 @@ describe("HistoryPage", () => {
 
     const openLink = el.querySelector('a[href="/runs/r1"]');
     expect(openLink).toBeTruthy();
-    expect(openLink?.textContent).toContain("Open run");
+    expect(openLink?.textContent).toMatch(/Open/);
     const stockLink = el.querySelector('a[href="/stocks/AAPL"]');
     expect(stockLink).toBeTruthy();
   });
@@ -417,7 +419,7 @@ describe("HistoryPage", () => {
     }
 
     const bulkBtn = [...el.querySelectorAll("button")].find((b) =>
-      b.textContent?.startsWith("▶ Re-run selected"),
+      b.textContent?.startsWith("Re-run ("),
     ) as HTMLButtonElement;
     expect(bulkBtn).toBeTruthy();
 

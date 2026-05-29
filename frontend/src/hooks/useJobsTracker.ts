@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchJobs, type JobStatus } from "../api";
+import { sortActiveJobs } from "../utils/activeJobsDisplay";
 
 /**
  * Lightweight cross-page jobs tracker for the persistent jobs ribbon.
@@ -96,11 +97,11 @@ export function useJobsTracker(): JobsTracker {
           knownStatuses.current.set(job.job_id, status);
         }
 
-        nextActive.sort((a, b) => parseTs(b.created_at) - parseTs(a.created_at));
+        const sortedActive = sortActiveJobs(nextActive);
         nextRecent.sort((a, b) => jobEndedAtMs(b) - jobEndedAtMs(a));
 
         if (cancelled) return;
-        setActive(nextActive);
+        setActive(sortedActive);
         setRecentlyCompleted(nextRecent);
         setJustCompletedIds(newlyCompleted);
         setError(null);

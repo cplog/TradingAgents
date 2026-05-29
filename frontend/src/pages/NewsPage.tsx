@@ -1,9 +1,13 @@
 import { useAutoAnimate } from "@formkit/auto-animate/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { PageFrame, PageHeader } from "../components/PageFrame";
 import { Pressable } from "../components/Pressable";
 import { SentimentTimelineChart } from "../components/charts/SentimentTimelineChart";
-import { fetchNews, type NewsItem, type NewsSource } from "../api";
+import { fetchNews, fetchTopics, type NewsItem, type NewsSource, type TopicSummary } from "../api";
+import { topicPath } from "../navigation/routes";
+import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 const SOURCE_LABEL: Record<NewsSource, string> = {
   yfinance: "Yahoo ticker",
@@ -18,17 +22,34 @@ const SOURCE_LABEL: Record<NewsSource, string> = {
 
 export function NewsPage() {
   const [listRef] = useAutoAnimate();
-  const [ticker, setTicker] = useState("AAPL");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tickerFromUrl = searchParams.get("ticker")?.trim().toUpperCase() || "AAPL";
+  const [ticker, setTicker] = useState(tickerFromUrl);
   const [items, setItems] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<"all" | NewsSource>("all");
   const [sourceErrors, setSourceErrors] = useState<Record<string, string>>({});
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+  const [relatedTopics, setRelatedTopics] = useState<TopicSummary[]>([]);
+
+  useEffect(() => {
+    void fetchTopics()
+      .then((res) => setRelatedTopics(res.topics.slice(0, 8)))
+      .catch(() => setRelatedTopics([]));
+  }, []);
+
+  useDocumentTitle(ticker.trim() ? `${ticker.trim().toUpperCase()} — News` : "News");
 
   async function load() {
     setLoading(true);
+    const trimmed = ticker.trim().toUpperCase();
+    if (trimmed) {
+      const next = new URLSearchParams(searchParams);
+      next.set("ticker", trimmed);
+      setSearchParams(next, { replace: true });
+    }
     try {
-      const r = await fetchNews(ticker.trim(), 50);
+      const r = await fetchNews(trimmed, 50);
       setItems(r.items);
       setSourceErrors(r.source_errors ?? {});
       setFetchedAt(r.fetched_at ?? null);
@@ -65,6 +86,7 @@ export function NewsPage() {
       <PageHeader
         title="News and sentiment"
         description="Merged streams from Yahoo, Finnhub, Google RSS, AKShare, Alpha Vantage, Reddit, and StockTwits."
+        meta={<AppBreadcrumbs items={[{ label: "News" }]} />}
       />
       <p className="page-lead">
         Raw streams merged: <strong>Yahoo ticker news</strong>, <strong>Yahoo macro search</strong>,{" "}
@@ -126,6 +148,19 @@ export function NewsPage() {
           </button>
         ))}
       </div>
+
+      {relatedTopics.length > 0 ? (
+        <div className="ui-form-row" style={{ margin: "var(--spacing-12) 0" }}>
+          <span className="ui-label" style={{ margin: 0 }}>
+            Related themes
+          </span>
+          {relatedTopics.map((t) => (
+            <Link key={t.id} to={topicPath(t.id)} className="ui-chip ui-chip--source">
+              {t.label}
+            </Link>
+          ))}
+        </div>
+      ) : null}
 
       {fetchedAt && (
         <p className="mono" style={{ fontSize: 11, color: "var(--color-ash-gray)", margin: "0 0 8px" }}>
