@@ -185,15 +185,26 @@ def build_supplementary_analyst_context(state: dict) -> str:
 
 def create_msg_delete():
     def delete_messages(state):
-        """Clear messages and add placeholder for Anthropic compatibility"""
-        messages = state["messages"]
+        """Clear messages and add a context-anchored placeholder.
 
-        # Remove all messages
+        The placeholder must not be a bare ``"Continue"``: some
+        OpenAI-compatible providers interpret that literally as the user task
+        and produce output about the word "continue" instead of analysing the
+        instrument (#888). Anchoring it to the resolved instrument context and
+        date keeps the next analyst on-task even if the provider treats the
+        placeholder as a standalone request.
+        """
+        messages = state["messages"]
         removal_operations = [RemoveMessage(id=m.id) for m in messages]
 
-        # Add a minimal placeholder message
-        placeholder = HumanMessage(content="Continue")
-
+        instrument_context = get_instrument_context_from_state(state)
+        trade_date = state.get("trade_date", "the requested date")
+        placeholder = HumanMessage(
+            content=(
+                f"Proceed with your assigned analysis for this workflow. "
+                f"{instrument_context} The analysis date is {trade_date}."
+            )
+        )
         return {"messages": removal_operations + [placeholder]}
 
     return delete_messages
