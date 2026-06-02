@@ -20,7 +20,7 @@ def create_market_analyst(llm):
 
     def market_analyst_node(state):
         current_date = state["trade_date"]
-        instrument_context = build_instrument_context(state["company_of_interest"])
+        instrument_context = get_instrument_context_from_state(state)
         execution_context = (state.get("execution_context") or "").strip()
         execution_block = f"\n\n{execution_context}\n" if execution_context else ""
 

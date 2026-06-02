@@ -8,7 +8,7 @@ from tradingagents.agents.utils.agent_utils import build_instrument_context, get
 
 def create_alt_data_analyst(llm):
     def alt_data_analyst_node(state):
-        instrument_context = build_instrument_context(state["company_of_interest"])
+        instrument_context = get_instrument_context_from_state(state)
         overnight = (state.get("overnight_signal") or "").strip()
 
         system_message = (

@@ -28,6 +28,9 @@ from tradingagents.dataflows.config import set_config
 
 # Import the new abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
+    build_instrument_context,
+    get_instrument_context_from_state,
+    resolve_instrument_identity,
     get_stock_data,
     query_cached_ohlcv,
     get_indicators,
@@ -47,6 +50,9 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.agents.utils.overnight_tools import (
     compute_overnight_signal_tool,
     scan_us_market_drops,
+)
+from tradingagents.agents.utils.market_data_validation_tools import (
+    get_verified_market_snapshot,
 )
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -171,7 +177,7 @@ class TradingAgentsGraph:
             if effort:
                 kwargs["effort"] = effort
 
-        temp = self.config.get("llm_temperature")
+        temp = self.config.get("temperature")
         if temp is not None:
             try:
                 kwargs["temperature"] = float(temp)
@@ -194,6 +200,7 @@ class TradingAgentsGraph:
                     get_macro_data,
                     compute_overnight_signal_tool,
                     scan_us_market_drops,
+                    get_verified_market_snapshot,
                 ]
             ),
             "social": ToolNode(
@@ -362,6 +369,16 @@ class TradingAgentsGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
+    def resolve_instrument_context(self, ticker: str, asset_type: str = "stock") -> str:
+        """Resolve ticker identity once and return the full instrument context.
+
+        Deterministic yfinance lookup (cached, fail-open) injected into a
+        context string so every agent anchors to the real company instead of
+        hallucinating one from the price chart (#814).
+        """
+        identity = resolve_instrument_identity(ticker)
+        return build_instrument_context(ticker, asset_type, identity)
+
     def propagate(self, company_name, trade_date):
         """Run the trading agents graph for a company on a specific date.
 
@@ -410,6 +427,7 @@ class TradingAgentsGraph:
 
         run_snapshot = build_run_execution_snapshot(company_name, str(trade_date))
         execution_context = run_snapshot["markdown"]
+        instrument_context = self.resolve_instrument_context(company_name)
         init_agent_state = self.propagator.create_initial_state(
             company_name,
             trade_date,
@@ -423,6 +441,7 @@ class TradingAgentsGraph:
                 },
                 ensure_ascii=False,
             ),
+            instrument_context=instrument_context,
         )
         args = self.propagator.get_graph_args()
 

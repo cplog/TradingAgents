@@ -22,11 +22,14 @@ class Propagator:
         past_context: str = "",
         execution_context: str = "",
         live_quote_at_run_json: str = "",
+        instrument_context: str = "",
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph."""
         return {
             "messages": [("human", company_name)],
             "company_of_interest": company_name,
+            "asset_type": "stock",
+            "instrument_context": instrument_context,
             "trade_date": str(trade_date),
             "past_context": past_context,
             "execution_context": execution_context,

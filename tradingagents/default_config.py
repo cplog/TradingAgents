@@ -19,7 +19,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_OPENROUTER_FREE_ONLY": "openrouter_free_only",
     "TRADINGAGENTS_MAX_CONCURRENCY": "max_concurrency",
     "TRADINGAGENTS_JOB_TTL_HOURS": "job_ttl_hours",
-    "TRADINGAGENTS_LLM_TEMPERATURE": "llm_temperature",
+    "TRADINGAGENTS_TEMPERATURE": "temperature",
     "TRADINGAGENTS_DIMENSIONS_ENABLED": "dimensions_enabled",
     "TRADINGAGENTS_DIMENSIONS_IN_GRAPH": "dimensions_in_graph",
     "TRADINGAGENTS_PREFER_FREE_DATA_VENDORS": "prefer_free_data_vendors",
@@ -76,7 +76,7 @@ _CONFIG_BASE: dict = {
     "memory_log_max_entries": None,
     # LLM settings
     "llm_provider": "openai",
-    "deep_think_llm": "gpt-5.4",
+    "deep_think_llm": "gpt-5.5",
     "quick_think_llm": "gpt-5.4-mini",
     # When None, each provider's client falls back to its own default endpoint.
     "backend_url": None,
@@ -84,8 +84,10 @@ _CONFIG_BASE: dict = {
     "google_thinking_level": None,
     "openai_reasoning_effort": None,
     "anthropic_effort": None,
-    # Optional sampling temperature for chat models
-    "llm_temperature": None,
+    # Sampling temperature, forwarded to every provider when set. None leaves
+    # each provider at its own default. Lower values reduce run-to-run
+    # variation on models that honor it; reasoning models largely ignore it.
+    "temperature": None,
     # Checkpoint/resume: when True, LangGraph saves state after each node.
     "checkpoint_enabled": False,
     # Output language for analyst reports and final decision
