@@ -3,7 +3,7 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.skills import load_skill
-from tradingagents.agents.utils.agent_utils import build_instrument_context, get_language_instruction
+from tradingagents.agents.utils.agent_utils import get_instrument_context_from_state, get_language_instruction
 
 
 def create_alt_data_analyst(llm):
