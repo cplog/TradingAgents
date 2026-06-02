@@ -15,6 +15,19 @@ async def test_request_cancellation_flag_settable():
 
 
 @pytest.mark.asyncio
+async def test_cancel_all_active_marks_queued_cancelled():
+    worker = Worker(max_concurrency=1, ttl_hours=24)
+    q1 = worker.store.create("AAPL", "2026-05-13", {})
+    q2 = worker.store.create("MSFT", "2026-05-13", {})
+    worker.store.update_status(q1, "running")
+
+    stopped = worker.store.cancel_all_active()
+    assert set(stopped) == {q1, q2}
+    assert worker.store.get(q1).cancellation_requested is True
+    assert worker.store.get(q2).status == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_cancellation_before_dimensions_skips_them(monkeypatch):
     worker = Worker(max_concurrency=1, ttl_hours=24)
 

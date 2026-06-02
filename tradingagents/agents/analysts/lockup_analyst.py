@@ -1,5 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+from tradingagents.agents.skills import load_skill
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_balance_sheet,
@@ -25,15 +26,7 @@ def create_lockup_analyst(llm):
         ]
 
         system_message = (
-            "You are the Lockup Analyst. Assess potential equity overhang and "
-            "restricted-share dynamics: insider activity, lockup / blackout hints "
-            "from filings-oriented fundamentals where available, secondary "
-            "offering chatter in news, and share-count trends from balance sheets "
-            "when tools return them. Clearly separate confirmed tool facts from "
-            "inference. If tools lack lockup schedules, say so and outline what "
-            "would be needed to conclude. "
-            "End with one Markdown table: factor, direction (supply pressure vs "
-            "support), evidence from tools, uncertainty."
+            load_skill("lockup_analyst")
             + get_language_instruction()
         )
 

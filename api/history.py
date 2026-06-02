@@ -254,6 +254,53 @@ def _ensure_d1_schema() -> None:
 
     for ddl in DATA_CACHE_BOOTSTRAP_DDLS:
         _d1_query(ddl)
+    # Hot Ideas (Topics) persistence — queryable catalog, runs, refresh budgets.
+    _d1_query(
+        """
+        CREATE TABLE IF NOT EXISTS topics (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            query TEXT NOT NULL,
+            cadence TEXT NOT NULL,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_run_at TEXT,
+            last_refresh_at TEXT
+        )
+        """
+    )
+    _d1_query(
+        "CREATE INDEX IF NOT EXISTS idx_topics_updated_at ON topics (updated_at DESC)"
+    )
+    _d1_query(
+        """
+        CREATE TABLE IF NOT EXISTS topic_runs (
+            run_id TEXT PRIMARY KEY,
+            topic_id TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            status TEXT NOT NULL,
+            articles_json TEXT,
+            candidates_json TEXT,
+            theme_summary TEXT,
+            error TEXT
+        )
+        """
+    )
+    _d1_query(
+        "CREATE INDEX IF NOT EXISTS idx_topic_runs_topic_started "
+        "ON topic_runs (topic_id, started_at DESC)"
+    )
+    _d1_query(
+        """
+        CREATE TABLE IF NOT EXISTS topic_budgets (
+            day TEXT PRIMARY KEY,
+            count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
     _d1_initialized = True
 
 

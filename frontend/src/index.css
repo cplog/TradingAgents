@@ -2809,7 +2809,33 @@ code,
   color: var(--color-ash-gray);
   font-size: 11px;
   letter-spacing: 0.02em;
+  flex: 1 1 auto;
+  min-width: 0;
 }
+
+.analysis-status-bar__stop-all {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--danger, #c53030) 45%, transparent);
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, var(--danger, #c53030) 8%, transparent);
+  color: var(--danger, #c53030);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.analysis-status-bar__stop-all:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #c53030) 16%, transparent);
+}
+
+.analysis-status-bar__stop-all:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .analysis-status-bar__track {
   display: flex;
   flex: 1 1 auto;

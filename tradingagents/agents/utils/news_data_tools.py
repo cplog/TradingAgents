@@ -1,3 +1,4 @@
+import logging
 from langchain_core.tools import tool
 from typing import Annotated, Optional
 
@@ -14,6 +15,8 @@ from tradingagents.dataflows.hot_board import (
     normalize_hot_board_rows,
 )
 from tradingagents.dataflows.interface import route_to_vendor
+
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -32,7 +35,20 @@ def get_news(
     Returns:
         str: A formatted string containing news data
     """
-    return route_to_vendor("get_news", ticker, start_date, end_date)
+    try:
+        return route_to_vendor("get_news", ticker, start_date, end_date)
+    except RuntimeError as exc:
+        # Fail open for missing/blocked news vendors so the graph can continue.
+        # Other tool failures still raise.
+        msg = str(exc)
+        if "No available vendor for 'get_news'" not in msg:
+            raise
+        logger.warning("get_news fallback for %s: %s", ticker, msg)
+        return (
+            "## News unavailable\n\n"
+            f"No news data available for {ticker} between {start_date} and {end_date}. "
+            "Continuing analysis with other signals."
+        )
 
 @tool
 def get_global_news(

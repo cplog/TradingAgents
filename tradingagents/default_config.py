@@ -30,6 +30,8 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_MONITOR_SIGNAL_THRESHOLD": "monitor_signal_threshold",
     "TRADINGAGENTS_MONITOR_SPREAD_MAX_PCT": "monitor_spread_max_pct",
     "TRADINGAGENTS_MONITOR_COOLDOWN_MINUTES": "monitor_cooldown_minutes",
+    "TRADINGAGENTS_PARALLEL_ANALYSTS": "parallel_analysts",
+    "TRADINGAGENTS_SEMANTIC_DEBATE_TERMINATION": "semantic_debate_termination",
 }
 
 
@@ -145,6 +147,10 @@ _CONFIG_BASE: dict = {
     "data_cache_auto_stock_bars": False,
     # Override vendor tag stored on ta_stock_bars (default: primary configured core_stock_apis vendor).
     "data_cache_stock_vendor_tag": None,
+    # When True, analysts run in parallel via LangGraph Send (reduces wall-clock latency).
+    "parallel_analysts": False,
+    # When True, debates can terminate early if the LLM detects convergence (saves tokens).
+    "semantic_debate_termination": False,
     # Overnight monitor (daily barbell; free yfinance + AKShare)
     "monitor_enabled": False,
     "monitor_poll_seconds": 900,

@@ -245,6 +245,10 @@ class JobStore:
         self._ttl = timedelta(hours=ttl_hours)
         self._lock = threading.Lock()
         self._state_store = state_store
+        self._last_kv_persist: Dict[str, float] = {}
+        self._persist_throttle_sec = float(
+            os.getenv("TRADINGAGENTS_JOB_PERSIST_INTERVAL_SEC", "90")
+        )
         if self._state_store is not None:
             self._load_from_state()
 
@@ -319,12 +323,26 @@ class JobStore:
         except Exception:
             return None
 
-    def _persist_locked(self, job_id: str, *, touch_index: bool = False) -> None:
+    def _persist_locked(
+        self,
+        job_id: str,
+        *,
+        touch_index: bool = False,
+        force: bool = False,
+    ) -> None:
         if self._state_store is None:
             return
         rec = self._jobs.get(job_id)
         if rec is None:
             return
+        if not force and not touch_index and self._persist_throttle_sec > 0:
+            import time
+
+            now = time.monotonic()
+            last = self._last_kv_persist.get(job_id, 0.0)
+            if now - last < self._persist_throttle_sec:
+                return
+            self._last_kv_persist[job_id] = now
         try:
             self._state_store.put_json(
                 f"{_JOBS_PERSIST_PREFIX}{job_id}",
@@ -469,7 +487,7 @@ class JobStore:
                 signal_score=signal_score,
                 overnight_signal=overnight_signal,
             )
-            self._persist_locked(job_id, touch_index=True)
+            self._persist_locked(job_id, touch_index=True, force=True)
         return job_id
 
     def get(self, job_id: str) -> Optional[JobRecord]:
@@ -534,7 +552,7 @@ class JobStore:
             rec = self._jobs.get(job_id)
             if rec:
                 rec.status = status
-                self._persist_locked(job_id)
+                self._persist_locked(job_id, force=True)
 
     def set_result(self, job_id: str, result: Dict[str, Any]) -> None:
         with self._lock:
@@ -545,7 +563,7 @@ class JobStore:
                 rec.resumable = False
                 rec.last_graph_step = None
                 rec.checkpoint_thread_id = None
-                self._persist_locked(job_id)
+                self._persist_locked(job_id, force=True)
 
     def set_error(self, job_id: str, error: str) -> None:
         with self._lock:
@@ -554,14 +572,14 @@ class JobStore:
                 rec.status = "failed"
                 rec.error = error
                 _refresh_checkpoint_metadata(rec)
-                self._persist_locked(job_id)
+                self._persist_locked(job_id, force=True)
 
     def refresh_checkpoint_metadata(self, job_id: str) -> None:
         with self._lock:
             rec = self._jobs.get(job_id)
             if rec:
                 _refresh_checkpoint_metadata(rec)
-                self._persist_locked(job_id)
+                self._persist_locked(job_id, force=True)
 
     def prepare_resume(self, job_id: str) -> Optional[JobRecord]:
         """Mark a failed resumable job as queued again. Returns snapshot or None."""
@@ -587,8 +605,30 @@ class JobStore:
                     ),
                 }
             )
-            self._persist_locked(job_id)
+            self._persist_locked(job_id, force=True)
             return self._snapshot_record(rec)
+
+    def cancel_all_active(self) -> List[str]:
+        """Stop every queued/running job. Queued jobs are marked cancelled immediately."""
+        stopped: List[str] = []
+        with self._lock:
+            for job_id, rec in list(self._jobs.items()):
+                st = rec.status.lower()
+                if st not in ("running", "queued", "resuming", "pending"):
+                    continue
+                rec.cancellation_requested = True
+                if st in ("queued", "pending"):
+                    rec.status = "cancelled"
+                    rec.progress_events.append(
+                        {
+                            "ts": datetime.utcnow().isoformat() + "Z",
+                            "stage": "cancelled",
+                            "message": "Job cancelled while queued.",
+                        }
+                    )
+                self._persist_locked(job_id, force=True)
+                stopped.append(job_id)
+        return stopped
 
     def request_cancellation(self, job_id: str) -> bool:
         with self._lock:
@@ -596,7 +636,7 @@ class JobStore:
             if not rec:
                 return False
             rec.cancellation_requested = True
-            self._persist_locked(job_id)
+            self._persist_locked(job_id, force=True)
             return True
 
     def is_cancellation_requested(self, job_id: str) -> bool:
@@ -609,7 +649,7 @@ class JobStore:
             rec = self._jobs.get(job_id)
             if rec:
                 rec.status = "cancelled"
-                self._persist_locked(job_id)
+                self._persist_locked(job_id, force=True)
 
     def append_progress(
         self,
@@ -819,6 +859,11 @@ class Worker:
         )
         return job_id
 
+    async def cancel_all_active(self) -> Dict[str, Any]:
+        """Request stop for every queued/running job."""
+        job_ids = self.store.cancel_all_active()
+        return {"cancellation_requested": len(job_ids), "job_ids": job_ids}
+
     async def _run(
         self,
         job_id: str,
@@ -832,7 +877,13 @@ class Worker:
         signal_score: Optional[int] = None,
         overnight_signal: Optional[Dict[str, Any]] = None,
     ) -> None:
+        if self.store.is_cancellation_requested(job_id):
+            self.store.mark_cancelled(job_id)
+            return
         async with self.semaphore:
+            if self.store.is_cancellation_requested(job_id):
+                self.store.mark_cancelled(job_id)
+                return
             self.store.update_status(job_id, "running")
             selected_analysts = _coerce_analyst_ids(analysts)
             if resumed:

@@ -122,6 +122,22 @@ def test_admin_jobs_clear(api_client: TestClient, monkeypatch):
 
 
 @pytest.mark.unit
+def test_cancel_all_jobs_endpoint(api_client: TestClient):
+    from api import main as main_mod
+
+    main_mod._worker.store.clear(clear_memory=True, clear_persisted=False)
+    j1 = main_mod._worker.store.create("AAPL", "2026-05-14", {})
+    j2 = main_mod._worker.store.create("MSFT", "2026-05-14", {})
+    main_mod._worker.store.update_status(j1, "running")
+
+    r = api_client.post("/jobs/cancel-all")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cancellation_requested"] == 2
+    assert set(body["job_ids"]) == {j1, j2}
+
+
+@pytest.mark.unit
 def test_news_endpoint_structure(api_client: TestClient, monkeypatch):
     def fake_fetch(ticker, **kwargs):
         from datetime import datetime

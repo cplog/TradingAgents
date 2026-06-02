@@ -15,8 +15,14 @@ def api_client(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-placeholder")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TRADINGAGENTS_API_STATE_FILE", str(tmp_path / "api_state.json"))
-    for cf_var in ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_KV_NAMESPACE_ID", "CLOUDFLARE_API_TOKEN"):
+    for cf_var in (
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_KV_NAMESPACE_ID",
+        "CLOUDFLARE_API_TOKEN",
+        "CLOUDFLARE_D1_DATABASE_ID",
+    ):
         monkeypatch.delenv(cf_var, raising=False)
+    monkeypatch.setattr("api.history.d1_history_enabled", lambda: False)
     reset_state_store_for_tests()
     reset_topics_store_for_tests()
     reset_topics_engine_for_tests()

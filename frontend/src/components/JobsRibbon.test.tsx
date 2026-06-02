@@ -138,4 +138,35 @@ describe("JobsRibbon", () => {
     expect(screen.getByText("done")).toBeInTheDocument();
     expect(screen.getByText("View →")).toBeInTheDocument();
   });
+
+  it("calls cancel-all when Stop all is clicked", async () => {
+    const cancelSpy = vi.spyOn(api, "cancelAllActiveJobs").mockResolvedValue({
+      cancellation_requested: 2,
+      job_ids: ["j-1", "j-2"],
+    });
+    vi.spyOn(api, "fetchJobs").mockResolvedValue([
+      makeJob({ job_id: "j-1", ticker: "nvda", status: "running" }),
+      makeJob({ job_id: "j-2", ticker: "msft", status: "queued" }),
+    ]);
+
+    render(
+      <MemoryRouter>
+        <JobsTrackerProvider>
+          <JobsRibbon />
+        </JobsTrackerProvider>
+      </MemoryRouter>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(document.querySelector(".analysis-status-bar__stop-all")!);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+  });
 });

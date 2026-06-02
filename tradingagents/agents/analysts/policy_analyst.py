@@ -1,5 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+from tradingagents.agents.skills import load_skill
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_global_news,
@@ -8,7 +9,6 @@ from tradingagents.agents.utils.agent_utils import (
     list_akshare_endpoints,
     get_macro_data,
 )
-from tradingagents.agents.utils.macro_data_tools import AKSHARE_MACRO_DISCOVERY_HINT
 
 
 def create_policy_analyst(llm):
@@ -26,17 +26,7 @@ def create_policy_analyst(llm):
         ]
 
         system_message = (
-            "You are the Policy Analyst. Map regulatory, legislative, trade, "
-            "sanctions, and geopolitical risks or catalysts that could affect "
-            "the company's revenue, costs, or cost of capital. Lead with "
-            "company- and sector-specific items from get_news; add broader "
-            "policy context from get_global_news when clearly linked. "
-            "Use macro tools sparingly when they illuminate policy transmission "
-            "(rates, FX, commodities). "
-            + AKSHARE_MACRO_DISCOVERY_HINT
-            + " "
-            "End with one Markdown table: risk/catalyst, mechanism, horizon, "
-            "confidence (based only on cited tool facts)."
+            load_skill("policy_analyst")
             + get_language_instruction()
         )
 

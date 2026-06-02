@@ -25,6 +25,7 @@ See: https://github.com/TauricResearch/TradingAgents/issues/557
 from datetime import datetime, timedelta
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from tradingagents.agents.skills import load_skill
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_language_instruction,

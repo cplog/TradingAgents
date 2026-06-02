@@ -3,6 +3,7 @@
 from typing import Any, Callable, Dict, Optional
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
+from langgraph.types import Send
 
 from tradingagents.agents import (
     create_aggressive_debator,
@@ -65,6 +66,14 @@ class GraphSetup:
         self.tool_nodes = tool_nodes
         self.conditional_logic = conditional_logic
         self.config: Dict[str, Any] = dict(config or {})
+        self.selected_analysts: list[str] = []
+
+    def _route_to_analysts(self, state: AgentState) -> list[Send]:
+        """Fan out to all selected analysts in parallel via LangGraph Send."""
+        return [
+            Send(analyst_graph_analyst_node_name(aid), state)
+            for aid in self.selected_analysts
+        ]
 
     def setup_graph(
         self, selected_analysts=["market", "social", "news", "fundamentals"]
@@ -76,6 +85,8 @@ class GraphSetup:
                 market, social, news, fundamentals. Optional: hot_money, policy,
                 lockup, kronos.
         """
+        self.selected_analysts = selected_analysts
+
         if len(selected_analysts) == 0:
             raise ValueError("Trading Agents Graph Setup Error: no analysts selected!")
 
@@ -136,11 +147,21 @@ class GraphSetup:
         workflow.add_node("Portfolio Manager", portfolio_manager_node)
         workflow.add_node("Dimensions Snapshot", dimensions_snapshot_node)
 
-        # Define edges
-        first_analyst = selected_analysts[0]
-        workflow.add_edge(START, analyst_graph_analyst_node_name(first_analyst))
+        # Analyst wiring: sequential (default) or parallel via Send
+        parallel = self.config.get("parallel_analysts", False)
 
-        # Connect analysts in sequence
+        if parallel:
+            # Parallel: START fans out to all analysts via Send
+            workflow.add_conditional_edges(
+                START, self._route_to_analysts
+            )
+        else:
+            # Sequential: chain analysts one after another
+            first_analyst = selected_analysts[0]
+            workflow.add_edge(
+                START, analyst_graph_analyst_node_name(first_analyst)
+            )
+
         for i, analyst_type in enumerate(selected_analysts):
             current_analyst = analyst_graph_analyst_node_name(analyst_type)
             current_tools = f"tools_{analyst_type}"
@@ -155,11 +176,17 @@ class GraphSetup:
             )
             workflow.add_edge(current_tools, current_analyst)
 
-            if i < len(selected_analysts) - 1:
-                next_analyst = analyst_graph_analyst_node_name(selected_analysts[i + 1])
-                workflow.add_edge(current_clear, next_analyst)
-            else:
+            if parallel:
+                # In parallel mode, all analysts converge at Dimensions Snapshot
                 workflow.add_edge(current_clear, "Dimensions Snapshot")
+            else:
+                if i < len(selected_analysts) - 1:
+                    next_analyst = analyst_graph_analyst_node_name(
+                        selected_analysts[i + 1]
+                    )
+                    workflow.add_edge(current_clear, next_analyst)
+                else:
+                    workflow.add_edge(current_clear, "Dimensions Snapshot")
 
         workflow.add_edge("Dimensions Snapshot", "Bull Researcher")
 

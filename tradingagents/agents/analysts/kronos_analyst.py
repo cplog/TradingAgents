@@ -1,5 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+from tradingagents.agents.skills import load_skill
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_indicators,
@@ -25,16 +26,7 @@ def create_kronos_analyst(llm):
         ]
 
         system_message = (
-            "You are the Kronos-style Scenario Analyst (tool-grounded, not a "
-            "trained forecaster). After pulling recent OHLCV via get_stock_data, "
-            "compute complementary indicators (e.g. rsi, macd, atr, boll) with "
-            "get_indicators to characterize volatility and momentum. Produce "
-            "3–5 distinct near-term price paths (base, bullish, bearish, "
-            "high-volatility) with explicit assumptions tied to numbers from "
-            "tools only—no fabricated levels or dates. Include a brief "
-            "disclaimer that paths are heuristic scenarios, not predictions. "
-            "End with one Markdown table listing scenario, trigger conditions "
-            "(from data), and invalidation signals."
+            load_skill("kronos_analyst")
             + get_language_instruction()
         )
 

@@ -621,6 +621,15 @@ export async function cancelJob(jobId: string): Promise<{ cancellation_requested
   return r.json();
 }
 
+export async function cancelAllActiveJobs(): Promise<{
+  cancellation_requested: number;
+  job_ids: string[];
+}> {
+  const r = await fetch(resolveApiUrl("/jobs/cancel-all"), { method: "POST" });
+  if (!r.ok) throw new Error(`cancelAllActiveJobs failed: ${r.status}`);
+  return r.json();
+}
+
 export async function recomputeDimensions(runId: string) {
   return apiJson<HistoryRunDetail>(
     `/api/history/runs/${encodeURIComponent(runId)}/recompute-dimensions`,

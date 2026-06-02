@@ -1,15 +1,23 @@
 # TradingAgents/graph/conditional_logic.py
 
+from typing import Optional
+
 from tradingagents.agents.utils.agent_states import AgentState
 
 
 class ConditionalLogic:
     """Handles conditional logic for determining graph flow."""
 
-    def __init__(self, max_debate_rounds=1, max_risk_discuss_rounds=1):
+    def __init__(
+        self,
+        max_debate_rounds=1,
+        max_risk_discuss_rounds=1,
+        convergence_checker=None,
+    ):
         """Initialize with configuration parameters."""
         self.max_debate_rounds = max_debate_rounds
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
+        self.convergence_checker = convergence_checker
 
     def should_continue_analyst(self, analyst_key: str, state: AgentState) -> str:
         """Route tool-loop vs message-clear for any analyst id (incl. snake_case)."""
@@ -26,8 +34,16 @@ class ConditionalLogic:
 
         if (
             state["investment_debate_state"]["count"] >= 2 * self.max_debate_rounds
-        ):  # 3 rounds of back-and-forth between 2 agents
+        ):  # hard ceiling
             return "Research Manager"
+
+        # Semantic termination: check convergence after full rounds
+        if (
+            self.convergence_checker
+            and self.convergence_checker.check_bull_bear(state)
+        ):
+            return "Research Manager"
+
         if state["investment_debate_state"]["current_response"].startswith("Bull"):
             return "Bear Researcher"
         return "Bull Researcher"
@@ -36,8 +52,16 @@ class ConditionalLogic:
         """Determine if risk analysis should continue."""
         if (
             state["risk_debate_state"]["count"] >= 3 * self.max_risk_discuss_rounds
-        ):  # 3 rounds of back-and-forth between 3 agents
+        ):  # hard ceiling
             return "Portfolio Manager"
+
+        # Semantic termination: check convergence after full rounds
+        if (
+            self.convergence_checker
+            and self.convergence_checker.check_risk(state)
+        ):
+            return "Portfolio Manager"
+
         if state["risk_debate_state"]["latest_speaker"].startswith("Aggressive"):
             return "Conservative Analyst"
         if state["risk_debate_state"]["latest_speaker"].startswith("Conservative"):

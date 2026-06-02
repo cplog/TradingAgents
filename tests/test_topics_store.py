@@ -10,7 +10,8 @@ from api.topics_store import TopicsStore, reset_topics_store_for_tests
 
 
 @pytest.fixture
-def store(tmp_path):
+def store(tmp_path, monkeypatch):
+    monkeypatch.setattr("api.history.d1_history_enabled", lambda: False)
     reset_state_store_for_tests()
     reset_topics_store_for_tests()
     state = LocalFileStateStore(tmp_path / "state.json")

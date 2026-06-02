@@ -158,6 +158,31 @@ def _compute_avg_dollar_volume_30d(closes, volumes) -> Optional[float]:
     return avg
 
 
+def _apply_non_payer_defaults(payload: dict, info: dict) -> None:
+    """If yfinance signals zero dividend activity, set yield/payout to 0.0.
+
+    yfinance returns None on these fields both for non-payers and for fetch
+    misses. We treat the company as a confirmed non-payer when trailing
+    dividend rate is exactly 0 (or both lastDividendValue and trailingAnnualDividendRate
+    are missing/zero AND the dividend-history fields agree).
+    """
+    if payload.get("dividend_yield") is not None and payload.get("payout_ratio") is not None:
+        return
+    trailing_rate = _maybe_float(info.get("trailingAnnualDividendRate"))
+    last_value = _maybe_float(info.get("lastDividendValue"))
+    five_year_avg = _maybe_float(info.get("fiveYearAvgDividendYield"))
+    is_non_payer = (
+        (trailing_rate is not None and trailing_rate == 0.0)
+        and (last_value is None or last_value == 0.0)
+        and (five_year_avg is None or five_year_avg == 0.0)
+    )
+    if is_non_payer:
+        if payload.get("dividend_yield") is None:
+            payload["dividend_yield"] = 0.0
+        if payload.get("payout_ratio") is None:
+            payload["payout_ratio"] = 0.0
+
+
 def _populate_price_history(payload: dict, history_df) -> None:
     """Fill price-history-derived fields on `payload` in place.
 
@@ -213,6 +238,13 @@ def extract_facts(ticker: str, as_of_date: str) -> Tuple[FactSnapshot, List[str]
             payload[field] = str(raw) if isinstance(raw, str) and raw else None
         else:
             payload[field] = _maybe_float(raw)
+
+    # Non-payer detection: yfinance returns None for dividend_yield / payout_ratio
+    # when a company simply doesn't pay a dividend. Distinguish that from a
+    # genuine fetch miss by cross-checking the trailing dividend rate / last
+    # dividend date / value. When confirmed, set to 0.0 so downstream factors
+    # don't get flagged as "missing".
+    _apply_non_payer_defaults(payload, info)
 
     # Price-history-derived fields (single tk.history() call above).
     _populate_price_history(payload, history_df)

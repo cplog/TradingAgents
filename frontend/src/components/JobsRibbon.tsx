@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { runsPath } from "../navigation/routes";
-import { fetchConfig, type JobStatus } from "../api";
+import { fetchConfig, cancelAllActiveJobs, type JobStatus } from "../api";
 import { useJobsTrackerContext } from "../contexts/JobsTrackerContext";
 import {
   formatElapsedSince,
@@ -92,6 +92,8 @@ export function JobsRibbon() {
   const [maxConcurrency, setMaxConcurrency] = useState<number | null>(null);
   const [toasts, setToasts] = useState<ToastSpec[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [stopPending, setStopPending] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -182,6 +184,19 @@ export function JobsRibbon() {
 
   const openJob = (jobId: string) => navigate(runsPath(jobId));
 
+  const handleStopAll = async () => {
+    if (active.length === 0 || stopPending) return;
+    setStopError(null);
+    setStopPending(true);
+    try {
+      await cancelAllActiveJobs();
+    } catch (err) {
+      setStopError(err instanceof Error ? err.message : "Could not stop jobs");
+    } finally {
+      setStopPending(false);
+    }
+  };
+
   let chipIndex = 0;
 
   if (active.length === 0 && toasts.length === 0 && !error) return null;
@@ -205,6 +220,17 @@ export function JobsRibbon() {
           </div>
         )}
         <span className="analysis-status-bar__summary">{statusSummary}</span>
+        {active.length > 0 && (
+          <button
+            type="button"
+            className="analysis-status-bar__stop-all"
+            onClick={() => void handleStopAll()}
+            disabled={stopPending}
+            title="Stop all queued and running analyses"
+          >
+            {stopPending ? "Stopping…" : "Stop all"}
+          </button>
+        )}
       </div>
 
       {active.length > 0 && (
@@ -286,6 +312,12 @@ export function JobsRibbon() {
       {error && active.length === 0 && (
         <div className="analysis-status-bar__error" role="alert">
           Status offline: {error}
+        </div>
+      )}
+
+      {stopError && (
+        <div className="analysis-status-bar__error" role="alert">
+          Stop all failed: {stopError}
         </div>
       )}
     </div>

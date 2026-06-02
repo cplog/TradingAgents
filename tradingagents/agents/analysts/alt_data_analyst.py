@@ -2,6 +2,7 @@
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+from tradingagents.agents.skills import load_skill
 from tradingagents.agents.utils.agent_utils import build_instrument_context, get_language_instruction
 
 
@@ -11,11 +12,7 @@ def create_alt_data_analyst(llm):
         overnight = (state.get("overnight_signal") or "").strip()
 
         system_message = (
-            "You are the Alternative Data Analyst (Phase 2 stub). "
-            "Similarweb traffic and GitHub commit APIs are not configured in this build. "
-            "State clearly that alt-data is unavailable and do not invent metrics. "
-            "If an overnight_signal JSON is present in context, note that Phase 2 would "
-            "use alt-data to boost conviction from ~75 toward 90+."
+            load_skill("alt_data_analyst")
             + get_language_instruction()
         )
 

@@ -1,5 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+from tradingagents.agents.skills import load_skill
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_global_news,
@@ -10,7 +11,6 @@ from tradingagents.agents.utils.agent_utils import (
     list_akshare_endpoints,
     get_macro_data,
 )
-from tradingagents.agents.utils.macro_data_tools import AKSHARE_MACRO_DISCOVERY_HINT
 
 
 def create_hot_money_analyst(llm):
@@ -30,17 +30,7 @@ def create_hot_money_analyst(llm):
         ]
 
         system_message = (
-            "You are the Hot Money Analyst. Focus on positioning, liquidity, "
-            "flows, and institutional activity relevant to the ticker: volume "
-            "regimes, abnormal turnover vs history, insider filing cadence, and "
-            "macro liquidity cues when they clearly tie to the sector or geography "
-            "of the instrument. Use get_stock_data first for price/volume history. "
-            "Use get_insider_transactions for recent insider trades. Use news tools "
-            "for flow-related headlines. Optional macro datasets: "
-            + AKSHARE_MACRO_DISCOVERY_HINT
-            + " "
-            "End with one Markdown table summarizing flow/positioning signals and gaps. "
-            "Do not invent figures or dates absent from tool outputs."
+            load_skill("hot_money_analyst")
             + get_language_instruction()
         )
 

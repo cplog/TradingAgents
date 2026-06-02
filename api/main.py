@@ -1157,6 +1157,15 @@ async def cancel_job(job_id: str) -> Dict[str, Any]:
     return {"cancellation_requested": True}
 
 
+@app.post("/jobs/cancel-all")
+@app.post("/api/jobs/cancel-all")
+async def cancel_all_jobs() -> Dict[str, Any]:
+    """Stop all queued and running analysis jobs (cooperative for in-flight graphs)."""
+    if _worker is None:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+    return await _worker.cancel_all_active()
+
+
 @app.post("/jobs/{job_id}/resume", response_model=ResumeJobResponse)
 @app.post("/api/jobs/{job_id}/resume", response_model=ResumeJobResponse)
 async def resume_job(job_id: str) -> ResumeJobResponse:

@@ -51,6 +51,7 @@ from tradingagents.agents.utils.overnight_tools import (
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
+from .convergence import ConvergenceChecker
 from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
@@ -76,7 +77,9 @@ class TradingAgentsGraph:
             callbacks: Optional list of callback handlers (e.g., for tracking LLM/tool stats)
         """
         self.debug = debug
-        self.config = config or DEFAULT_CONFIG
+        # Merge caller config over defaults so partial configs don't crash
+        # on missing required keys like data_cache_dir / results_dir.
+        self.config = {**DEFAULT_CONFIG, **(config or {})}
         self.callbacks = callbacks or []
 
         # Update the interface's config
@@ -115,9 +118,14 @@ class TradingAgentsGraph:
         self.tool_nodes = self._create_tool_nodes()
 
         # Initialize components
+        self.convergence_checker = ConvergenceChecker(
+            self.quick_thinking_llm,
+            enabled=self.config.get("semantic_debate_termination", False),
+        )
         self.conditional_logic = ConditionalLogic(
             max_debate_rounds=self.config["max_debate_rounds"],
             max_risk_discuss_rounds=self.config["max_risk_discuss_rounds"],
+            convergence_checker=self.convergence_checker,
         )
         self.graph_setup = GraphSetup(
             self.quick_thinking_llm,
