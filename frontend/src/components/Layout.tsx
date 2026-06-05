@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Link, NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
 import { useRouteTransitionMotion } from "../hooks/useRouteTransitionMotion";
@@ -165,7 +166,9 @@ export function Layout() {
         <main className="app-shell__main" id="main-content">
           <AnimatePresence mode="wait" initial={false}>
             <motion.div key={location.pathname} {...routeMotion} className="app-shell__page">
-              <Outlet />
+              <Suspense fallback={<div className="page-route-fallback" role="status">Loading…</div>}>
+                <Outlet />
+              </Suspense>
             </motion.div>
           </AnimatePresence>
         </main>

@@ -331,6 +331,14 @@ body::after {
   min-width: 0;
 }
 
+.page-route-fallback {
+  width: min(100%, var(--page-max-width));
+  margin-inline: auto;
+  padding: var(--spacing-24) 0;
+  color: var(--text-muted, #6b7280);
+  font-size: 0.95rem;
+}
+
 .page-header {
   display: flex;
   align-items: flex-start;

@@ -1,5 +1,4 @@
 import { useCallback, useMemo, type RefObject } from "react";
-import { toPng } from "html-to-image";
 import type { JobResultPayload, RunProvenance } from "../api";
 import type { DimensionsCommentary, StockDimensions } from "../dimensions-types";
 import { deriveDecisionSummary } from "../utils/decisionSummary";
@@ -145,6 +144,7 @@ export function useReportExport({
   const handleExportPng = useCallback(async () => {
     const node = pngTargetRef?.current;
     if (!node) return;
+    const { toPng } = await import("html-to-image");
     const dataUrl = await toPng(node, {
       pixelRatio: 2,
       cacheBust: true,

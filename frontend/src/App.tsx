@@ -1,20 +1,29 @@
+import { lazy, type ComponentType } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
-import { BatchPage } from "./pages/BatchPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { HistoryPage } from "./pages/HistoryPage";
-import { HistoryStatsPage } from "./pages/HistoryStatsPage";
-import { NewsPage } from "./pages/NewsPage";
-import { RunDetailPage } from "./pages/RunDetailPage";
-import { RunJobResultsPage } from "./pages/RunJobResultsPage";
-import { StockPage } from "./pages/StockPage";
-import { ScreenerPage } from "./pages/ScreenerPage";
-import { SectorIndustryPage } from "./pages/SectorIndustryPage";
-import { SystemPage } from "./pages/SystemPage";
-import { MonitorPage } from "./pages/MonitorPage";
-import { TopicsPage } from "./pages/TopicsPage";
-import { TopicDetailPage } from "./pages/TopicDetailPage";
-import { WatchlistPage } from "./pages/WatchlistPage";
+
+function lazyPage<M extends Record<string, ComponentType<unknown>>, K extends keyof M>(
+  factory: () => Promise<M>,
+  exportName: K,
+) {
+  return lazy(() => factory().then((m) => ({ default: m[exportName] })));
+}
+
+const BatchPage = lazyPage(() => import("./pages/BatchPage"), "BatchPage");
+const DashboardPage = lazyPage(() => import("./pages/DashboardPage"), "DashboardPage");
+const HistoryPage = lazyPage(() => import("./pages/HistoryPage"), "HistoryPage");
+const HistoryStatsPage = lazyPage(() => import("./pages/HistoryStatsPage"), "HistoryStatsPage");
+const MonitorPage = lazyPage(() => import("./pages/MonitorPage"), "MonitorPage");
+const NewsPage = lazyPage(() => import("./pages/NewsPage"), "NewsPage");
+const RunDetailPage = lazyPage(() => import("./pages/RunDetailPage"), "RunDetailPage");
+const RunJobResultsPage = lazyPage(() => import("./pages/RunJobResultsPage"), "RunJobResultsPage");
+const ScreenerPage = lazyPage(() => import("./pages/ScreenerPage"), "ScreenerPage");
+const SectorIndustryPage = lazyPage(() => import("./pages/SectorIndustryPage"), "SectorIndustryPage");
+const StockPage = lazyPage(() => import("./pages/StockPage"), "StockPage");
+const SystemPage = lazyPage(() => import("./pages/SystemPage"), "SystemPage");
+const TopicDetailPage = lazyPage(() => import("./pages/TopicDetailPage"), "TopicDetailPage");
+const TopicsPage = lazyPage(() => import("./pages/TopicsPage"), "TopicsPage");
+const WatchlistPage = lazyPage(() => import("./pages/WatchlistPage"), "WatchlistPage");
 
 export default function App() {
   return (
