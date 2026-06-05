@@ -24,8 +24,7 @@ describe("HistoryPage", () => {
     vi.spyOn(api, "fetchJobs").mockResolvedValue([]);
   });
 
-  // Default view is cards; helper to flip into table mode so existing
-  // table-only assertions still work.
+  // Default view is table; helpers to flip view modes in tests.
   async function switchToTable(el: HTMLElement) {
     const tableBtn = [...el.querySelectorAll("button")].find(
       (b) => b.textContent === "table",
@@ -33,6 +32,17 @@ describe("HistoryPage", () => {
     if (!tableBtn) return;
     await act(async () => {
       (tableBtn as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+  }
+
+  async function switchToCards(el: HTMLElement) {
+    const cardsBtn = [...el.querySelectorAll("button")].find(
+      (b) => b.textContent === "cards",
+    );
+    if (!cardsBtn) return;
+    await act(async () => {
+      (cardsBtn as HTMLButtonElement).click();
       await Promise.resolve();
     });
   }
@@ -316,7 +326,9 @@ describe("HistoryPage", () => {
       await Promise.resolve();
     });
 
-    // Two ticker cards rendered (default view = cards)
+    await switchToCards(el);
+
+    // Two ticker cards rendered
     const cards = el.querySelectorAll("[data-ticker]");
     expect(cards.length).toBe(2);
     const tickers = [...cards].map((c) => c.getAttribute("data-ticker")).sort();
@@ -398,6 +410,8 @@ describe("HistoryPage", () => {
     await act(async () => {
       await Promise.resolve();
     });
+
+    await switchToCards(el);
 
     // Tick both ticker checkboxes.
     const checkboxes = [...el.querySelectorAll("[data-ticker] input[type=checkbox]")];

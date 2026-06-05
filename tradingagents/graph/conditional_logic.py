@@ -21,9 +21,19 @@ class ConditionalLogic:
 
     def should_continue_analyst(self, analyst_key: str, state: AgentState) -> str:
         """Route tool-loop vs message-clear for any analyst id (incl. snake_case)."""
+        from tradingagents.agents.utils.agent_utils import (
+            messages_for_analyst_branch,
+            _parallel_analysts_enabled,
+        )
         from tradingagents.agents.utils.analyst_labels import analyst_title_words
 
         messages = state["messages"]
+        if _parallel_analysts_enabled():
+            messages = messages_for_analyst_branch(
+                messages,
+                analyst_key,
+                allow_incomplete_final_assistant=True,
+            ) or messages
         last_message = messages[-1]
         if last_message.tool_calls:
             return f"tools_{analyst_key}"

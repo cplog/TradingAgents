@@ -30,6 +30,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
     get_news,
+    sanitize_messages_for_tool_api,
 )
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
@@ -112,7 +113,7 @@ def create_sentiment_analyst(llm):
         # No bind_tools — the data is already in the prompt; a single LLM
         # call produces the report directly.
         chain = prompt | llm
-        result = chain.invoke(state["messages"])
+        result = chain.invoke(sanitize_messages_for_tool_api(state["messages"]))
 
         return {
             "messages": [result],

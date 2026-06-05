@@ -300,6 +300,13 @@ class OpenAIClient(BaseLLMClient):
         elif self.base_url:
             llm_kwargs["base_url"] = self.base_url
 
+        # Ollama (especially behind Cloudflare) needs a client-side timeout
+        # that stays under the proxy's hard ceiling (Cloudflare = 120 s).
+        # 90 s gives headroom for network jitter while still triggering
+        # LangChain retries before the connection is dropped.
+        if self.provider in ("ollama", "ollama-local", "ollama-remote"):
+            llm_kwargs.setdefault("timeout", 90)
+
         # Forward user-provided kwargs
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:

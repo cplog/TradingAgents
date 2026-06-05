@@ -25,6 +25,11 @@ from tradingagents.agents import (
     create_sentiment_analyst,
     create_trader,
 )
+from tradingagents.agents.utils.agent_utils import (
+    create_msg_passthrough,
+    create_scoped_tool_node,
+    wrap_analyst_node,
+)
 from tradingagents.agents.dimensions_snapshot import create_dimensions_snapshot_node
 from tradingagents.agents.utils.agent_states import AgentState
 from tradingagents.agents.utils.analyst_labels import (
@@ -75,6 +80,16 @@ class GraphSetup:
             for aid in self.selected_analysts
         ]
 
+    def _maybe_wrap_analyst(self, analyst_id: str, node: Any) -> Any:
+        if self.config.get("parallel_analysts", False):
+            return wrap_analyst_node(analyst_id, node)
+        return node
+
+    def _maybe_scope_tool_node(self, analyst_id: str, tool_node: ToolNode) -> Any:
+        if self.config.get("parallel_analysts", False):
+            return create_scoped_tool_node(analyst_id, tool_node)
+        return tool_node
+
     def setup_graph(
         self, selected_analysts=["market", "social", "news", "fundamentals"]
     ):
@@ -100,13 +115,20 @@ class GraphSetup:
         analyst_nodes: Dict[str, Any] = {}
         delete_nodes: Dict[str, Any] = {}
         tool_nodes_map: Dict[str, ToolNode] = {}
+        parallel = self.config.get("parallel_analysts", False)
 
         for analyst_id in selected_analysts:
-            analyst_nodes[analyst_id] = ANALYST_NODE_FACTORIES[analyst_id](
-                self.quick_thinking_llm
+            analyst_nodes[analyst_id] = self._maybe_wrap_analyst(
+                analyst_id,
+                ANALYST_NODE_FACTORIES[analyst_id](self.quick_thinking_llm),
             )
-            delete_nodes[analyst_id] = create_msg_delete()
-            tool_nodes_map[analyst_id] = self.tool_nodes[analyst_id]
+            delete_nodes[analyst_id] = (
+                create_msg_passthrough() if parallel else create_msg_delete()
+            )
+            tool_nodes_map[analyst_id] = self._maybe_scope_tool_node(
+                analyst_id,
+                self.tool_nodes[analyst_id],
+            )
 
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
@@ -123,6 +145,7 @@ class GraphSetup:
         dimensions_snapshot_node = create_dimensions_snapshot_node(
             self.quick_thinking_llm, self.config
         )
+        analyst_converge_reset_node = create_msg_delete()
 
         # Create workflow
         workflow = StateGraph(AgentState)
@@ -146,9 +169,10 @@ class GraphSetup:
         workflow.add_node("Conservative Analyst", conservative_analyst)
         workflow.add_node("Portfolio Manager", portfolio_manager_node)
         workflow.add_node("Dimensions Snapshot", dimensions_snapshot_node)
+        if self.config.get("parallel_analysts", False):
+            workflow.add_node("Analyst Converge Reset", analyst_converge_reset_node)
 
         # Analyst wiring: sequential (default) or parallel via Send
-        parallel = self.config.get("parallel_analysts", False)
 
         if parallel:
             # Parallel: START fans out to all analysts via Send
@@ -177,8 +201,10 @@ class GraphSetup:
             workflow.add_edge(current_tools, current_analyst)
 
             if parallel:
-                # In parallel mode, all analysts converge at Dimensions Snapshot
-                workflow.add_edge(current_clear, "Dimensions Snapshot")
+                # Parallel branches are joined after this loop. Adding an edge
+                # from each branch directly would invoke downstream debate once
+                # per analyst in the same step.
+                pass
             else:
                 if i < len(selected_analysts) - 1:
                     next_analyst = analyst_graph_analyst_node_name(
@@ -187,6 +213,13 @@ class GraphSetup:
                     workflow.add_edge(current_clear, next_analyst)
                 else:
                     workflow.add_edge(current_clear, "Dimensions Snapshot")
+
+        if parallel:
+            workflow.add_edge(
+                [analyst_msg_clear_node_name(aid) for aid in selected_analysts],
+                "Analyst Converge Reset",
+            )
+            workflow.add_edge("Analyst Converge Reset", "Dimensions Snapshot")
 
         workflow.add_edge("Dimensions Snapshot", "Bull Researcher")
 

@@ -66,7 +66,7 @@ export function ReportExportBar({
           className="ui-btn-secondary"
           onClick={onPrint}
           disabled={disabled}
-          title="Open the browser print dialog. Choose Save as PDF for a printable report."
+          title="Opens a print-ready report tab (no app sidebar). Choose Save as PDF in the dialog."
         >
           Print / PDF
         </button>

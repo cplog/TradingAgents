@@ -98,7 +98,7 @@ export function HistoryPage() {
   const compareResultsRef = useRef<HTMLElement | null>(null);
 
   const [viewMode, setViewMode] = useState<"cards" | "table">(
-    () => (searchParams.get("view") === "table" ? "table" : "cards"),
+    () => (searchParams.get("view") === "cards" ? "cards" : "table"),
   );
   const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
   const [rerunPendingTickers, setRerunPendingTickers] = useState<Set<string>>(new Set());
@@ -243,7 +243,7 @@ export function HistoryPage() {
     setOrDel("live", includeLiveJobs ? null : "0");
     setOrDel("overnight", overnightOnly ? "1" : null);
     setOrDel("failed", failedOnly ? "1" : null);
-    setOrDel("view", viewMode === "cards" ? null : viewMode);
+    setOrDel("view", viewMode === "table" ? null : viewMode);
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true });
     }
@@ -296,10 +296,6 @@ export function HistoryPage() {
     Boolean(runIdA.trim()) &&
     Boolean(runIdB.trim()) &&
     runIdA.trim() !== runIdB.trim();
-
-  function openRunRow(row: HistoryTableRow) {
-    openRun(row.job_id);
-  }
 
   const liveCounts = useMemo(() => {
     let running = 0;
@@ -673,119 +669,164 @@ export function HistoryPage() {
 
   const runA = runSelectOptions.find((o) => o.id === runIdA.trim());
   const runB = runSelectOptions.find((o) => o.id === runIdB.trim());
+  const compareDockOpen =
+    runSelectOptions.length >= 2 ||
+    Boolean(runIdA.trim() || runIdB.trim() || compare || compareError);
+  const hasBulkSelection =
+    viewMode === "cards" ? selectedTickers.size > 0 : selectedRunIds.size > 0;
+
+  function clearCompareSelection() {
+    setRunIdA("");
+    setRunIdB("");
+    setCompare(null);
+    setCompareError(null);
+  }
+
+  const sortOptions: { value: HistorySortKey; label: string }[] = [
+    { value: "processing_desc", label: "Newest first" },
+    { value: "processing_asc", label: "Oldest first" },
+    { value: "status_desc", label: "Active first" },
+    { value: "status_asc", label: "Completed first" },
+    { value: "trade_date_desc", label: "Trade date ↓" },
+    { value: "trade_date_asc", label: "Trade date ↑" },
+    { value: "ticker_asc", label: "Ticker A→Z" },
+    { value: "ticker_desc", label: "Ticker Z→A" },
+    { value: "rating_desc", label: "Rating bullish" },
+    { value: "rating_asc", label: "Rating bearish" },
+    { value: "confidence_desc", label: "Confidence high" },
+    { value: "confidence_asc", label: "Confidence low" },
+  ];
 
   return (
     <PageFrame className="history-page" wide>
       <PageHeader
-        title="Runs & compare"
-        description="Completed runs and live jobs in one list. Times in Hong Kong (HKT). Click column headers to sort; use A/B on a row or the compare panel below."
+        title="Runs"
+        description="Past analyses and live jobs. Times in HKT."
         meta={
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--spacing-16)", flexWrap: "wrap" }}>
+          <div className="history-page__header-meta">
             <AppBreadcrumbs items={[{ label: "Runs" }]} />
-            <Link to={paths.historyStats} className="ui-link" style={{ fontSize: "var(--text-caption)" }}>
-              View rating statistics →
+            <Link to={paths.historyStats} className="ui-link history-page__stats-link">
+              Rating statistics
             </Link>
           </div>
         }
       />
 
-      <Panel title="Filters">
-        <div className="history-page__filters">
-          <label className="history-page__field">
-            <span className="history-page__field-label">Ticker</span>
-            <input
-              value={tickerFilter}
-              onChange={(e) => setTickerFilter(e.target.value)}
-              placeholder="e.g. AAPL"
-            />
-          </label>
-          <label className="history-page__field">
-            <span className="history-page__field-label">From</span>
-            <input
-              type="text"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              placeholder="YYYY-MM-DD"
-              className="mono"
-            />
-          </label>
-          <label className="history-page__field">
-            <span className="history-page__field-label">To</span>
-            <input
-              type="text"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              placeholder="YYYY-MM-DD"
-              className="mono"
-            />
-          </label>
-          <label className="history-page__field history-page__field--wide">
-            <span className="history-page__field-label">Sort preset</span>
-            <select
-              aria-label="Sort history runs"
-              value={sortKey}
-              onChange={(e) => setSortKey(e.target.value as HistorySortKey)}
+      <Panel>
+        <div className="history-page__control-bar">
+          <div className="history-page__filters">
+            <label className="history-page__field">
+              <span className="history-page__field-label">Ticker</span>
+              <input
+                value={tickerFilter}
+                onChange={(e) => setTickerFilter(e.target.value)}
+                placeholder="AAPL"
+              />
+            </label>
+            <label className="history-page__field">
+              <span className="history-page__field-label">From</span>
+              <input
+                type="text"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                placeholder="YYYY-MM-DD"
+                className="mono"
+              />
+            </label>
+            <label className="history-page__field">
+              <span className="history-page__field-label">To</span>
+              <input
+                type="text"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                placeholder="YYYY-MM-DD"
+                className="mono"
+              />
+            </label>
+            <label className="history-page__field history-page__field--wide">
+              <span className="history-page__field-label">Sort</span>
+              <select
+                aria-label="Sort history runs"
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as HistorySortKey)}
+              >
+                {sortOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div
+              className="history-page__view-toggle"
+              role="tablist"
+              aria-label="Runs view mode"
             >
-              <option value="processing_desc">Processing (newest)</option>
-              <option value="processing_asc">Processing (oldest)</option>
-              <option value="status_desc">Status (active first)</option>
-              <option value="status_asc">Status (completed first)</option>
-              <option value="trade_date_desc">Trade date (newest)</option>
-              <option value="trade_date_asc">Trade date (oldest)</option>
-              <option value="ticker_asc">Ticker (A→Z)</option>
-              <option value="ticker_desc">Ticker (Z→A)</option>
-              <option value="rating_desc">Rating (bullish first)</option>
-              <option value="rating_asc">Rating (bearish first)</option>
-              <option value="confidence_desc">Confidence (high)</option>
-              <option value="confidence_asc">Confidence (low)</option>
-            </select>
-          </label>
-          <label className="history-page__toggle">
-            <input
-              type="checkbox"
-              checked={includeLiveJobs}
-              onChange={(e) => setIncludeLiveJobs(e.target.checked)}
-            />
-            Include in-progress jobs
-          </label>
-          <label className="history-page__toggle">
-            <input
-              type="checkbox"
-              checked={overnightOnly}
-              onChange={(e) => setOvernightOnly(e.target.checked)}
-            />
-            Overnight / scan triggers only
-          </label>
-          <label className="history-page__toggle">
-            <input
-              type="checkbox"
-              checked={failedOnly}
-              onChange={(e) => setFailedOnly(e.target.checked)}
-            />
-            Failed only
-          </label>
-          <button
-            type="button"
-            className="ui-btn-primary"
-            onClick={() => void refresh()}
-            disabled={loading}
-          >
-            {loading ? "Loading…" : "Apply"}
-          </button>
+              {(["table", "cards"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="tab"
+                  aria-selected={viewMode === m}
+                  onClick={() => setViewMode(m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="ui-btn-ghost history-page__refresh"
+              onClick={() => void refresh()}
+              disabled={loading}
+              title="Refresh list"
+              aria-label="Refresh runs"
+            >
+              {loading ? "…" : "↻"}
+            </button>
+          </div>
+
+          <details className="history-page__advanced">
+            <summary>More filters</summary>
+            <div className="history-page__advanced-body">
+              <label className="history-page__toggle">
+                <input
+                  type="checkbox"
+                  checked={includeLiveJobs}
+                  onChange={(e) => setIncludeLiveJobs(e.target.checked)}
+                />
+                Include in-progress jobs
+              </label>
+              <label className="history-page__toggle">
+                <input
+                  type="checkbox"
+                  checked={overnightOnly}
+                  onChange={(e) => setOvernightOnly(e.target.checked)}
+                />
+                Overnight / scan triggers only
+              </label>
+              <label className="history-page__toggle">
+                <input
+                  type="checkbox"
+                  checked={failedOnly}
+                  onChange={(e) => setFailedOnly(e.target.checked)}
+                />
+                Failed only
+              </label>
+            </div>
+          </details>
         </div>
+
         {error && <p className="panel__error">{error}</p>}
         {deleteError && <p className="panel__error">{deleteError}</p>}
-      </Panel>
 
-      <Panel>
         <div className="history-page__toolbar">
           <div className="history-page__toolbar-title">
-            <h2 className="panel__title" style={{ margin: 0 }}>
-              Recent runs ({visibleRuns.length}
+            <h2 className="panel__title history-page__list-title">
+              {visibleRuns.length} run{visibleRuns.length === 1 ? "" : "s"}
               {failedOnly && sortedRuns.length !== visibleRuns.length
-                ? ` of ${sortedRuns.length}`
+                ? ` · ${sortedRuns.length} total`
                 : ""}
-              )
             </h2>
             {(liveCounts.running > 0 || liveCounts.queued > 0) && (
               <div className="history-page__count-badges">
@@ -802,44 +843,33 @@ export function HistoryPage() {
               </div>
             )}
           </div>
-          <div
-            className="history-page__view-toggle"
-            role="tablist"
-            aria-label="Recent runs view mode"
-          >
-            {(["cards", "table"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                role="tab"
-                aria-selected={viewMode === m}
-                onClick={() => setViewMode(m)}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-          {sortedRuns.length > 0 && (
+          {failedCount > 0 && (
+            <button
+              type="button"
+              className="ui-btn-secondary"
+              disabled={bulkRetrySubmitting || bulkRerunSubmitting}
+              onClick={() => void onRetryAllFailed()}
+            >
+              {bulkRetrySubmitting ? "Retrying…" : `Retry failed (${failedCount})`}
+            </button>
+          )}
+        </div>
+
+        {hasBulkSelection && (
+          <div className="history-page__selection-bar" role="toolbar" aria-label="Bulk actions">
+            <span className="history-page__selection-count">
+              {viewMode === "cards"
+                ? `${selectedTickers.size} ticker${selectedTickers.size === 1 ? "" : "s"}`
+                : `${selectedRunIds.size} run${selectedRunIds.size === 1 ? "" : "s"}`}{" "}
+              selected
+            </span>
             <div className="history-page__bulk-actions">
-              {failedCount > 0 && (
-                <button
-                  type="button"
-                  className="ui-btn-secondary"
-                  disabled={bulkRetrySubmitting || bulkRerunSubmitting}
-                  onClick={() => void onRetryAllFailed()}
-                >
-                  {bulkRetrySubmitting
-                    ? "Retrying…"
-                    : `Retry failed (${failedCount})`}
-                </button>
-              )}
               {viewMode === "cards" && (
                 <button
                   type="button"
                   className="ui-btn-primary"
                   disabled={bulkRerunSubmitting || selectedTickers.size === 0}
                   onClick={() => void onBulkRerunSelected()}
-                  title="Batch re-run latest completed run per selected ticker"
                 >
                   {bulkRerunSubmitting
                     ? "Submitting…"
@@ -850,15 +880,12 @@ export function HistoryPage() {
                 <button
                   type="button"
                   className="ui-btn-primary"
-                  disabled={
-                    bulkRerunSubmitting || selectedCompletedRunIds.length === 0
-                  }
+                  disabled={bulkRerunSubmitting || selectedCompletedRunIds.length === 0}
                   onClick={() => onBulkRerunSelectedRuns()}
-                  title="Re-run each selected completed run with its stored date and analysts"
                 >
                   {bulkRerunSubmitting
                     ? "Submitting…"
-                    : `Re-run runs (${selectedCompletedRunIds.length})`}
+                    : `Re-run (${selectedCompletedRunIds.length})`}
                 </button>
               )}
               <button
@@ -878,24 +905,18 @@ export function HistoryPage() {
                 Delete all matching
               </button>
             </div>
-          )}
-        </div>
-
-        <p className="reading-callout">
-          Compare ratings only when <strong>Model</strong> and <strong>Sources</strong> match.
-        </p>
+          </div>
+        )}
 
         <details className="history-page__guide">
-          <summary>How to read this table</summary>
+          <summary>Column guide</summary>
           <div className="history-page__guide-body">
             <p>
               <strong>Confidence</strong> follows the final rating tier, not statistical certainty.
-              <strong> Factors</strong> use each run&apos;s persisted snapshot when available; otherwise a live facts-only preview (labeled <em>live</em>).
+              <strong> Factors</strong> use each run&apos;s persisted snapshot when available; otherwise a live preview (labeled <em>live</em>).
             </p>
             <p>
-              Peer comparison is market-local first, then sector-wide, then a legacy global bucket.
-              Warm caches with{" "}
-              <code>scripts/warm_peer_cache.py global|local|sector</code>.
+              Compare ratings only when <strong>Model</strong> and <strong>Sources</strong> match.
             </p>
           </div>
         </details>
@@ -908,9 +929,18 @@ export function HistoryPage() {
         )}
 
         {visibleRuns.length === 0 && !loading ? (
-          <p className="panel__empty">
-            {failedOnly ? "No failed runs in the current filter." : "No runs yet. Start an analysis from the dashboard."}
-          </p>
+          <div className="history-page__empty">
+            <p className="panel__empty">
+              {failedOnly
+                ? "No failed runs match these filters."
+                : "No runs yet."}
+            </p>
+            {!failedOnly && (
+              <Link to={paths.dashboard} className="ui-btn-primary history-page__empty-cta">
+                Start analysis
+              </Link>
+            )}
+          </div>
         ) : viewMode === "cards" ? (
           <HistoryTickerCards
             rows={visibleRuns}
@@ -952,159 +982,130 @@ export function HistoryPage() {
             }
           />
         )}
-      </Panel>
 
-      <Panel
-        title="Compare two runs"
-        subtitle="Pick A/B on any completed row, or use the dropdowns. Model and sources should match for a fair read."
-      >
-        <div className="history-page__compare-picks">
-          <span>Side A</span>
-          <span
-            className={`history-page__compare-chip${runA ? " history-page__compare-chip--filled" : ""}`}
-          >
-            {runA?.label ?? "Not selected"}
-          </span>
-          <span>Side B</span>
-          <span
-            className={`history-page__compare-chip${runB ? " history-page__compare-chip--filled" : ""}`}
-          >
-            {runB?.label ?? "Not selected"}
-          </span>
-        </div>
-        <div style={{ display: "grid", gap: "var(--spacing-16)", maxWidth: 720 }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-8)" }}>
-            <span style={{ fontWeight: 600, fontSize: "var(--text-caption)", color: "var(--color-slate-text)" }}>
-              Run A
-            </span>
-            <select
-              aria-label="Compare run A"
-              value={runIdA}
-              onChange={(e) => setRunIdA(e.target.value)}
-              style={{ padding: "var(--spacing-12)", borderRadius: "var(--radius-inputs)", border: "1px solid var(--color-stone-border)" }}
-            >
-              <option value="">Select…</option>
-              {runSelectOptions.map((o) => (
-                <option key={`a-${o.id}`} value={o.id}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-8)" }}>
-            <span style={{ fontWeight: 600, fontSize: "var(--text-caption)", color: "var(--color-slate-text)" }}>
-              Run B
-            </span>
-            <select
-              aria-label="Compare run B"
-              value={runIdB}
-              onChange={(e) => setRunIdB(e.target.value)}
-              style={{ padding: "var(--spacing-12)", borderRadius: "var(--radius-inputs)", border: "1px solid var(--color-stone-border)" }}
-            >
-              <option value="">Select…</option>
-              {runSelectOptions.map((o) => (
-                <option key={`b-${o.id}`} value={o.id}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-12)", alignItems: "center" }}>
-            <button
-              type="button"
-              disabled={compareLoading || !compareReady}
-              onClick={() => void onCompare()}
-              title={
-                !compareReady
-                  ? "Select two different runs in the dropdowns or with A/B in the table"
-                  : "Load side-by-side comparison"
-              }
-              style={{
-                padding: "12px 16px",
-                borderRadius: "var(--radius-buttons)",
-                border: "none",
-                background:
-                  compareLoading || !compareReady ? "var(--color-platinum-outline)" : "var(--color-chartwell-blue)",
-                color: "white",
-                fontWeight: 600,
-                cursor: compareLoading || !compareReady ? "not-allowed" : "pointer",
-              }}
-            >
-              {compareLoading ? "Comparing…" : "Compare"}
-            </button>
-            <button
-              type="button"
-              disabled={compareLoading || !runIdA.trim() || !runIdB.trim()}
-              title="Swap which run is shown on the left vs right"
-              onClick={() => {
-                const ta = runIdA;
-                setRunIdA(runIdB);
-                setRunIdB(ta);
-                setCompare(null);
-              }}
-              style={{
-                padding: "10px 14px",
-                borderRadius: "var(--radius-buttons)",
-                border: "1px solid var(--color-stone-border)",
-                background: "var(--surface-cloud-white)",
-                fontWeight: 600,
-                cursor: compareLoading || !runIdA.trim() || !runIdB.trim() ? "not-allowed" : "pointer",
-              }}
-            >
-              Swap A ↔ B
-            </button>
+        {compareDockOpen && (
+          <div className="history-page__compare-dock" aria-label="Compare runs">
+            <div className="history-page__compare-dock-head">
+              <span className="history-page__compare-dock-label">Compare</span>
+              <span
+                className={`history-page__compare-chip${runA ? " history-page__compare-chip--filled" : ""}`}
+                title={runA?.label}
+              >
+                {runA ? `${runA.label.split(" · ")[0]} · ${runA.label.split(" · ")[1] ?? runA.id}` : "Pick A"}
+              </span>
+              <span className="history-page__compare-vs">vs</span>
+              <span
+                className={`history-page__compare-chip${runB ? " history-page__compare-chip--filled" : ""}`}
+                title={runB?.label}
+              >
+                {runB ? `${runB.label.split(" · ")[0]} · ${runB.label.split(" · ")[1] ?? runB.id}` : "Pick B"}
+              </span>
+            </div>
+            <div className="history-page__compare-dock-controls">
+              <label className="history-page__compare-select">
+                <select
+                  aria-label="Compare run A"
+                  value={runIdA}
+                  onChange={(e) => {
+                    setRunIdA(e.target.value);
+                    setCompareError(null);
+                  }}
+                >
+                  <option value="">Run A…</option>
+                  {runSelectOptions.map((o) => (
+                    <option key={`a-${o.id}`} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="history-page__compare-select">
+                <select
+                  aria-label="Compare run B"
+                  value={runIdB}
+                  onChange={(e) => {
+                    setRunIdB(e.target.value);
+                    setCompareError(null);
+                  }}
+                >
+                  <option value="">Run B…</option>
+                  {runSelectOptions.map((o) => (
+                    <option key={`b-${o.id}`} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="ui-btn-primary"
+                disabled={compareLoading || !compareReady}
+                onClick={() => void onCompare()}
+                title={
+                  !compareReady
+                    ? "Select two different completed runs"
+                    : "Load side-by-side comparison"
+                }
+              >
+                {compareLoading ? "Comparing…" : "Compare"}
+              </button>
+              <button
+                type="button"
+                className="ui-btn-secondary"
+                disabled={compareLoading || !runIdA.trim() || !runIdB.trim()}
+                onClick={() => {
+                  const ta = runIdA;
+                  setRunIdA(runIdB);
+                  setRunIdB(ta);
+                  setCompare(null);
+                }}
+              >
+                Swap
+              </button>
+              <button
+                type="button"
+                className="ui-btn-ghost"
+                onClick={clearCompareSelection}
+              >
+                Clear
+              </button>
+            </div>
+            <p className="history-page__compare-hint">
+              {viewMode === "table" ? (
+                <>
+                  Click <strong>A</strong>/<strong>B</strong> on a row, or use the dropdowns.
+                </>
+              ) : (
+                <>Switch to table view for row shortcuts, or use the dropdowns.</>
+              )}{" "}
+              Match model and sources for a fair read.
+            </p>
+            {compareError && <p className="panel__error">{compareError}</p>}
           </div>
-        </div>
-        {compareError && (
-          <div style={{ fontSize: "var(--text-caption)", color: "#991b1b" }}>{compareError}</div>
-        )}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "var(--text-caption)" }}>
-          <input
-            type="checkbox"
-            checked={showFullPm}
-            onChange={(e) => setShowFullPm(e.target.checked)}
-          />
-          Show full Portfolio Manager section (markdown)
-        </label>
-
-        {runSelectOptions.length >= 2 && !compareReady && (
-          <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
-            Pick <strong>two different</strong> runs — use table <strong>A</strong>/<strong>B</strong> or the dropdowns —
-            then press <strong>Compare</strong>.
-          </p>
         )}
 
         {compare && (
-          <div
-            ref={compareResultsRef}
-            style={{
-              display: "grid",
-              gap: "var(--spacing-24)",
-              paddingTop: "var(--spacing-8)",
-              borderTop: "1px solid var(--color-stone-border)",
-            }}
-          >
-            <header style={{ display: "grid", gap: "var(--spacing-8)" }}>
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: "var(--text-caption)",
-                  fontWeight: 600,
-                  letterSpacing: "0.02em",
-                  textTransform: "uppercase",
-                  color: "var(--color-steel-gray)",
-                }}
-              >
-                Comparison
-              </p>
-              <h3 style={{ margin: 0, fontSize: "var(--text-heading-sm)", fontWeight: 600, color: "var(--color-slate-text)" }}>
-                Side-by-side · A left · B right
-              </h3>
-              <p style={{ margin: 0, fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", maxWidth: "62ch" }}>
-                Radar facets use a live facts-only fetch by ticker when available, not necessarily each run&apos;s as-of
-                date. Read PM and trader excerpts in context.
-              </p>
+          <div ref={compareResultsRef} className="history-page__compare-results">
+            <header className="history-page__compare-results-head">
+              <div>
+                <p className="history-page__compare-results-kicker">Comparison</p>
+                <h3 className="history-page__compare-results-title">
+                  Side-by-side · A left · B right
+                </h3>
+              </div>
+              <label className="history-page__compare-pm-toggle">
+                <input
+                  type="checkbox"
+                  checked={showFullPm}
+                  onChange={(e) => setShowFullPm(e.target.checked)}
+                />
+                Full PM markdown
+              </label>
             </header>
+            <p className="history-page__compare-results-note">
+              Radar facets use a live facts-only fetch by ticker when available, not necessarily each run&apos;s as-of
+              date.
+            </p>
 
             <div
               style={{

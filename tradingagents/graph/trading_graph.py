@@ -184,6 +184,13 @@ class TradingAgentsGraph:
             except (TypeError, ValueError):
                 pass
 
+        timeout = self.config.get("llm_timeout_seconds")
+        if timeout is not None:
+            try:
+                kwargs["timeout"] = float(timeout)
+            except (TypeError, ValueError):
+                pass
+
         return kwargs
 
     def _create_tool_nodes(self) -> Dict[str, ToolNode]:

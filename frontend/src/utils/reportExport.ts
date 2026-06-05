@@ -1,258 +1,351 @@
 /**
  * Build a self-contained HTML export of an agent report.
  *
- * The export bakes the rendered report DOM (h1..h6, p, table, ul/ol, etc.)
- * into a single HTML document with inlined CSS so it can be opened offline,
- * mailed, or printed without depending on the app's stylesheet bundle.
- *
- * We capture from live DOM (via `reportBodyHtml`) rather than re-running
- * markdown rendering server-side. That avoids adding `marked` / `remark` as
- * runtime deps and guarantees the exported HTML matches what the user just
- * read on screen, including the section ids and custom `markdown-table-wrap`
- * components.
+ * Captures rendered report DOM plus structured metadata (dimensions, provenance,
+ * analyst coverage) so the export stays complete as the product adds features.
  */
 
+import type { JobResultPayload, RunProvenance } from "../api";
+import type { DimensionsCommentary, StockDimensions } from "../dimensions-types";
 import type { JobLiveContext } from "./livePlanContext";
-import { formatLivePrice, isInvalidatedStatus } from "./livePlanContext";
+import {
+  escapeExportHtml,
+  extractReportSectionsFromHtml,
+  type ReportSectionLink,
+  renderAnalystCoverageHtml,
+  renderDecisionBriefHtml,
+  renderDimensionsHtml,
+  renderProvenanceHtml,
+  type ConfidenceExportBlock,
+} from "./reportExportBlocks";
 
 export type StandaloneReportInput = {
   ticker: string;
   rating?: string | null;
   date?: string | null;
   confidencePct?: number | null;
-  /** Plain-English rating line (e.g. "Highest conviction bullish view"). */
   ratingPlain?: string | null;
-  /** Posture line (e.g. "Open or add a full position when risk limits allow"). */
   ratingPosture?: string | null;
-  /** Desk instruction derived from rating tier. */
   actionNow?: string | null;
-  /** PM executive summary paragraph. */
   executiveSummary?: string | null;
-  /** Entry / target / stop / sizing grid rows. */
+  livePracticalNote?: string | null;
   levelRows?: ReadonlyArray<readonly [label: string, value: string]>;
   liveContext?: JobLiveContext | null;
   whyNow: ReadonlyArray<string>;
   invalidation?: string | null;
   /** Outer HTML of the rendered `.dashboard-report-markdown` element. */
   reportBodyHtml: string;
-  /** Visual export template for standalone HTML. */
+  /** Optional visual evidence block (OHLCV / Kronos SVGs). */
+  supplementaryHtml?: string;
+  /** Explicit section list for navigation (preferred over DOM scrape). */
+  reportSections?: ReportSectionLink[];
+  provenance?: RunProvenance | null;
+  dimensions?: StockDimensions | null;
+  dimensionsCommentary?: DimensionsCommentary | null;
+  analystCoverage?: JobResultPayload["analyst_coverage"];
+  confidenceDetail?: ConfidenceExportBlock | null;
   template?: "classic" | "weekly_report";
-  /** ISO timestamp; defaults to `new Date().toISOString()`. */
   generatedAt?: string;
 };
 
-const HTML_ESCAPE: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => HTML_ESCAPE[c] ?? c);
-}
-
-function stripTags(s: string): string {
-  return s.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-}
-
-type ReportSectionLink = { id: string; label: string };
-
-function extractReportSections(reportBodyHtml: string): ReportSectionLink[] {
-  const sections: ReportSectionLink[] = [];
-  const seen = new Set<string>();
-  const re = /<h2\b([^>]*)>([\s\S]*?)<\/h2>/gi;
-  let m: RegExpExecArray | null = re.exec(reportBodyHtml);
-  while (m) {
-    const attrs = m[1] ?? "";
-    const text = stripTags(m[2] ?? "");
-    const idMatch = /\bid\s*=\s*["']([^"']+)["']/i.exec(attrs);
-    const id = (idMatch?.[1] ?? "").trim();
-    if (id && text && !seen.has(id)) {
-      seen.add(id);
-      sections.push({ id, label: text });
-    }
-    m = re.exec(reportBodyHtml);
-  }
-  return sections;
+/** Strip inline styles that reference app CSS variables (invalid in standalone HTML). */
+function normalizeReportBodyHtml(html: string): string {
+  return html.replace(/\sstyle="([^"]*)"/gi, (_match, style: string) =>
+    /var\s*\(/.test(style) ? "" : _match,
+  );
 }
 
 const EMBEDDED_CSS = `
   :root {
     color-scheme: light;
-    --ink: #1f2933;
-    --muted: #647585;
-    --rule: #d8dee3;
+    --ink: #1a2332;
+    --muted: #5c6b7a;
+    --rule: #d8dee6;
     --accent: #1f6feb;
     --surface: #ffffff;
-    --soft: #f6f8fa;
+    --soft: #f4f6f8;
+    --warn: #b45309;
+    --ok: #15803d;
+    --fail: #b91c1c;
+    --page-pad: clamp(16px, 4vw, 40px);
+    --content-max: 1180px;
   }
-  * { box-sizing: border-box; }
-  html, body { background: var(--soft); }
-  body {
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  html, body {
+    width: 100%;
     margin: 0;
+    background: var(--soft);
+  }
+  body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 16px;
     color: var(--ink);
-    line-height: 1.6;
+    line-height: 1.65;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
-  main {
-    max-width: 56rem;
+  .export-page {
+    width: 100%;
+    max-width: var(--content-max);
     margin: 0 auto;
-    padding: 32px 24px 64px;
+    padding: 24px var(--page-pad) 72px;
   }
-  .hero {
-    background: var(--surface);
+  .export-toc {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    margin: 0 0 20px;
+    padding: 12px 14px;
+    background: color-mix(in oklab, var(--surface) 92%, var(--soft));
     border: 1px solid var(--rule);
     border-radius: 12px;
-    padding: 24px 28px;
-    margin-bottom: 24px;
+    backdrop-filter: blur(6px);
   }
-  .hero .eyebrow {
-    font-size: 11px;
+  .export-toc__label {
+    margin: 0 0 10px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--muted);
-    font-weight: 600;
-    margin: 0 0 10px;
-  }
-  .hero h1 {
-    margin: 0 0 6px;
-    font-size: 28px;
     font-weight: 700;
-    letter-spacing: -0.01em;
   }
-  .hero .meta {
-    color: var(--muted);
-    font-size: 14px;
+  .export-toc__links {
     display: flex;
-    gap: 18px;
     flex-wrap: wrap;
-  }
-  .hero .meta strong { color: var(--ink); }
-  .filter-strip {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    margin: -8px 0 18px;
-    padding: 10px;
-    border: 1px solid var(--rule);
-    border-radius: 10px;
-    background: color-mix(in oklab, var(--surface) 90%, #eef3ff);
-    display: flex;
     gap: 8px;
-    overflow-x: auto;
-    white-space: nowrap;
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
-  .filter-strip a {
+  .export-toc__links a {
+    display: inline-block;
     text-decoration: none;
     color: var(--muted);
     font-size: 12px;
     font-weight: 600;
     border: 1px solid var(--rule);
     border-radius: 999px;
-    padding: 6px 10px;
+    padding: 6px 12px;
     background: var(--surface);
+    line-height: 1.3;
+    white-space: nowrap;
   }
-  .filter-strip a:hover { color: var(--ink); border-color: #bfd0ea; }
-  dl.decision {
-    margin: 0;
-    border: 1px solid var(--rule);
-    border-radius: 12px;
-    overflow: hidden;
-    background: var(--surface);
+  .export-toc__links a:hover {
+    color: var(--ink);
+    border-color: #bfd0ea;
+    background: #f8fbff;
   }
-  dl.decision > div {
+  .decision-brief,
+  section.card,
+  .report-stack {
+    width: 100%;
+  }
+  .decision-brief {
     display: grid;
-    grid-template-columns: 11rem 1fr;
-    border-bottom: 1px solid var(--rule);
+    gap: 16px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    padding: clamp(18px, 3vw, 28px);
+    margin-bottom: 20px;
   }
-  dl.decision > div:last-child { border-bottom: 0; }
-  dl.decision dt {
-    background: var(--soft);
-    padding: 12px 16px;
+  .decision-brief__eyebrow {
     margin: 0;
-    font-size: 13px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
     color: var(--muted);
-    font-weight: 500;
-  }
-  dl.decision dd {
-    margin: 0;
-    padding: 12px 16px;
     font-weight: 600;
   }
-  .decision-brief-plain {
-    margin: 8px 0 0;
+  .decision-brief__head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+  .decision-brief__rating {
+    font-size: clamp(1.75rem, 4vw, 2.25rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--rule);
+    background: var(--soft);
+  }
+  .decision-brief__rating--positive {
+    color: #15803d;
+    border-color: #86efac;
+    background: #f0fdf4;
+  }
+  .decision-brief__rating--negative {
+    color: var(--fail);
+    border-color: #fca5a5;
+    background: #fef2f2;
+  }
+  .decision-brief__rating--neutral { color: var(--ink); }
+  .decision-brief__head-copy { display: grid; gap: 4px; min-width: 0; }
+  .decision-brief__plain {
+    margin: 0;
     font-size: 17px;
     font-weight: 600;
-    color: var(--ink);
   }
-  .decision-brief-posture {
-    margin: 4px 0 0;
-    color: var(--muted);
+  .decision-brief__posture {
+    margin: 0;
     font-size: 14px;
-  }
-  .decision-brief-confidence {
-    margin: 8px 0 0;
     color: var(--muted);
+    line-height: 1.45;
+  }
+  .decision-brief__historical-rating {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .decision-brief__confidence {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .decision-brief__confidence strong { color: var(--ink); }
+  .decision-brief__confidence--strong strong { color: #16a34a; }
+  .decision-brief__confidence--balanced strong { color: #ca8a04; }
+  .decision-brief__confidence--weak strong { color: var(--fail); }
+  .decision-brief__confidence-raw { opacity: 0.7; }
+  .decision-brief__inputs {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    background: var(--soft);
+  }
+  .decision-brief__input-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 0.25fr) 1fr;
+    gap: 12px;
+    align-items: baseline;
     font-size: 13px;
   }
-  .action-bar {
+  .decision-brief__input-label {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .decision-brief__input-row ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .decision-brief__input-row li {
+    padding: 2px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .decision-brief__input-row--good li { border-color: #86efac; color: #166534; }
+  .decision-brief__input-row--warn li { border-color: #fcd34d; color: #92400e; }
+  .decision-brief__input-row--flag li { border-color: #fca5a5; color: #991b1b; }
+  .decision-brief__action {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
-    gap: 10px 14px;
-    margin-top: 16px;
+    gap: 8px;
     padding: 12px 16px;
+    border-radius: 8px;
     background: var(--soft);
-    border-radius: 8px;
     border: 1px solid var(--rule);
   }
-  .action-bar__label {
+  .decision-brief__action-label {
     font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
     font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
   }
-  .action-bar__value {
-    font-weight: 700;
+  .decision-brief__action-value {
     font-size: 15px;
+    font-weight: 650;
   }
-  .executive-summary {
-    margin: 16px 0 0;
-    font-size: 15px;
-    line-height: 1.55;
-  }
-  dl.levels {
-    margin: 16px 0 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
-    gap: 10px;
-  }
-  dl.levels > div {
-    border: 1px solid var(--rule);
-    border-radius: 8px;
+  .decision-brief__live-note {
     padding: 10px 12px;
-    background: var(--surface);
+    border-radius: 8px;
+    border: 1px solid var(--rule);
+    background: var(--soft);
+    font-size: 14px;
   }
-  dl.levels dt {
-    margin: 0 0 4px;
-    font-size: 10px;
+  .decision-brief__live-note--warn {
+    border-color: #fca5a5;
+    background: #fef2f2;
+  }
+  .decision-brief__live-note-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--muted);
-    font-weight: 600;
+    margin-bottom: 4px;
   }
-  dl.levels dd {
+  .decision-brief__live-note p { margin: 0; }
+  .decision-brief__summary {
     margin: 0;
-    font-weight: 700;
-    font-size: 14px;
+    font-size: 15px;
+    line-height: 1.6;
+    max-width: 72ch;
+  }
+  .decision-brief__levels {
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+    gap: 8px;
+  }
+  .decision-brief__level {
+    display: grid;
+    gap: 4px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--rule);
+    background: var(--soft);
+  }
+  .decision-brief__level dt {
+    margin: 0;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .decision-brief__level dd {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
     word-break: break-word;
   }
-  .live-vs-plan {
+  .decision-brief__meta {
+    color: var(--muted);
+    font-size: 14px;
+    display: flex;
+    gap: 14px 18px;
+    flex-wrap: wrap;
+  }
+  .decision-brief__meta strong { color: var(--ink); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+    gap: 16px;
     margin-bottom: 16px;
+  }
+  .feature-grid .card--meta { margin: 0; }
+  .live-vs-plan {
+    margin: 0;
     padding: 14px 16px;
     border-radius: 10px;
     border: 1px solid var(--rule);
@@ -266,6 +359,11 @@ const EMBEDDED_CSS = `
     border-color: #fcd34d;
     background: #fffbeb;
   }
+  .live-vs-plan--ok {
+    border-color: #86efac;
+    background: #f0fdf4;
+  }
+  .live-vs-plan--neutral { border-color: var(--rule); background: var(--soft); }
   .live-vs-plan__badge {
     display: inline-block;
     font-size: 11px;
@@ -286,15 +384,8 @@ const EMBEDDED_CSS = `
     text-transform: uppercase;
     color: var(--muted);
   }
-  .live-vs-plan__grid dd {
-    margin: 0;
-    font-weight: 700;
-  }
-  .live-vs-plan__guidance {
-    margin: 0;
-    font-size: 14px;
-    line-height: 1.5;
-  }
+  .live-vs-plan__grid dd { margin: 0; font-weight: 700; }
+  .live-vs-plan__guidance { margin: 0; font-size: 14px; }
   .live-vs-plan__historical {
     margin: 10px 0 0;
     font-size: 12px;
@@ -304,76 +395,405 @@ const EMBEDDED_CSS = `
     background: var(--surface);
     border: 1px solid var(--rule);
     border-radius: 12px;
-    padding: 20px 24px;
-    margin-top: 20px;
+    padding: 18px 22px;
+    margin-bottom: 16px;
   }
   section.card h2 {
-    margin-top: 0;
-    font-size: 18px;
+    margin: 0 0 12px;
+    font-size: 13px;
     color: var(--muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
+    font-weight: 700;
   }
-  .report-body h1 { font-size: 24px; margin-top: 0; }
-  .report-body h2 {
-    font-size: 20px;
-    border-left: 4px solid var(--accent);
-    padding-left: 12px;
-    margin-top: 36px;
+  section.card h3 {
+    margin: 12px 0 6px;
+    font-size: 13px;
+    color: var(--ink);
   }
-  .report-body h3 { font-size: 16px; margin-top: 28px; }
-  .report-body h4 { font-size: 14px; margin-top: 22px; color: var(--muted); }
-  .report-body p { margin: 0 0 12px; }
-  .report-body ul, .report-body ol { padding-left: 1.5em; margin: 0 0 14px; }
-  .report-body li + li { margin-top: 4px; }
-  .report-body table {
+  .muted { color: var(--muted); font-size: 14px; }
+  dl.meta-grid {
+    margin: 0;
+    display: grid;
+    gap: 10px;
+  }
+  @media (min-width: 520px) {
+    dl.meta-grid { grid-template-columns: 1fr 1fr; }
+  }
+  dl.meta-grid dt {
+    margin: 0;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  dl.meta-grid dd { margin: 2px 0 0; font-size: 14px; font-weight: 600; }
+  ul.warn-list {
+    margin: 12px 0 0;
+    padding-left: 1.2em;
+    color: var(--warn);
+    font-size: 13px;
+  }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.data-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13.5px;
-    margin: 8px 0 16px;
+    font-size: 13px;
+    min-width: 28rem;
   }
-  .report-body th, .report-body td {
-    padding: 8px 12px;
+  table.data-table th, table.data-table td {
+    padding: 8px 10px;
     border: 1px solid var(--rule);
     text-align: left;
     vertical-align: top;
   }
-  .report-body th { background: var(--soft); font-weight: 600; }
+  table.data-table th { background: var(--soft); font-weight: 600; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--soft);
+  }
+  .badge--ok { color: var(--ok); }
+  .badge--failed { color: var(--fail); }
+  .badge--empty { color: var(--muted); }
+  .factor-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+    gap: 8px;
+    margin: 12px 0;
+  }
+  .factor-chip {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: center;
+    background: var(--soft);
+  }
+  .factor-chip__label {
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .factor-chip__score {
+    display: block;
+    font-size: 18px;
+    font-weight: 700;
+    margin-top: 2px;
+  }
+  .dimensions-commentary {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--rule);
+    font-size: 14px;
+  }
+  .confidence-cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: 12px;
+    margin-top: 10px;
+  }
+  .confidence-cols ul { margin: 4px 0 0; padding-left: 1.2em; font-size: 13px; }
+  .supplementary {
+    width: 100%;
+    margin-bottom: 16px;
+  }
+  .supplementary svg { display: block; width: 100%; max-width: 100%; height: auto; }
+  .supplementary .evidence-placeholders__grid {
+    width: 100%;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  }
+  .evidence-placeholders__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+    gap: 12px;
+  }
+  .evidence-placeholders__card {
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: var(--soft);
+  }
+  .evidence-placeholders__title {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .report-stack {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    padding: 20px clamp(16px, 3vw, 28px) 28px;
+  }
+  .report-stack > h2 {
+    margin: 0 0 16px;
+    font-size: 13px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .report-body,
+  .report-body .markdown-body,
+  .report-body .dashboard-report-markdown {
+    width: 100%;
+    max-width: none;
+    display: block;
+  }
+  .report-body .report-section {
+    width: 100%;
+    padding: 24px 0;
+    border-bottom: 1px solid var(--rule);
+    scroll-margin-top: 4rem;
+  }
+  .report-body .report-section:last-child { border-bottom: 0; padding-bottom: 0; }
+  .report-body .report-section--first { padding-top: 0; }
+  .report-body .report-section__title {
+    margin: 0 0 16px;
+    padding: 0 0 10px 14px;
+    font-size: clamp(1.15rem, 2.2vw, 1.4rem);
+    font-weight: 700;
+    color: var(--ink);
+    text-transform: none;
+    letter-spacing: -0.01em;
+    border-left: 4px solid var(--accent);
+    border-bottom: 1px solid var(--rule);
+    line-height: 1.3;
+  }
+  .report-body .report-section__markdown {
+    width: 100%;
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--ink);
+  }
+  .report-body h1 {
+    font-size: 1.5rem;
+    margin: 1.4em 0 0.6em;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+  .report-body h2:not(.report-section__title) {
+    font-size: 1.25rem;
+    margin: 1.6em 0 0.55em;
+    padding-bottom: 0.35em;
+    border-bottom: 1px solid var(--rule);
+    font-weight: 650;
+    line-height: 1.3;
+  }
+  .report-body h3 {
+    font-size: 1.1rem;
+    margin: 1.35em 0 0.45em;
+    font-weight: 650;
+  }
+  .report-body h4 {
+    font-size: 1rem;
+    margin: 1.1em 0 0.4em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .report-body p {
+    margin: 0 0 1em;
+    max-width: 78ch;
+  }
+  .report-body ul,
+  .report-body ol {
+    margin: 0 0 1em;
+    padding-left: 1.5em;
+    max-width: 78ch;
+  }
+  .report-body li {
+    margin: 0.35em 0;
+    padding-left: 0.15em;
+  }
+  .report-body li > ul,
+  .report-body li > ol {
+    margin-top: 0.35em;
+    margin-bottom: 0.35em;
+  }
+  .report-body strong { font-weight: 650; color: var(--ink); }
+  .report-body .markdown-table-wrap {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 12px 0 18px;
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .report-body table {
+    width: 100%;
+    min-width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    line-height: 1.45;
+    table-layout: auto;
+  }
+  .report-body .markdown-table-wrap table {
+    width: 100%;
+    min-width: 32rem;
+    margin: 0;
+  }
+  .report-body th,
+  .report-body td {
+    padding: 10px 14px;
+    border: 1px solid var(--rule);
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+  .report-body th {
+    background: var(--soft);
+    font-weight: 650;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+  }
+  .report-body tr:nth-child(even) td { background: #fafbfc; }
   .report-body code {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     background: var(--soft);
-    padding: 0.1em 0.35em;
+    padding: 0.12em 0.4em;
     border-radius: 4px;
-    font-size: 0.9em;
+    font-size: 0.88em;
   }
   .report-body pre {
+    width: 100%;
     background: var(--soft);
     padding: 14px 16px;
     border-radius: 8px;
     overflow-x: auto;
-    font-size: 12.5px;
+    font-size: 13px;
+    line-height: 1.5;
+    border: 1px solid var(--rule);
   }
+  .report-body pre code { background: transparent; padding: 0; }
   .report-body blockquote {
-    margin: 0 0 14px;
-    padding: 6px 16px;
-    border-left: 3px solid var(--rule);
+    margin: 0 0 1em;
+    padding: 8px 16px;
+    border-left: 3px solid var(--accent);
     color: var(--muted);
+    background: var(--soft);
+    border-radius: 0 8px 8px 0;
+    max-width: 78ch;
   }
-  .report-body hr { border: 0; border-top: 1px solid var(--rule); margin: 28px 0; }
+  .report-body hr {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 28px 0;
+  }
+  .report-body a { color: var(--accent); text-decoration: underline; }
+  .report-body img { max-width: 100%; height: auto; }
   footer {
     margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
     color: var(--muted);
     font-size: 12px;
     text-align: center;
   }
+  @media (min-width: 900px) {
+    .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    dl.levels { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
   @media print {
-    html, body { background: #fff; }
-    main { max-width: none; padding: 0; }
-    .hero, dl.decision, section.card { box-shadow: none; }
-    section.card, .hero { page-break-inside: avoid; }
-    .filter-strip { display: none; }
+    @page { size: auto; margin: 14mm 16mm; }
+    html, body {
+      background: #fff !important;
+      width: 100% !important;
+      height: auto !important;
+      overflow: visible !important;
+    }
+    .export-page {
+      max-width: none !important;
+      width: 100% !important;
+      padding: 0 !important;
+      margin: 0 !important;
+    }
+    .export-toc { display: none !important; }
+    .hero,
+    section.card,
+    .report-stack,
+    .live-vs-plan,
+    .feature-grid > * {
+      box-shadow: none !important;
+      break-inside: avoid-page;
+      page-break-inside: avoid;
+    }
+    .report-body .report-section {
+      break-inside: auto;
+      page-break-inside: auto;
+    }
+    .report-body .report-section__title,
+    .report-body h2,
+    .report-body h3 {
+      break-after: avoid-page;
+      page-break-after: avoid;
+    }
+    .report-body p,
+    .report-body ul,
+    .report-body ol,
+    .report-body blockquote {
+      max-width: none !important;
+    }
+    .report-body .markdown-table-wrap {
+      overflow: visible !important;
+      border: none;
+    }
+    .report-body table {
+      width: 100% !important;
+      min-width: 0 !important;
+    }
+    .report-body,
+    .report-body * {
+      overflow: visible !important;
+      max-height: none !important;
+    }
+    a[href^="#"] { text-decoration: none; color: inherit; }
   }
 `;
+
+function buildNavSections(input: StandaloneReportInput): ReportSectionLink[] {
+  const fromDom =
+    input.reportSections?.length
+      ? input.reportSections
+      : extractReportSectionsFromHtml(input.reportBodyHtml);
+
+  const core: ReportSectionLink[] = [{ id: "decision", label: "Decision" }];
+  if (input.liveContext) core.push({ id: "live-plan", label: "Live vs plan" });
+  if (input.provenance) core.push({ id: "provenance", label: "Run setup" });
+  if (input.analystCoverage && Object.keys(input.analystCoverage).length > 0) {
+    core.push({ id: "analyst-coverage", label: "Analyst coverage" });
+  }
+  if (input.dimensions) core.push({ id: "dimensional-study", label: "Dimensions" });
+  if (input.supplementaryHtml?.trim()) core.push({ id: "visual-evidence", label: "Visuals" });
+  if (input.whyNow.length) core.push({ id: "why-now", label: "Why now" });
+  if (input.invalidation) core.push({ id: "invalidation", label: "Invalidation" });
+  core.push({ id: "agent-reports", label: "Agent reports" });
+  return [...core, ...fromDom.filter((s) => !core.some((c) => c.id === s.id))];
+}
+
+function renderToc(sections: ReportSectionLink[]): string {
+  const links = sections
+    .map(
+      (s) =>
+        `<li><a href="#${escapeExportHtml(s.id)}">${escapeExportHtml(s.label)}</a></li>`,
+    )
+    .join("");
+  return `<nav class="export-toc" aria-label="Contents">
+    <p class="export-toc__label">Jump to section</p>
+    <ul class="export-toc__links">${links}</ul>
+  </nav>`;
+}
 
 export function buildStandaloneReportHtml(input: StandaloneReportInput): string {
   const {
@@ -385,174 +805,133 @@ export function buildStandaloneReportHtml(input: StandaloneReportInput): string 
     ratingPosture,
     actionNow,
     executiveSummary,
+    livePracticalNote,
     levelRows = [],
     liveContext = null,
     whyNow,
     invalidation,
     reportBodyHtml,
+    supplementaryHtml = "",
+    provenance = null,
+    dimensions = null,
+    dimensionsCommentary = null,
+    analystCoverage = null,
+    confidenceDetail = null,
     template = "weekly_report",
     generatedAt = new Date().toISOString(),
   } = input;
 
   const title = `${ticker} — Agent report`;
-  const ratingLine = rating ? escapeHtml(rating) : "—";
-  const metaParts: string[] = [`<span><strong>${escapeHtml(ticker)}</strong></span>`];
-  if (date) metaParts.push(`<span>As of ${escapeHtml(date)}</span>`);
-  metaParts.push(`<span>Exported ${escapeHtml(generatedAt)}</span>`);
 
-  const ratingPlainBlock = ratingPlain
-    ? `<p class="decision-brief-plain">${escapeHtml(ratingPlain)}</p>`
+  const navSections = template === "weekly_report" ? buildNavSections(input) : [];
+  const tocBlock = navSections.length > 1 ? renderToc(navSections) : "";
+  const normalizedBody = normalizeReportBodyHtml(reportBodyHtml);
+
+  const decisionBriefHtml = renderDecisionBriefHtml({
+    ticker,
+    rating,
+    date,
+    generatedAt,
+    confidencePct,
+    ratingPlain,
+    ratingPosture,
+    actionNow,
+    executiveSummary,
+    livePracticalNote,
+    levelRows,
+    liveContext,
+    calibration: confidenceDetail,
+  });
+
+  const metaCards: string[] = [];
+  if (provenance) metaCards.push(renderProvenanceHtml(provenance));
+  const coverageHtml = renderAnalystCoverageHtml(analystCoverage);
+  if (coverageHtml) metaCards.push(coverageHtml);
+
+  const featureGrid =
+    metaCards.length > 0 ? `<div class="feature-grid">${metaCards.join("")}</div>` : "";
+
+  const dimensionsHtml = renderDimensionsHtml(dimensions, dimensionsCommentary);
+
+  const supplementaryBlock = supplementaryHtml.trim()
+    ? `<section class="card supplementary" id="visual-evidence" aria-label="Visual evidence">${supplementaryHtml}</section>`
     : "";
-  const ratingPostureBlock = ratingPosture
-    ? `<p class="decision-brief-posture">${escapeHtml(ratingPosture)}</p>`
-    : "";
-  const confidenceBlock =
-    confidencePct != null
-      ? `<p class="decision-brief-confidence">Conviction (heuristic): ${confidencePct}% — from rating tier, not model certainty</p>`
-      : "";
-
-  const actionBlock =
-    actionNow?.trim()
-      ? `<div class="action-bar"><span class="action-bar__label">What to do</span><span class="action-bar__value">${escapeHtml(actionNow.trim())}</span></div>`
-      : "";
-
-  const summaryBlock = executiveSummary?.trim()
-    ? `<p class="executive-summary">${escapeHtml(executiveSummary.trim())}</p>`
-    : "";
-
-  const levelsBlock =
-    levelRows.length > 0
-      ? `<dl class="levels">${levelRows
-          .map(
-            ([label, value]) =>
-              `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`,
-          )
-          .join("")}</dl>`
-      : "";
 
   const whyNowList = whyNow.length
-    ? `<ul>${whyNow.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>`
+    ? `<ul>${whyNow.map((s) => `<li>${escapeExportHtml(s)}</li>`).join("")}</ul>`
     : "";
-
   const whyNowBlock = whyNowList
-    ? `<section class="card" aria-label="Why now"><h2>Why now</h2>${whyNowList}</section>`
+    ? `<section class="card" id="why-now" aria-label="Why now"><h2>Why now</h2>${whyNowList}</section>`
     : "";
-
   const invalidationBlock = invalidation
-    ? `<section class="card"><h2>Invalidation</h2><p>${escapeHtml(invalidation)}</p></section>`
+    ? `<section class="card" id="invalidation"><h2>Invalidation</h2><p>${escapeExportHtml(invalidation)}</p></section>`
     : "";
-
-  const navSections: ReportSectionLink[] = [
-    { id: "decision", label: "Decision" },
-    ...(whyNow.length ? [{ id: "why-now", label: "Why now" }] : []),
-    ...(invalidation ? [{ id: "invalidation", label: "Invalidation" }] : []),
-    { id: "full-report", label: "Full report" },
-    ...extractReportSections(reportBodyHtml).slice(0, 8),
-  ];
-  const filterStrip =
-    template === "weekly_report" && navSections.length > 1
-      ? `<nav class="filter-strip" aria-label="Quick jump">${navSections
-          .map(
-            (s) =>
-              `<a href="#${escapeHtml(s.id)}">${escapeHtml(s.label)}</a>`,
-          )
-          .join("")}</nav>`
-      : "";
-
-  let liveBlock = "";
-  if (liveContext) {
-    const { quote, comparison, report_close: reportClose, levels } = liveContext;
-    const liveClass = isInvalidatedStatus(comparison.status)
-      ? "live-vs-plan live-vs-plan--invalidated"
-      : "live-vs-plan";
-    const levelBits: string[] = [];
-    if (levels.entry != null) {
-      levelBits.push(`<div><dt>Planned entry</dt><dd>${levels.entry}</dd></div>`);
-    }
-    if (levels.stop_loss != null) {
-      levelBits.push(`<div><dt>Stop</dt><dd>${levels.stop_loss}</dd></div>`);
-    }
-    if (levels.price_target != null) {
-      levelBits.push(`<div><dt>Target</dt><dd>${levels.price_target}</dd></div>`);
-    }
-    const reportCloseBlock =
-      reportClose != null && date
-        ? `<div><dt>Report date close</dt><dd>${reportClose} · ${escapeHtml(date)}</dd></div>`
-        : "";
-    liveBlock = `<section class="${liveClass}" aria-label="Live price versus report plan">
-      <span class="live-vs-plan__badge">${escapeHtml(comparison.status.replace(/_/g, " "))}</span>
-      <dl class="live-vs-plan__grid">
-        <div><dt>Live now</dt><dd>${escapeHtml(formatLivePrice(quote.price, quote.currency))}</dd></div>
-        ${reportCloseBlock}
-        ${levelBits.join("")}
-      </dl>
-      <p class="live-vs-plan__guidance">${escapeHtml(comparison.guidance)}</p>
-      ${
-        isInvalidatedStatus(comparison.status)
-          ? `<p class="live-vs-plan__historical">Historical rating unchanged — this warning reflects current price vs this run&apos;s levels.${
-              comparison.suggest_refresh
-                ? " Refresh analysis with today&apos;s date before acting."
-                : " Analysis already used the live quote at run time; do not use these levels as-is."
-            }</p>`
-          : ""
-      }
-    </section>`;
-  }
 
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeHtml(title)}</title>
+<title>${escapeExportHtml(title)}</title>
 <style>${EMBEDDED_CSS}</style>
 </head>
 <body>
-<main>
-  ${filterStrip}
-  <header class="hero" id="decision">
-    <p class="eyebrow">Agent report — research artifact, not financial advice</p>
-    ${liveBlock}
-    <h1>${ratingLine}</h1>
-    ${ratingPlainBlock}
-    ${ratingPostureBlock}
-    ${confidenceBlock}
-    <div class="meta">${metaParts.join("")}</div>
-    ${actionBlock}
-    ${summaryBlock}
-    ${levelsBlock}
-  </header>
+<div class="export-page">
+  ${tocBlock}
+  ${decisionBriefHtml}
 
-  ${
-    whyNowBlock
-      ? whyNowBlock.replace(
-          '<section class="card" aria-label="Why now">',
-          '<section class="card" id="why-now" aria-label="Why now">',
-        )
-      : ""
-  }
+    ${featureGrid}
+    ${dimensionsHtml}
+    ${supplementaryBlock}
+    ${whyNowBlock}
+    ${invalidationBlock}
 
-  ${
-    invalidationBlock
-      ? invalidationBlock.replace(
-          '<section class="card">',
-          '<section class="card" id="invalidation">',
-        )
-      : ""
-  }
+    <div class="report-stack" id="agent-reports">
+      <h2>Agent reports</h2>
+      <div class="report-body">${normalizedBody}</div>
+    </div>
 
-  <section class="card" id="full-report" aria-label="Full report">
-    <h2>Full report</h2>
-    <div class="report-body">${reportBodyHtml}</div>
-  </section>
-
-  <footer>${escapeHtml(`Generated ${generatedAt} · ${ticker}`)}</footer>
-</main>
+    <footer>${escapeExportHtml(`Generated ${generatedAt} · ${ticker}`)}</footer>
+</div>
 </body>
 </html>`;
 }
 
-/** Trigger a browser download of `html` as `filename`. No-op outside a DOM. */
+/**
+ * Open standalone report HTML in a new tab and run the browser print dialog.
+ * Save as PDF there — avoids printing the TradingAgents app shell.
+ */
+export function printStandaloneReport(html: string): void {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const printWin = window.open(url, "_blank", "noopener,noreferrer");
+
+  if (!printWin) {
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  const cleanup = () => {
+    URL.revokeObjectURL(url);
+    try {
+      printWin.close();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const runPrint = () => {
+    printWin.focus();
+    printWin.print();
+    printWin.onafterprint = cleanup;
+    window.setTimeout(cleanup, 120_000);
+  };
+
+  printWin.addEventListener("load", runPrint, { once: true });
+}
+
 export function downloadStandaloneReport(filename: string, html: string): void {
   if (typeof document === "undefined") return;
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
@@ -566,7 +945,6 @@ export function downloadStandaloneReport(filename: string, html: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** Trigger a browser download of a PNG data URL. No-op outside a DOM. */
 export function downloadPng(filename: string, dataUrl: string): void {
   if (typeof document === "undefined") return;
   const a = document.createElement("a");

@@ -56,6 +56,7 @@ export function RunDetailPage() {
   const [recomputing, setRecomputing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const reportBodyRef = useRef<HTMLDivElement | null>(null);
+  const supplementaryRef = useRef<HTMLDivElement | null>(null);
   const decisionBriefRef = useRef<HTMLDivElement | null>(null);
   const eventsLogRef = useRef<HTMLDivElement | null>(null);
 
@@ -102,6 +103,7 @@ export function RunDetailPage() {
   const { handleExportHtml, handleExportPng, handlePrint, markdownHref, exportDisabled, decisionSummary } =
     useReportExport({
       reportBodyRef,
+      supplementaryRef,
       pngTargetRef: decisionBriefRef,
       jobId: runId,
       ticker,
@@ -110,6 +112,10 @@ export function RunDetailPage() {
       confidence: result?.confidence ?? historyDetail?.confidence ?? null,
       reports: result?.reports,
       liveContext,
+      provenance: provenance ?? null,
+      dimensions,
+      dimensionsCommentary,
+      result: result ?? null,
       canExportHtml: showAgentReports,
     });
 
@@ -406,7 +412,9 @@ export function RunDetailPage() {
                   </nav>
                 )}
                 <div className="dashboard-report-body">
-                  <EvidencePlaceholderCards result={result ?? null} />
+                  <div ref={supplementaryRef}>
+                    <EvidencePlaceholderCards result={result ?? null} />
+                  </div>
                   <ReportSections reports={result?.reports} reportBodyRef={reportBodyRef} />
                 </div>
               </div>

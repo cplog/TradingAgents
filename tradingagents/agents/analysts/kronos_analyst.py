@@ -6,6 +6,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_indicators,
     get_language_instruction,
     get_stock_data,
+    sanitize_messages_for_tool_api,
 )
 
 
@@ -53,7 +54,7 @@ def create_kronos_analyst(llm):
         prompt = prompt.partial(instrument_context=instrument_context)
 
         chain = prompt | llm.bind_tools(tools)
-        result = chain.invoke(state["messages"])
+        result = chain.invoke(sanitize_messages_for_tool_api(state["messages"]))
 
         report = ""
         if len(result.tool_calls) == 0:

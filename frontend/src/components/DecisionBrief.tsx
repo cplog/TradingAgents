@@ -46,6 +46,7 @@ const FACTOR_LABEL: Record<string, string> = {
 };
 
 const FLAG_LABEL: Record<string, string> = {
+  missing_pe_ttm: "Missing P/E TTM",
   missing_peg: "Missing PEG",
   missing_eps_growth_yoy: "Missing EPS growth (YoY)",
   peer_percentiles_cache_miss: "Peer cache miss",

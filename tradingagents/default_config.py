@@ -32,6 +32,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_MONITOR_COOLDOWN_MINUTES": "monitor_cooldown_minutes",
     "TRADINGAGENTS_PARALLEL_ANALYSTS": "parallel_analysts",
     "TRADINGAGENTS_SEMANTIC_DEBATE_TERMINATION": "semantic_debate_termination",
+    "TRADINGAGENTS_LLM_TIMEOUT_SECONDS": "llm_timeout_seconds",
 }
 
 
@@ -88,6 +89,10 @@ _CONFIG_BASE: dict = {
     # each provider at its own default. Lower values reduce run-to-run
     # variation on models that honor it; reasoning models largely ignore it.
     "temperature": None,
+    # HTTP timeout (seconds) for LLM requests. None leaves each provider at
+    # its own default. For Ollama behind Cloudflare, the client auto-defaults
+    # to 90 s to stay under Cloudflare's 120 s proxy timeout.
+    "llm_timeout_seconds": None,
     # Checkpoint/resume: when True, LangGraph saves state after each node.
     "checkpoint_enabled": False,
     # Output language for analyst reports and final decision

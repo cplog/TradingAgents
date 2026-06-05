@@ -8,6 +8,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_income_statement,
     get_insider_transactions,
     get_language_instruction,
+    sanitize_messages_for_tool_api,
 )
 from tradingagents.dataflows.config import get_config
 
@@ -53,7 +54,7 @@ def create_fundamentals_analyst(llm):
 
         chain = prompt | llm.bind_tools(tools)
 
-        result = chain.invoke(state["messages"])
+        result = chain.invoke(sanitize_messages_for_tool_api(state["messages"]))
 
         report = ""
 

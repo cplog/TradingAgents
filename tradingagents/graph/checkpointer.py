@@ -16,6 +16,9 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from tradingagents.dataflows.utils import safe_ticker_component
 
 
+CHECKPOINT_GRAPH_VERSION = "parallel-analyst-branch-scope-v3"
+
+
 def _db_path(data_dir: str | Path, ticker: str) -> Path:
     """Return the SQLite checkpoint DB path for a ticker."""
     # Reject ticker values that would escape the checkpoints directory.
@@ -27,7 +30,8 @@ def _db_path(data_dir: str | Path, ticker: str) -> Path:
 
 def thread_id(ticker: str, date: str) -> str:
     """Deterministic thread ID for a ticker+date pair."""
-    return hashlib.sha256(f"{ticker.upper()}:{date}".encode()).hexdigest()[:16]
+    key = f"{CHECKPOINT_GRAPH_VERSION}:{ticker.upper()}:{date}"
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 @contextmanager

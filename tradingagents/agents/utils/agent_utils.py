@@ -3,7 +3,7 @@ import logging
 from typing import Any, Mapping, Optional
 
 import yfinance as yf
-from langchain_core.messages import HumanMessage, RemoveMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 
 # Import tools from separate utility files
 from tradingagents.agents.utils.core_stock_tools import (
@@ -183,6 +183,227 @@ def build_supplementary_analyst_context(state: dict) -> str:
     return "\n\n".join(parts)
 
 
+def _parallel_analysts_enabled() -> bool:
+    from tradingagents.dataflows.config import get_config
+
+    return bool(get_config().get("parallel_analysts", False))
+
+
+def _tool_call_id(tool_call: Any) -> str:
+    if isinstance(tool_call, dict):
+        return str(tool_call.get("id") or "")
+    return str(getattr(tool_call, "id", "") or "")
+
+
+def _coerce_seed_human(messages: list[Any]) -> Optional[HumanMessage]:
+    """Return the initial user message for analyst prompts."""
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            return message
+        if isinstance(message, tuple) and len(message) >= 2:
+            role, content = message[0], message[1]
+            if str(role).lower() in {"human", "user"}:
+                return HumanMessage(content=str(content))
+    return None
+
+
+def _message_analyst_id(message: Any) -> Optional[str]:
+    additional = getattr(message, "additional_kwargs", None) or {}
+    if isinstance(additional, dict):
+        value = additional.get("analyst_id")
+        return str(value) if value else None
+    return None
+
+
+def tag_analyst_messages(messages: list[Any], analyst_id: str) -> list[Any]:
+    """Tag assistant messages so parallel branches can be disambiguated after merge."""
+    for message in messages:
+        if isinstance(message, AIMessage):
+            additional = dict(message.additional_kwargs or {})
+            additional["analyst_id"] = analyst_id
+            message.additional_kwargs = additional
+    return messages
+
+
+def sanitize_messages_for_tool_api(
+    messages: list[Any],
+    *,
+    allow_incomplete_final_assistant: bool = False,
+) -> list[Any]:
+    """Return a provider-valid tool-call transcript.
+
+    Chat-completions APIs require every assistant ``tool_calls`` turn to be
+    followed immediately by one tool message for each call id. Parallel branch
+    merges can leave partial turns in shared history, so rebuild the transcript
+    in small assistant/tool-call groups instead of only dropping orphan tools.
+
+    ``ToolNode`` is the one valid consumer of an incomplete final assistant
+    message: it needs that pending turn in order to execute the requested tools.
+    LLM calls should keep the default and omit incomplete turns.
+    """
+    if not messages:
+        return messages
+
+    sanitized: list[Any] = []
+    index = 0
+    total = len(messages)
+
+    while index < total:
+        message = messages[index]
+        if isinstance(message, ToolMessage):
+            index += 1
+            continue
+
+        if not isinstance(message, AIMessage) or not message.tool_calls:
+            sanitized.append(message)
+            index += 1
+            continue
+
+        pending_tool_ids = [
+            call_id
+            for call_id in (_tool_call_id(tc) for tc in (message.tool_calls or []))
+            if call_id
+        ]
+        if not pending_tool_ids:
+            if message.tool_calls:
+                stripped = message.model_copy()
+                stripped.tool_calls = []
+                if stripped.content:
+                    sanitized.append(stripped)
+            else:
+                sanitized.append(message)
+            index += 1
+            continue
+
+        group: list[Any] = [message]
+        remaining = set(pending_tool_ids)
+        for cursor in range(index + 1, total):
+            tool_message = messages[cursor]
+            if not isinstance(tool_message, ToolMessage):
+                continue
+            tool_call_id = str(getattr(tool_message, "tool_call_id", "") or "")
+            if tool_call_id in remaining:
+                group.append(tool_message)
+                remaining.discard(tool_call_id)
+
+        if not remaining or (
+            allow_incomplete_final_assistant and index == total - 1
+        ):
+            sanitized.extend(group)
+
+        index += 1
+
+    return sanitized
+
+
+def messages_for_analyst_branch(
+    messages: list[Any],
+    analyst_id: str,
+    *,
+    allow_incomplete_final_assistant: bool = False,
+) -> list[Any]:
+    """Subset of merged history that belongs to one parallel analyst branch."""
+    if not messages:
+        return messages
+
+    if not _parallel_analysts_enabled():
+        return sanitize_messages_for_tool_api(
+            list(messages),
+            allow_incomplete_final_assistant=allow_incomplete_final_assistant,
+        )
+
+    seed_human = _coerce_seed_human(messages)
+
+    scoped: list[Any] = []
+    if seed_human is not None:
+        scoped.append(seed_human)
+
+    for message in messages:
+        if isinstance(message, (HumanMessage, tuple)):
+            continue
+        if not isinstance(message, AIMessage):
+            continue
+        if _message_analyst_id(message) != analyst_id:
+            continue
+        scoped.append(message)
+        turn_call_ids = {
+            call_id
+            for call_id in (_tool_call_id(tc) for tc in (message.tool_calls or []))
+            if call_id
+        }
+        if not turn_call_ids:
+            continue
+        for tool_message in messages:
+            if not isinstance(tool_message, ToolMessage):
+                continue
+            tool_call_id = str(getattr(tool_message, "tool_call_id", "") or "")
+            if tool_call_id in turn_call_ids and tool_message not in scoped:
+                scoped.append(tool_message)
+
+    return sanitize_messages_for_tool_api(
+        scoped,
+        allow_incomplete_final_assistant=allow_incomplete_final_assistant,
+    )
+
+
+def prepare_analyst_work_state(state: Mapping[str, Any], analyst_id: str) -> dict[str, Any]:
+    """Return state with a branch-scoped message list for analyst/tool LLM calls."""
+    if not _parallel_analysts_enabled():
+        messages = sanitize_messages_for_tool_api(list(state.get("messages") or []))
+        return {**dict(state), "messages": messages}
+    return {
+        **dict(state),
+        "messages": messages_for_analyst_branch(
+            list(state.get("messages") or []),
+            analyst_id,
+        ),
+    }
+
+
+def create_scoped_tool_node(analyst_id: str, tool_node: Any) -> Any:
+    """Wrap ToolNode so parallel merges do not route the wrong branch's tool_calls."""
+
+    def scoped_tool_node(state: Mapping[str, Any]) -> dict[str, Any]:
+        if not _parallel_analysts_enabled():
+            return tool_node.invoke(state)
+        scoped_state = {
+            **dict(state),
+            "messages": messages_for_analyst_branch(
+                list(state.get("messages") or []),
+                analyst_id,
+                allow_incomplete_final_assistant=True,
+            ),
+        }
+        result = tool_node.invoke(scoped_state)
+        if isinstance(result, dict) and "messages" in result:
+            tag_analyst_messages(result["messages"], analyst_id)
+        return result
+
+    return scoped_tool_node
+
+
+def wrap_analyst_node(analyst_id: str, analyst_node: Any) -> Any:
+    """Scope merged messages and tag assistant outputs for parallel analyst runs."""
+
+    def wrapped_node(state: Mapping[str, Any]) -> dict[str, Any]:
+        work_state = prepare_analyst_work_state(state, analyst_id)
+        result = analyst_node(work_state)
+        if isinstance(result, dict) and result.get("messages"):
+            tag_analyst_messages(result["messages"], analyst_id)
+        return result
+
+    return wrapped_node
+
+
+def create_msg_passthrough():
+    """No-op graph node for branches that should not mutate shared messages."""
+
+    def pass_messages(state):
+        return {}
+
+    return pass_messages
+
+
 def create_msg_delete():
     def delete_messages(state):
         """Clear messages and add a context-anchored placeholder.
@@ -218,6 +439,7 @@ def invoke_tool_chain_with_openrouter_fallback(chain, llm, messages):
     In that case we retry once without tool binding so the run completes
     (with reduced grounding) instead of crashing the whole graph.
     """
+    messages = sanitize_messages_for_tool_api(list(messages))
     try:
         return chain.invoke(messages)
     except Exception as exc:
