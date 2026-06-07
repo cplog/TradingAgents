@@ -155,6 +155,18 @@ class AnalysisResult(BaseModel):
         default=None,
         description="Live quote and plan comparison captured when the graph started.",
     )
+    plan_levels: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Derived entry/stop/target levels from analyst reports and structured payload.",
+    )
+    options_recommendation: Optional[str] = Field(
+        default=None,
+        description="Options strategy recommendation markdown when options_strategist_enabled=True.",
+    )
+    options_chain_snapshot: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Nearest-expiration options chain data used by the strategist.",
+    )
 
 
 class AnalyzeResponse(BaseModel):
@@ -294,6 +306,10 @@ class BatchAnalyzeRequest(BaseModel):
     )
     config_overrides: Optional[Dict[str, Any]] = Field(default_factory=dict)
     analysts: Optional[List[str]] = Field(default=None)
+    report_format: Optional[Literal["markdown", "json", "structured"]] = Field(
+        default=None,
+        description="Output format for the report artifact. Inherits single-analyze default when omitted.",
+    )
 
     @field_validator("tickers", mode="before")
     @classmethod
@@ -543,6 +559,10 @@ class HistoryRunDetail(BaseModel):
     dimensions_commentary: Optional[DimensionsCommentary] = None
     dimensions_error: Optional[str] = None
     dimensions_in_graph: Optional[bool] = None
+    plan_levels: Optional[Dict[str, Any]] = None
+    live_context_at_run: Optional[Dict[str, Any]] = None
+    options_recommendation: Optional[str] = None
+    options_chain_snapshot: Optional[Dict[str, Any]] = None
 
 
 class HistoryCompareRequest(BaseModel):

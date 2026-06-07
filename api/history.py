@@ -507,6 +507,8 @@ def persist_completed_run(
         "dimensions_commentary": result.get("dimensions_commentary"),
         "dimensions_error": result.get("dimensions_error"),
         "dimensions_in_graph": result.get("dimensions_in_graph"),
+        "plan_levels": result.get("plan_levels"),
+        "live_context_at_run": result.get("live_context_at_run"),
     }
 
     if d1_history_enabled():

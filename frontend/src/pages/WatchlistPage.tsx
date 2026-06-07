@@ -189,7 +189,7 @@ export function WatchlistPage() {
         </div>
       ) : null}
       {error ? (
-        <p style={{ color: "#b91c1c", marginBottom: "var(--spacing-12)" }}>{error}</p>
+        <p style={{ color: "var(--color-danger)", marginBottom: "var(--spacing-12)" }}>{error}</p>
       ) : null}
 
       {tickers.length === 0 ? (

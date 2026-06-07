@@ -819,6 +819,9 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             "max_risk_discuss_rounds": 1,
         }
 
+    if request.report_format:
+        config = {**config, "report_format": request.report_format}
+
     job_id = await _worker.submit(
         ticker=ticker,
         date=analysis_date,
@@ -850,6 +853,8 @@ async def create_batch(request: BatchAnalyzeRequest) -> BatchAnalyzeResponse:
     from copy import deepcopy
 
     base_config = merge_request_config(_service_config, request.config_overrides)
+    if request.report_format:
+        base_config = {**base_config, "report_format": request.report_format}
     try:
         validate_api_key(base_config)
     except RuntimeError as exc:
@@ -1239,8 +1244,15 @@ async def job_events(job_id: str) -> StreamingResponse:
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
+REPORT_FORMAT_MAP: Dict[str, str] = {
+    "markdown": ("complete_report.md", "text/markdown", ".md"),
+    "json": ("complete_report.json", "application/json", ".json"),
+    "structured": ("structured_fields.json", "application/json", ".json"),
+}
+
+
 @app.get("/jobs/{job_id}/report")
-async def get_report(job_id: str) -> FileResponse:
+async def get_report(job_id: str, format: str = "markdown") -> FileResponse:
     record = _worker.store.get(job_id)
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1248,13 +1260,19 @@ async def get_report(job_id: str) -> FileResponse:
         raise HTTPException(
             status_code=409, detail=f"Job is {record.status}; report not ready"
         )
+    fmt = format if format in REPORT_FORMAT_MAP else "markdown"
+    artifact_name, media_type, extension = REPORT_FORMAT_MAP[fmt]
     artifacts_path = record.result.get("artifacts_path") if record.result else None
-    if not artifacts_path or not Path(artifacts_path).exists():
-        raise HTTPException(status_code=404, detail="Report artifact not found")
+    if not artifacts_path:
+        raise HTTPException(status_code=404, detail="Report artifact path not in job result")
+    artifacts_dir = Path(artifacts_path).parent
+    artifact_file = artifacts_dir / artifact_name
+    if not artifact_file.exists():
+        raise HTTPException(status_code=404, detail=f"Report artifact not found: {artifact_name}")
     return FileResponse(
-        path=artifacts_path,
-        media_type="text/markdown",
-        filename=f"{record.ticker}_{record.date}_report.md",
+        path=artifact_file,
+        media_type=media_type,
+        filename=f"{record.ticker}_{record.date}_report{extension}",
     )
 
 

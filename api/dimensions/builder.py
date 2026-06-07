@@ -196,7 +196,13 @@ def build_dimensions(
 
     source = "full_run"
     try:
-        pillars = score_pillars(facts=facts, analyst_reports=analyst_reports, llm=llm)
+        pillars = score_pillars(
+            facts=facts,
+            analyst_reports=analyst_reports,
+            llm=llm,
+            peer_scope=peer_res.peer_scope,
+            data_quality_flags=list(flags),
+        )
     except PillarScoringError as exc:
         logger.warning("Pillar scoring unavailable for %s: %s", ticker, exc)
         flags = list(flags) + [f"pillar_scoring_unavailable: {exc}"]

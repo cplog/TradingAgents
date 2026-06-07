@@ -18,8 +18,15 @@ import threading
 from functools import partial
 from typing import Any, Dict, List, Optional
 
+from langchain_core.callbacks import BaseCallbackHandler
+
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.graph.checkpointer import checkpoint_step, thread_id
+from tradingagents.graph.job_control import (
+    GraphJobCancelled,
+    GraphJobTimeout,
+    GraphStepHooks,
+)
 from api.models import DEFAULT_ANALYST_ORDER, VALID_ANALYST_IDS
 from api.dimensions.builder import (
     DimensionsBuildError, build_commentary, build_dimensions,
@@ -30,7 +37,16 @@ from api.state_store import StateStore
 
 def _merge_job_config_snapshot(config: Dict[str, Any]) -> Dict[str, Any]:
     safe = {k: v for k, v in config.items() if "key" not in k.lower()}
-    return merge_config_snapshot(safe)
+    out = merge_config_snapshot(safe)
+    for k in (
+        "data_cache_dir",
+        "job_timeout_seconds",
+        "job_stuck_seconds",
+        "llm_timeout_seconds",
+    ):
+        if k in safe and safe[k] is not None:
+            out[k] = safe[k]
+    return out
 from api.kronos import (
     KronosConfig,
     KronosService,
@@ -77,6 +93,55 @@ _propagate_sync_lock = threading.Lock()
 # Style factors from graph snapshots: if a full_run snapshot has none of these scores,
 # rerun the expensive dimensions pipeline instead of commentary-only reuse.
 _GRAPH_STYLE_FACTOR_KEYS = ("value", "growth", "quality", "momentum", "low_risk")
+
+
+class GraphProgressCallback(BaseCallbackHandler):
+    """LangGraph callback that tracks which graph node is currently executing.
+
+    The :meth:`on_chain_start` fires whenever LangGraph enters a node (analyst,
+    researcher, trader, etc.). The heartbeat task reads ``current_node`` to
+    produce a meaningful progress message instead of guessing pipeline stage.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()
+        self.current_node: str = ""
+        self._node_stack: list[str] = []
+
+    def on_chain_start(
+        self,
+        serialized: Dict[str, Any],
+        inputs: Dict[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        name = ""
+        if isinstance(serialized, dict):
+            name = serialized.get("name", "") or ""
+        if not name and isinstance(inputs, dict):
+            node_key = next((k for k in ("node", "name") if k in inputs), None)
+            if node_key:
+                name = str(inputs[node_key])
+        if name:
+            with self._lock:
+                self._node_stack.append(name)
+                self.current_node = name
+
+    def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> None:
+        with self._lock:
+            if self._node_stack:
+                self._node_stack.pop()
+            self.current_node = self._node_stack[-1] if self._node_stack else ""
+
+    def on_chain_error(self, error: Exception, **kwargs: Any) -> None:
+        with self._lock:
+            if self._node_stack:
+                self._node_stack.pop()
+            self.current_node = self._node_stack[-1] if self._node_stack else ""
+
+    def get_current_node(self) -> str:
+        with self._lock:
+            return self.current_node
 
 
 def _should_rebuild_graph_dimensions_snapshot(snapshot: Dict[str, Any]) -> bool:
@@ -190,6 +255,70 @@ def _coerce_analyst_ids(analysts: Optional[list]) -> list:
     return out if out else list(DEFAULT_ANALYST_ORDER)
 
 
+def _prune_progress_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop oldest heartbeat events before trimming meaningful progress."""
+    pruned = list(events)
+    while len(pruned) > _MAX_PROGRESS_EVENTS:
+        drop_idx = next(
+            (i for i, evt in enumerate(pruned) if evt.get("kind") == "heartbeat"),
+            None,
+        )
+        if drop_idx is None:
+            return pruned[-_MAX_PROGRESS_EVENTS:]
+        pruned.pop(drop_idx)
+    return pruned
+
+
+def _job_timeout_seconds(config: Dict[str, Any]) -> Optional[int]:
+    raw = config.get("job_timeout_seconds")
+    if raw in (None, "", False):
+        return None
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
+def _make_step_hooks(
+    job_id: str,
+    config: Dict[str, Any],
+    store: "JobStore",
+    progress_state: Dict[str, Any],
+) -> GraphStepHooks:
+    """Build cooperative cancel/timeout hooks for streamed LangGraph execution."""
+    started = time.monotonic()
+    timeout_sec = _job_timeout_seconds(config)
+    progress_state["last_step_at"] = started
+
+    def should_cancel() -> bool:
+        return store.is_cancellation_requested(job_id)
+
+    def should_timeout() -> bool:
+        if timeout_sec is None:
+            return False
+        return (time.monotonic() - started) >= timeout_sec
+
+    def on_step(node_name: str) -> None:
+        progress_state["last_step_at"] = time.monotonic()
+        progress_state["last_node"] = node_name
+        store.append_progress(
+            job_id,
+            f"Completed node: {node_name}",
+            stage="running",
+            kind="step",
+        )
+        if config.get("checkpoint_enabled"):
+            store.refresh_checkpoint_metadata(job_id)
+
+    return GraphStepHooks(
+        should_cancel=should_cancel,
+        should_timeout=should_timeout,
+        on_step=on_step,
+        timeout_seconds=timeout_sec or 0,
+    )
+
+
 def _refresh_checkpoint_metadata(rec: JobRecord) -> None:
     """Set resumable / step fields from on-disk LangGraph checkpoint (if any)."""
     cfg = rec.config_snapshot or {}
@@ -199,6 +328,10 @@ def _refresh_checkpoint_metadata(rec: JobRecord) -> None:
         rec.checkpoint_thread_id = None
         return
     cache_dir = cfg.get("data_cache_dir")
+    if not cache_dir:
+        from tradingagents.default_config import DEFAULT_CONFIG
+
+        cache_dir = DEFAULT_CONFIG.get("data_cache_dir")
     if not cache_dir:
         rec.resumable = False
         rec.last_graph_step = None
@@ -658,11 +791,13 @@ class JobStore:
         *,
         stage: str = "info",
         details: Optional[str] = None,
+        kind: str = "info",
     ) -> None:
         evt: Dict[str, Any] = {
             "ts": datetime.utcnow().isoformat() + "Z",
             "stage": stage,
             "message": message,
+            "kind": kind,
         }
         if details:
             evt["details"] = details
@@ -670,9 +805,19 @@ class JobStore:
             rec = self._jobs.get(job_id)
             if not rec:
                 return
-            rec.progress_events.append(evt)
+            if kind == "heartbeat":
+                replaced = False
+                for i in range(len(rec.progress_events) - 1, -1, -1):
+                    if rec.progress_events[i].get("kind") == "heartbeat":
+                        rec.progress_events[i] = evt
+                        replaced = True
+                        break
+                if not replaced:
+                    rec.progress_events.append(evt)
+            else:
+                rec.progress_events.append(evt)
             if len(rec.progress_events) > _MAX_PROGRESS_EVENTS:
-                rec.progress_events = rec.progress_events[-_MAX_PROGRESS_EVENTS:]
+                rec.progress_events = _prune_progress_events(rec.progress_events)
             self._persist_locked(job_id)
 
     def list_ids(self) -> List[str]:
@@ -925,17 +1070,37 @@ class Worker:
                     stage="running",
                 )
                 stop_hb = asyncio.Event()
+                progress_cb = GraphProgressCallback()
+                progress_state: Dict[str, Any] = {"last_node": "", "last_step_at": time.monotonic()}
+                step_hooks = _make_step_hooks(job_id, config, self.store, progress_state)
+                stuck_sec = int(config.get("job_stuck_seconds") or 900)
 
                 async def _heartbeat() -> None:
                     start = time.monotonic()
                     provider = str(config.get("llm_provider") or "unknown")
                     routing_short = _format_data_routing(config)
+                    routing_logged = False
                     while True:
                         try:
-                            await asyncio.wait_for(stop_hb.wait(), timeout=45.0)
+                            await asyncio.wait_for(stop_hb.wait(), timeout=15.0)
                             break
                         except asyncio.TimeoutError:
                             elapsed = int(time.monotonic() - start)
+                            node = (
+                                progress_state.get("last_node")
+                                or progress_cb.get_current_node()
+                            )
+                            since_step = int(
+                                time.monotonic()
+                                - float(progress_state.get("last_step_at", start))
+                            )
+                            if node:
+                                label = str(node).replace("_", " ").title()
+                                msg = f"{label} (~{elapsed}s elapsed)."
+                            else:
+                                msg = f"Waiting for current graph step (~{elapsed}s elapsed)."
+                            if since_step >= stuck_sec:
+                                msg += f" No graph progress for {since_step}s."
                             hints: list[str] = []
                             if provider == "openrouter":
                                 hints.append("OpenRouter free-tier can be slower.")
@@ -943,12 +1108,15 @@ class Worker:
                                 hints.append(
                                     "Local/remote Ollama throughput varies with model size."
                                 )
+                            if not routing_logged:
+                                hints.append(f"routing: {routing_short}")
+                                routing_logged = True
                             hint_tail = (" " + " ".join(hints)) if hints else ""
                             self.store.append_progress(
                                 job_id,
-                                f"Still in LangGraph (~{elapsed}s elapsed): LLM nodes + analyst "
-                                f"market-data tools ({routing_short}).{hint_tail}",
+                                f"{msg}{hint_tail}",
                                 stage="running",
+                                kind="heartbeat",
                             )
 
                 hb_task = asyncio.create_task(_heartbeat())
@@ -966,6 +1134,8 @@ class Worker:
                             config,
                             analysts,
                             overnight_signal=overnight_sig,
+                            progress_cb=progress_cb,
+                            step_hooks=step_hooks,
                         ),
                     )
                 finally:
@@ -1211,6 +1381,31 @@ class Worker:
                     stage="completed",
                 )
                 logger.info("Job %s completed for %s", job_id, ticker)
+            except GraphJobCancelled:
+                logger.info("Job %s cancelled during LangGraph execution", job_id)
+                self.store.refresh_checkpoint_metadata(job_id)
+                self.store.mark_cancelled(job_id)
+                self.store.append_progress(
+                    job_id,
+                    "Job cancelled during LangGraph execution.",
+                    stage="cancelled",
+                )
+            except GraphJobTimeout as exc:
+                logger.warning("Job %s timed out during LangGraph execution: %s", job_id, exc)
+                self.store.set_error(job_id, str(exc))
+                self.store.refresh_checkpoint_metadata(job_id)
+                rec_after = self.store.get(job_id)
+                resume_hint = ""
+                if rec_after and rec_after.resumable:
+                    resume_hint = (
+                        f" Checkpoint saved at step {rec_after.last_graph_step}; "
+                        "use Resume to continue without restarting from scratch."
+                    )
+                self.store.append_progress(
+                    job_id,
+                    f"Timed out: {exc}{resume_hint}",
+                    stage="failed",
+                )
             except Exception as exc:
                 logger.exception("Job %s failed for %s", job_id, ticker)
                 self.store.set_error(job_id, f"{type(exc).__name__}: {exc}")
@@ -1235,6 +1430,8 @@ class Worker:
         analysts: Optional[list],
         *,
         overnight_signal: Optional[Dict[str, Any]] = None,
+        progress_cb: Optional[GraphProgressCallback] = None,
+        step_hooks: Optional[GraphStepHooks] = None,
     ) -> tuple:
         logger.info(
             "propagate() starting | ticker=%s date=%s provider=%s",
@@ -1280,10 +1477,12 @@ class Worker:
 
         # ---- 2. Run the graph with a seeded kronos_report ------------------
         with _propagate_sync_lock:
+            cb_list = [progress_cb] if progress_cb else None
             graph = TradingAgentsGraph(
                 selected_analysts=selected,
                 config=config,
                 debug=False,
+                callbacks=cb_list,
             )
 
             propagator = getattr(graph, "propagator", None)
@@ -1293,7 +1492,7 @@ class Worker:
                 # Test fakes / minimal graphs without a propagator — skip
                 # the seed and just propagate. kronos_report seeding is a
                 # best-effort optimization, not a correctness requirement.
-                out = graph.propagate(ticker, date)
+                out = graph.propagate(ticker, date, step_hooks=step_hooks)
             else:
                 original_create = propagator.create_initial_state
                 had_instance_attr = (
@@ -1342,7 +1541,7 @@ class Worker:
 
                 propagator.create_initial_state = _seeded_create_initial_state
                 try:
-                    out = graph.propagate(ticker, date)
+                    out = graph.propagate(ticker, date, step_hooks=step_hooks)
                 finally:
                     if had_instance_attr:
                         propagator.create_initial_state = original_create

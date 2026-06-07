@@ -38,6 +38,7 @@ from .china_baostock import get_stock_baostock
 from .rss_news import get_global_news_google_rss, get_news_google_rss
 from .akshare_news import get_news_akshare_em
 from .akshare_macro import get_macro_akshare, list_akshare_endpoints
+from .options_data import get_options_chain, get_options_expirations
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
@@ -95,6 +96,13 @@ VENDOR_METHODS = {
     },
     "get_macro_data": {
         "akshare": get_macro_akshare,
+    },
+    # options_data
+    "get_options_chain": {
+        "yfinance": get_options_chain,
+    },
+    "get_options_expirations": {
+        "yfinance": get_options_expirations,
     },
 }
 

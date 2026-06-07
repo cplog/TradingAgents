@@ -131,7 +131,7 @@ export function MonitorPage() {
         </ol>
         <p className="monitor-page__compare">
           Not the same as{" "}
-          <Link to={paths.watchlists}>Watchlists</Link> — that page is a browser-local shortcut list for manual
+          <Link to={paths.watchlists}>Watchlists</Link> is a browser-local shortcut list for manual
           Analysis. Only symbols on this page participate in automated overnight scanning.
         </p>
       </aside>
@@ -142,7 +142,7 @@ export function MonitorPage() {
           {(error.includes("404") || error.includes("405")) && (
             <>
               {" "}
-              Restart the FastAPI server on port 8808 — an older uvicorn process may be running without{" "}
+              Restart the FastAPI server on port 8808. An older uvicorn process may be running without{" "}
               <code>/api/monitor</code> routes.
             </>
           )}
@@ -274,8 +274,8 @@ export function MonitorPage() {
           <div className="monitor-page__empty-signals" role="status">
             <p className="ui-muted">No triggered signals yet.</p>
             <ul className="monitor-page__empty-reasons">
-              {watchlistEmpty ? <li>Server watchlist is empty — add tickers first.</li> : null}
-              {monitorDisabled ? <li>Background monitor is disabled — enable it or use Run poll now.</li> : null}
+              {watchlistEmpty ? <li>Server watchlist is empty. Add tickers first.</li> : null}
+              {monitorDisabled ? <li>Background monitor is disabled. Enable it or use Run poll now.</li> : null}
               {!watchlistEmpty && !monitorDisabled ? (
                 <>
                   <li>No watchlist symbol had a large enough drop and score ≥ {status?.threshold ?? 75} yet.</li>

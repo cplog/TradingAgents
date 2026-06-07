@@ -40,7 +40,7 @@ export function RunProvenancePanel({ provenance, compact = false }: RunProvenanc
   return (
     <section className="run-provenance" aria-label="Run provenance">
       <p className="run-provenance__lead">
-        Model and data setup for this run — compare History rows only when these match, or bias can dominate
+        Model and data setup for this run. Compare History rows only when these match, or bias can dominate
         the rating difference.
       </p>
       <dl className="run-provenance__grid">

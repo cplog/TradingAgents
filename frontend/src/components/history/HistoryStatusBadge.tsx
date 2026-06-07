@@ -1,6 +1,7 @@
+import { memo } from "react";
 import { historyStatusTone, statusLabel, type HistoryJobStatus } from "../../utils/historyDisplay";
 
-export function HistoryStatusBadge({ status }: { status: HistoryJobStatus }) {
+export const HistoryStatusBadge = memo(function HistoryStatusBadge({ status }: { status: HistoryJobStatus }) {
   const tone = historyStatusTone(status);
   return (
     <span className={`history-status-badge history-status-badge--${tone}`}>
@@ -8,4 +9,4 @@ export function HistoryStatusBadge({ status }: { status: HistoryJobStatus }) {
       {statusLabel(status)}
     </span>
   );
-}
+});

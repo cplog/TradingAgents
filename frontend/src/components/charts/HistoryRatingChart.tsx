@@ -47,6 +47,10 @@ export function HistoryRatingChart({ runs }: { runs: HistoryRunRef[] }) {
               border: "1px solid var(--color-stone-border)",
               borderRadius: "var(--radius-md)",
             }}
+            wrapperClassName="chart-tooltip"
+            labelClassName="chart-tooltip__label"
+            itemStyle={{ color: "var(--color-slate-text)" }}
+            aria-label="Rating count tooltip"
           />
           <Bar dataKey="count" fill="var(--color-phosphor)" radius={[0, 2, 2, 0]} />
         </BarChart>

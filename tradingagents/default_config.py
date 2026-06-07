@@ -33,6 +33,9 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_PARALLEL_ANALYSTS": "parallel_analysts",
     "TRADINGAGENTS_SEMANTIC_DEBATE_TERMINATION": "semantic_debate_termination",
     "TRADINGAGENTS_LLM_TIMEOUT_SECONDS": "llm_timeout_seconds",
+    "TRADINGAGENTS_JOB_TIMEOUT_SECONDS": "job_timeout_seconds",
+    "TRADINGAGENTS_JOB_STUCK_SECONDS": "job_stuck_seconds",
+    "TRADINGAGENTS_OPTIONS_STRATEGIST_ENABLED": "options_strategist_enabled",
 }
 
 
@@ -117,6 +120,10 @@ _CONFIG_BASE: dict = {
     # Service settings (API mode)
     "max_concurrency": 3,
     "job_ttl_hours": 24,
+    # Wall-clock cap for a single API job (seconds). None disables the cap.
+    "job_timeout_seconds": 7200,
+    # Heartbeat warning when no graph step completes for this many seconds.
+    "job_stuck_seconds": 900,
     # Data vendor configuration (comma-separated primaries; see prefer_free_data_vendors).
     "prefer_free_data_vendors": True,
     "data_vendors": {
@@ -125,8 +132,11 @@ _CONFIG_BASE: dict = {
         "fundamental_data": "yfinance,alpha_vantage",
         "news_data": "yfinance,finnhub,google_rss,akshare,alpha_vantage",
         "macro_data": "akshare",
+        "options_data": "yfinance",
     },
     "tool_vendors": {},
+    # Options strategist overlay (runs after Portfolio Manager)
+    "options_strategist_enabled": False,
     # Benchmark for alpha calculation in the reflection layer.
     "benchmark_ticker": None,
     "benchmark_map": {

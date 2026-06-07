@@ -198,6 +198,10 @@ export type JobResultPayload = {
     weak_data?: string[];
     peer_scope?: string | null;
   } | null;
+  /** Plan levels derived from reports (entry, stop_loss, price_target). */
+  plan_levels?: Record<string, unknown> | null;
+  /** Live quote and plan comparison captured when the graph started. */
+  live_context_at_run?: Record<string, unknown> | null;
 };
 
 export type JobDimensionsBundle = {
@@ -410,6 +414,8 @@ export type HistoryRunDetail = {
   dimensions_commentary?: DimensionsCommentary | null;
   dimensions_error?: string | null;
   dimensions_in_graph?: boolean | null;
+  plan_levels?: Record<string, unknown> | null;
+  live_context_at_run?: Record<string, unknown> | null;
 };
 
 export type HistoryCompareSide = {

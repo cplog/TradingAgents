@@ -1,11 +1,15 @@
 # TradingAgents/graph/trading_graph.py
 
+import copy
 import logging
 import os
 from pathlib import Path
 import json
 from datetime import datetime, timedelta
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Dict, Any, Tuple, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .job_control import GraphStepHooks
 
 import yfinance as yf
 
@@ -386,12 +390,15 @@ class TradingAgentsGraph:
         identity = resolve_instrument_identity(ticker)
         return build_instrument_context(ticker, asset_type, identity)
 
-    def propagate(self, company_name, trade_date):
+    def propagate(self, company_name, trade_date, *, step_hooks: Optional["GraphStepHooks"] = None):
         """Run the trading agents graph for a company on a specific date.
 
         When ``checkpoint_enabled`` is set in config, the graph is recompiled
         with a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
+
+        When ``step_hooks`` is provided, the graph streams with ``stream_mode=
+        updates`` and checks cancellation/timeout callbacks after each node.
         """
         self.ticker = company_name
 
@@ -417,16 +424,15 @@ class TradingAgentsGraph:
                 logger.info("Starting fresh for %s on %s", company_name, trade_date)
 
         try:
-            return self._run_graph(company_name, trade_date)
+            return self._run_graph(company_name, trade_date, step_hooks=step_hooks)
         finally:
             if self._checkpointer_ctx is not None:
                 self._checkpointer_ctx.__exit__(None, None, None)
                 self._checkpointer_ctx = None
                 self.graph = self.workflow.compile()
 
-    def _run_graph(self, company_name, trade_date):
-        """Execute the graph and write the resulting state to disk and memory log."""
-        # Initialize state — inject memory log context for PM.
+    def _build_initial_state(self, company_name: str, trade_date: str) -> Dict[str, Any]:
+        """Create LangGraph initial state for a run."""
         past_context = self.memory_log.get_past_context(company_name)
         import json
 
@@ -435,7 +441,7 @@ class TradingAgentsGraph:
         run_snapshot = build_run_execution_snapshot(company_name, str(trade_date))
         execution_context = run_snapshot["markdown"]
         instrument_context = self.resolve_instrument_context(company_name)
-        init_agent_state = self.propagator.create_initial_state(
+        return self.propagator.create_initial_state(
             company_name,
             trade_date,
             past_context=past_context,
@@ -450,7 +456,55 @@ class TradingAgentsGraph:
             ),
             instrument_context=instrument_context,
         )
-        args = self.propagator.get_graph_args()
+
+    def _graph_stream_args(self, *, stream_mode: str = "values") -> Dict[str, Any]:
+        callbacks = self.callbacks or None
+        get_args = self.propagator.get_graph_args
+        try:
+            args = get_args(callbacks=callbacks)
+        except TypeError:
+            # Backward compat: older monkey-patches used a no-arg get_graph_args().
+            args = get_args()
+            if callbacks:
+                args.setdefault("config", {})["callbacks"] = callbacks
+        args["stream_mode"] = stream_mode
+        return args
+
+    def _stream_graph(
+        self,
+        init_agent_state: Dict[str, Any],
+        args: Dict[str, Any],
+        step_hooks: Optional["GraphStepHooks"],
+    ) -> Dict[str, Any]:
+        """Execute via LangGraph stream and merge per-step updates into final state."""
+        # updates mode emits node deltas only — seed from initial state so keys like
+        # company_of_interest (set at init, never re-emitted) are preserved.
+        final_state: Dict[str, Any] = copy.deepcopy(init_agent_state)
+        stream_mode = args.get("stream_mode", "values")
+        for chunk in self.graph.stream(init_agent_state, **args):
+            if not isinstance(chunk, dict):
+                continue
+            if stream_mode == "updates" and step_hooks is not None:
+                for node_name, node_update in chunk.items():
+                    if isinstance(node_update, dict):
+                        final_state.update(node_update)
+                    step_hooks.after_step(str(node_name))
+            else:
+                final_state.update(chunk)
+        return final_state
+
+    def _run_graph(
+        self,
+        company_name,
+        trade_date,
+        *,
+        step_hooks: Optional["GraphStepHooks"] = None,
+    ):
+        """Execute the graph and write the resulting state to disk and memory log."""
+        init_agent_state = self._build_initial_state(company_name, trade_date)
+        args = self._graph_stream_args(
+            stream_mode="updates" if step_hooks is not None else "values"
+        )
 
         # Inject thread_id so same ticker+date resumes, different date starts fresh.
         if self.config.get("checkpoint_enabled"):
@@ -459,17 +513,23 @@ class TradingAgentsGraph:
 
         if self.debug:
             trace = []
-            for chunk in self.graph.stream(init_agent_state, **args):
-                if len(chunk["messages"]) == 0:
+            debug_args = self._graph_stream_args(stream_mode="values")
+            if self.config.get("checkpoint_enabled"):
+                tid = thread_id(company_name, str(trade_date))
+                debug_args.setdefault("config", {}).setdefault("configurable", {})[
+                    "thread_id"
+                ] = tid
+            for chunk in self.graph.stream(init_agent_state, **debug_args):
+                if len(chunk.get("messages", [])) == 0:
                     pass
                 else:
                     chunk["messages"][-1].pretty_print()
                     trace.append(chunk)
-            # Streamed chunks are per-node deltas. Merge them so the returned
-            # state matches what graph.invoke() yields in the non-debug path.
             final_state = {}
             for chunk in trace:
                 final_state.update(chunk)
+        elif step_hooks is not None:
+            final_state = self._stream_graph(init_agent_state, args, step_hooks)
         else:
             final_state = self.graph.invoke(init_agent_state, **args)
 

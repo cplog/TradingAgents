@@ -14,18 +14,17 @@ describe("buildPipelineNodeRows", () => {
     expect(rows.every((r) => r.state === "done")).toBe(true);
   });
 
-  it("surfaces running graph node during LangGraph heartbeat", () => {
+  it("classifies completed node progress as graph stage", () => {
     const rows = buildPipelineNodeRows(
       "running",
       [
         { ts: "2026-05-20T10:00:00Z", stage: "queued", message: "Job queued" },
-        { ts: "2026-05-20T10:00:10Z", stage: "running", message: "Parallel analyst nodes: market, news" },
-        { ts: "2026-05-20T10:01:00Z", stage: "running", message: "Still in LangGraph (~50s elapsed)" },
+        { ts: "2026-05-20T10:00:10Z", stage: "running", message: "Completed node: Market Analyst" },
       ],
       { nowMs: Date.parse("2026-05-20T10:02:00Z") }
     );
     const graph = rows.find((r) => r.id === "graph");
     expect(graph?.state).toBe("running");
-    expect(graph?.detail).toMatch(/LangGraph/i);
+    expect(graph?.detail).toMatch(/Completed node: Market Analyst/);
   });
 });

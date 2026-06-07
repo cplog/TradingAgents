@@ -40,7 +40,7 @@ export function StockPage() {
   const [compare, setCompare] = useState<HistoryCompareResponse | null>(null);
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareError, setCompareError] = useState<string | null>(null);
-  useDocumentTitle(ticker ? `${ticker} — Stock history` : "Stock");
+  useDocumentTitle(ticker ? `${ticker} · Stock history` : "Stock");
 
   const load = useCallback(async () => {
     if (!ticker) return;
@@ -120,7 +120,7 @@ export function StockPage() {
     <PageFrame className="stock-page">
       <PageHeader
         title={ticker}
-        description="Stock-level view — all persisted runs for this symbol. Open a run for the full report; compare runs with matching model and data setup."
+            description="Stock-level view. All persisted runs for this symbol. Open a run for the full report; compare runs with matching model and data setup."
         meta={
           <>
             <AppBreadcrumbs

@@ -12,14 +12,17 @@
   },
   "dependencies": {
     "@formkit/auto-animate": "^0.9.0",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
     "html-to-image": "^1.11.13",
     "motion": "^12.38.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.3.0-canary-43bcbf80-20260603",
+    "react-dom": "^19.3.0-canary-43bcbf80-20260603",
     "react-markdown": "^10.0.0",
     "react-router-dom": "^7.3.0",
     "recharts": "^3.8.1",
-    "remark-gfm": "^4.0.0"
+    "remark-gfm": "^4.0.0",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

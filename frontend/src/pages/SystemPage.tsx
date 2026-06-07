@@ -38,15 +38,7 @@ export function SystemPage() {
         meta={<AppBreadcrumbs items={[{ label: "System" }]} />}
       />
 
-      <section className="panel"
-        style={{
-          marginBottom: "var(--spacing-24)",
-          padding: "var(--spacing-24)",
-          background: "var(--surface-cloud-white)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--color-stone-border)",
-        }}
-      >
+      <section className="page-section section-gap">
         <h2 style={{ marginTop: 0 }}>Service health</h2>
         {health ? (
           <>
@@ -54,9 +46,9 @@ export function SystemPage() {
               <li>
                 LLM API key:{" "}
                 {health.api_key_configured ? (
-                  <span style={{ color: "#166534" }}>configured</span>
+                  <span style={{ color: "var(--color-sage)" }}>configured</span>
                 ) : (
-                  <span style={{ color: "#b91c1c" }}>missing</span>
+                  <span style={{ color: "var(--color-danger)" }}>missing</span>
                 )}
               </li>
               <li>Provider: {health.llm_provider}</li>
@@ -88,7 +80,7 @@ export function SystemPage() {
                           {check.configured ? "yes" : "no"}
                         </td>
                         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--color-canvas-fog)" }}>
-                          <span style={{ color: check.ok ? "#166534" : "#b91c1c" }}>
+                          <span style={{ color: check.ok ? "var(--color-sage)" : "var(--color-danger)" }}>
                             {check.ok ? "ok" : "down"}
                           </span>
                         </td>
@@ -109,15 +101,7 @@ export function SystemPage() {
         )}
       </section>
 
-      <section
-        style={{
-          marginBottom: "var(--spacing-24)",
-          padding: "var(--spacing-24)",
-          background: "var(--surface-cloud-white)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--color-stone-border)",
-        }}
-      >
+      <section className="page-section section-gap">
         <h2 style={{ marginTop: 0 }}>Resolved config (redacted)</h2>
         <pre
           className="mono"
@@ -134,14 +118,7 @@ export function SystemPage() {
         </pre>
       </section>
 
-      <section
-        style={{
-          padding: "var(--spacing-24)",
-          background: "var(--surface-cloud-white)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--color-stone-border)",
-        }}
-      >
+      <section className="page-section section-gap">
         <h2 style={{ marginTop: 0 }}>Runtime updates</h2>
         <p style={{ fontSize: 14, color: "var(--color-ash-gray)" }}>
           Requires <span className="mono">TRADINGAGENTS_ADMIN_KEY</span> on the server. Writes
@@ -149,52 +126,53 @@ export function SystemPage() {
           persist to the same store and are loaded into <span className="mono">os.environ</span> on
           next request bootstrap.
         </p>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          X-Admin-Key
+        <label className="ui-field">
+          <span className="ui-field__label">X-Admin-Key</span>
           <input
+            className="ui-input"
             type="password"
             value={adminKey}
             onChange={(e) => setAdminKey(e.target.value)}
-            style={{ display: "block", width: "100%", marginTop: 4, padding: 8 }}
           />
         </label>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          llm_provider
+        <label className="ui-field">
+          <span className="ui-field__label">llm_provider</span>
           <input
+            className="ui-input"
             value={provider}
             onChange={(e) => setProvider(e.target.value)}
-            style={{ display: "block", width: "100%", marginTop: 4, padding: 8 }}
           />
         </label>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          deep_think_llm
+        <label className="ui-field">
+          <span className="ui-field__label">deep_think_llm</span>
           <input
+            className="ui-input"
             value={deep}
             onChange={(e) => setDeep(e.target.value)}
-            style={{ display: "block", width: "100%", marginTop: 4, padding: 8 }}
           />
         </label>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          quick_think_llm
+        <label className="ui-field">
+          <span className="ui-field__label">quick_think_llm</span>
           <input
+            className="ui-input"
             value={quick}
             onChange={(e) => setQuick(e.target.value)}
-            style={{ display: "block", width: "100%", marginTop: 4, padding: 8 }}
           />
         </label>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          OPENAI_API_KEY (optional, stored if admin enabled)
+        <label className="ui-field">
+          <span className="ui-field__label">OPENAI_API_KEY (optional, stored if admin enabled)</span>
           <input
+            className="ui-input"
             type="password"
             value={openaiKey}
             onChange={(e) => setOpenaiKey(e.target.value)}
-            style={{ display: "block", width: "100%", marginTop: 4, padding: 8 }}
           />
         </label>
         {msg && <p>{msg}</p>}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
           <button
             type="button"
+            className="ui-btn-primary"
             onClick={() =>
               void postRuntimeConfig(
                 {
@@ -210,48 +188,24 @@ export function SystemPage() {
                 .then(() => setMsg("Saved. Restart workers or reload config as needed."))
                 .catch((e) => setMsg(String(e)))
             }
-            style={{
-              padding: "10px 16px",
-              background: "var(--color-chartwell-blue)",
-              color: "white",
-              border: "none",
-              borderRadius: "var(--radius-buttons)",
-              cursor: "pointer",
-            }}
           >
             Save runtime config
           </button>
           <button
             type="button"
+            className="ui-btn-secondary"
             onClick={() =>
               void postClearCache(adminKey, "checkpoints")
                 .then(() => setMsg("Checkpoint DBs cleared under data_cache_dir/checkpoints."))
                 .catch((e) => setMsg(String(e)))
             }
-            style={{
-              padding: "10px 16px",
-              background: "var(--color-ghost-ink)",
-              color: "white",
-              border: "none",
-              borderRadius: "var(--radius-buttons)",
-              cursor: "pointer",
-            }}
           >
             Clear checkpoint cache
           </button>
         </div>
       </section>
 
-      <section
-        className="panel"
-        style={{
-          marginTop: "var(--spacing-24)",
-          padding: "var(--spacing-24)",
-          background: "var(--surface-cloud-white)",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--color-stone-border)",
-        }}
-      >
+      <section className="page-section">
         <h2 style={{ marginTop: 0 }}>External consoles</h2>
         <p style={{ fontSize: 14, color: "var(--color-ash-gray)" }}>
           Optional Cloudflare KV for durable API state, or local JSON at{" "}

@@ -38,7 +38,7 @@ export function NewsPage() {
       .catch(() => setRelatedTopics([]));
   }, []);
 
-  useDocumentTitle(ticker.trim() ? `${ticker.trim().toUpperCase()} — News` : "News");
+  useDocumentTitle(ticker.trim() ? `${ticker.trim().toUpperCase()} · News` : "News");
 
   async function load() {
     setLoading(true);
@@ -92,7 +92,7 @@ export function NewsPage() {
         Raw streams merged: <strong>Yahoo ticker news</strong>, <strong>Yahoo macro search</strong>,{" "}
         <strong>Finnhub</strong>, <strong>Google RSS</strong>, <strong>AKShare</strong>,{" "}
         <strong>Alpha Vantage</strong> when <span className="mono">ALPHA_VANTAGE_API_KEY</span> is set, plus{" "}
-        <strong>Reddit</strong> and <strong>StockTwits</strong>. Sentiment uses keywords and source labels — not an LLM.
+        <strong>Reddit</strong> and <strong>StockTwits</strong>. Sentiment uses keywords and source labels, not an LLM.
       </p>
       <div className="ui-form-row ui-form-row--stretch">
         <input

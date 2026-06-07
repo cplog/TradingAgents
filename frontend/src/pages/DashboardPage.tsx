@@ -85,7 +85,7 @@ export function DashboardPage() {
   const [submitting, setSubmitting] = useState(false);
   const [jobNotice, setJobNotice] = useState<string | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
-  useDocumentTitle(ticker.trim() ? `${ticker.trim().toUpperCase()} — Analysis` : "Analysis");
+  useDocumentTitle(ticker.trim() ? `${ticker.trim().toUpperCase()} · Analysis` : "Analysis");
 
   useEffect(() => {
     if (tickerFromQs) setTicker(tickerFromQs);
@@ -159,7 +159,7 @@ export function DashboardPage() {
       );
       if (dropped.length) {
         setJobNotice(
-          `Unsupported analyst(s) on this API — omitted from request: ${dropped.join(", ")}. ` +
+          `Unsupported analyst(s) on this API, omitted from request: ${dropped.join(", ")}. ` +
             `Run the API from this repo (\`pip install -e .\`, then \`uvicorn api.main:app --port 8808\`) so all focus areas are accepted.`
         );
       }
@@ -215,24 +215,20 @@ export function DashboardPage() {
               onReset={resetLlm}
               disabled={jobActive}
             />
-            <label style={{ display: "block", marginBottom: 12, marginTop: 12 }}>
-              <span style={{ display: "block", fontSize: "var(--text-caption)", marginBottom: 4 }}>
-                Output language
-              </span>
+            <label className="ui-field">
+              <span className="ui-field__label">Output language</span>
               <input
+                className="ui-input"
                 value={outputLanguage}
                 onChange={(e) => setOutputLanguage(e.target.value)}
                 disabled={jobActive}
-                style={{ width: "100%", padding: 8 }}
               />
             </label>
-            <label style={{ display: "block", marginBottom: 12 }}>
-              <span style={{ display: "block", fontSize: "var(--text-caption)", marginBottom: 4 }}>
-                Focus area (analysts)
-              </span>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <label className="ui-field">
+              <span className="ui-field__label">Focus area (analysts)</span>
+              <div className="stack-sm">
                 {ANALYST_OPTIONS.map((a) => (
-                  <label key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14 }}>
+                  <label key={a.id} className="ui-field-row">
                     <input
                       type="checkbox"
                       checked={selectedAnalysts.includes(a.id)}
@@ -250,15 +246,13 @@ export function DashboardPage() {
                 ))}
               </div>
             </label>
-            <label style={{ display: "block", marginBottom: 12 }}>
-              <span style={{ display: "block", fontSize: "var(--text-caption)", marginBottom: 4 }}>
-                Report format
-              </span>
+            <label className="ui-field">
+              <span className="ui-field__label">Report format</span>
               <select
+                className="ui-input"
                 value={reportFormat}
                 onChange={(e) => setReportFormat(e.target.value)}
                 disabled={jobActive}
-                style={{ width: "100%", padding: 8, borderRadius: "var(--radius-inputs)" }}
               >
                 {REPORT_FORMATS.map((f) => (
                   <option key={f} value={f}>
@@ -269,30 +263,20 @@ export function DashboardPage() {
             </label>
           </fieldset>
 
-          <details style={{ marginTop: "var(--spacing-16)" }}>
-            <summary
-              style={{
-                cursor: "pointer",
-                fontWeight: 600,
-                fontSize: "var(--text-caption)",
-                color: "var(--color-slate-text)",
-                marginBottom: "var(--spacing-12)",
-              }}
-            >
-              Advanced
-            </summary>
-            <label style={{ display: "block", marginBottom: 12 }}>
-              <span style={{ display: "block", fontSize: "var(--text-caption)", marginBottom: 4 }}>
+          <details className="dashboard-advanced">
+            <summary className="dashboard-advanced__summary">Advanced</summary>
+            <label className="ui-field">
+              <span className="ui-field__label">
                 Temperature: {temperature.toFixed(2)}
               </span>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <label className="ui-field-row">
                 <input
                   type="checkbox"
                   checked={applyTemperature}
                   disabled={jobActive}
                   onChange={(e) => setApplyTemperature(e.target.checked)}
                 />
-                <span style={{ fontSize: 13 }}>Send temperature on each run (otherwise model default)</span>
+                <span>Send temperature on each run (otherwise model default)</span>
               </label>
               <input
                 type="range"
@@ -302,35 +286,31 @@ export function DashboardPage() {
                 value={temperature}
                 onChange={(e) => setTemperature(Number(e.target.value))}
                 disabled={!applyTemperature || jobActive}
-                style={{ width: "100%", opacity: applyTemperature ? 1 : 0.5 }}
+                className="dashboard-advanced__range"
               />
             </label>
-            <label style={{ display: "block", marginBottom: 12 }}>
-              <span style={{ display: "block", fontSize: "var(--text-caption)", marginBottom: 4 }}>
-                Debate rounds
-              </span>
+            <label className="ui-field">
+              <span className="ui-field__label">Debate rounds</span>
               <input
+                className="ui-input"
                 type="number"
                 min={0}
                 max={5}
                 value={debate}
                 disabled={jobActive}
                 onChange={(e) => setDebate(Number(e.target.value))}
-                style={{ width: "100%", padding: 8 }}
               />
             </label>
-            <label style={{ display: "block", marginBottom: 12 }}>
-              <span style={{ display: "block", fontSize: "var(--text-caption)", marginBottom: 4 }}>
-                Risk rounds
-              </span>
+            <label className="ui-field">
+              <span className="ui-field__label">Risk rounds</span>
               <input
+                className="ui-input"
                 type="number"
                 min={0}
                 max={5}
                 value={riskRounds}
                 disabled={jobActive}
                 onChange={(e) => setRiskRounds(Number(e.target.value))}
-                style={{ width: "100%", padding: 8 }}
               />
             </label>
           </details>
@@ -357,50 +337,28 @@ export function DashboardPage() {
             />
           </label>
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--spacing-8)",
-              flexWrap: "wrap",
-              marginBottom: "var(--spacing-12)",
-              fontSize: "var(--text-caption)",
-              color: "var(--color-ash-gray)",
-            }}
-          >
+          <div className="run-meta-row">
             <span className="mono">
               {llmConfig.provider} · {llmConfig.quickModel}
             </span>
             {hintLine && <span>· {hintLine}</span>}
           </div>
 
-          <div className="pipeline-track" style={{ marginBottom: "var(--spacing-16)" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+          <div className="pipeline-track">
+            <div className="pipeline-track__dots">
               {pipelineLabels.map((label, i) => (
-                <div key={label} style={{ flex: 1, textAlign: "center", minWidth: 0 }}>
+                <div key={label} className="pipeline-track__cell">
                   <div className={pipelineDotClass()} title={label} />
-                  <div
-                    style={{
-                      fontSize: 10,
-                      color: "var(--color-steel-gray)",
-                      marginTop: 4,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {label}
-                  </div>
+                  <div className="pipeline-track__label">{label}</div>
                 </div>
               ))}
             </div>
           </div>
 
           <Pressable
-            className="ui-btn-primary"
+            className="ui-btn-primary ui-btn-full"
             disabled={jobActive || apiSupportedAnalystIds === undefined}
             onClick={() => void runAnalysis().catch((e) => alert(String(e)))}
-            style={{ width: "100%" }}
           >
             {apiSupportedAnalystIds === undefined
               ? "Checking API…"

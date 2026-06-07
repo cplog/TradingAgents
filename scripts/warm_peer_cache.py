@@ -26,7 +26,7 @@ import argparse
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from api.config import build_service_config
 from api.dimensions.facts import extract_facts
@@ -82,14 +82,104 @@ def _derive_market_bucket(
     return (mb or ""), ex, cur
 
 
+def _run_bulk(
+    tickers: List[str],
+    today: str,
+    cache: PeerCache,
+    cache_dir: Path,
+    no_d1: bool,
+) -> int:
+    """Extract facts for all tickers, group by metadata, and warm every slug with >=3 peers."""
+    from collections import defaultdict
+
+    raw_facts: Dict[str, Dict[str, Any]] = {}
+    skipped = 0
+    for t in tickers:
+        try:
+            snap, _ = extract_facts(t, today)
+            raw_facts[t] = snap.model_dump()
+            print(f"OK   {t}")
+        except Exception as exc:
+            print(f"SKIP {t}: {exc}", file=sys.stderr)
+            skipped += 1
+
+    if not raw_facts:
+        print("No valid facts extracted.", file=sys.stderr)
+        return 3
+
+    # Group by (sector, industry, exchange, currency)
+    GroupKey = Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]
+    by_group: Dict[GroupKey, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+    for t, f in raw_facts.items():
+        key = (f.get("sector"), f.get("industry"), f.get("exchange"), f.get("currency"))
+        by_group[key][t] = f
+
+    written = 0
+    for (sector, industry, exchange, currency), facts in by_group.items():
+        if len(facts) < 3:
+            continue
+        if not sector or not industry:
+            continue
+        mb = market_bucket_from_exchange_currency(exchange, currency)
+
+        # Global industry
+        g_slug = slug_for_sector(sector, industry)
+        if g_slug:
+            cache.write(g_slug, list(facts.keys()), facts)
+            print(f"Wrote global  {g_slug} ({len(facts)} peers)")
+            if not no_d1 and d1_history_enabled():
+                try:
+                    persist_dimension_peer_universe(
+                        g_slug, scope="global", sector=sector, industry=industry,
+                        facts=facts, exchange=None, currency=None,
+                    )
+                except Exception as exc:
+                    print(f"D1 upsert failed for {g_slug}: {exc}", file=sys.stderr)
+            written += 1
+
+        # Local industry + local sector-wide
+        if mb:
+            li_slug = slug_for_local_industry_universe(mb, sector, industry)
+            if li_slug:
+                cache.write(li_slug, list(facts.keys()), facts)
+                print(f"Wrote local   {li_slug} ({len(facts)} peers)")
+                if not no_d1 and d1_history_enabled():
+                    try:
+                        persist_dimension_peer_universe(
+                            li_slug, scope="local", sector=sector, industry=industry,
+                            facts=facts, exchange=exchange, currency=currency,
+                        )
+                    except Exception as exc:
+                        print(f"D1 upsert failed for {li_slug}: {exc}", file=sys.stderr)
+                written += 1
+
+            ls_slug = slug_for_local_sector_universe(mb, sector)
+            if ls_slug:
+                cache.write(ls_slug, list(facts.keys()), facts)
+                print(f"Wrote sector  {ls_slug} ({len(facts)} peers)")
+                if not no_d1 and d1_history_enabled():
+                    try:
+                        persist_dimension_peer_universe(
+                            ls_slug, scope="sector", sector=sector,
+                            industry=LOCAL_SECTOR_WIDE_INDUSTRY,
+                            facts=facts, exchange=exchange, currency=currency,
+                        )
+                    except Exception as exc:
+                        print(f"D1 upsert failed for {ls_slug}: {exc}", file=sys.stderr)
+                written += 1
+
+    print(f"\nBulk warm complete: {written} slugs written from {len(raw_facts)} tickers ({skipped} skipped).")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
         "mode",
-        choices=("global", "local", "sector"),
-        help="Peer universe shape: global sector/industry, local industry, or local sector-wide.",
+        choices=("global", "local", "sector", "bulk"),
+        help="Peer universe shape: global sector/industry, local industry, local sector-wide, or bulk (auto-detect all slugs from tickers).",
     )
-    p.add_argument("--sector", required=True, help="Yahoo-style sector string")
+    p.add_argument("--sector", default=None, help="Yahoo-style sector string")
     p.add_argument(
         "--industry",
         help="Yahoo-style industry string (required for global and local modes)",
@@ -117,6 +207,9 @@ def main(argv=None) -> int:
     if args.mode in ("global", "local") and not args.industry:
         print("--industry is required for global and local modes", file=sys.stderr)
         return 2
+    if args.mode in ("global", "local", "sector") and not args.sector:
+        print("--sector is required for global, local, and sector modes", file=sys.stderr)
+        return 2
 
     if args.cache_dir:
         base = Path(args.cache_dir)
@@ -127,6 +220,17 @@ def main(argv=None) -> int:
     cache = PeerCache(base_dir=cache_dir)
 
     today = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Bulk mode: extract all tickers, group by sector/industry/exchange/currency,
+    # then warm every slug that has >=3 members.
+    if args.mode == "bulk":
+        return _run_bulk(
+            tickers=args.tickers,
+            today=today,
+            cache=cache,
+            cache_dir=cache_dir,
+            no_d1=args.no_d1,
+        )
 
     # Derive market bucket from first ticker if exchange/currency omitted (local/sector).
     first_ex: Optional[str] = None

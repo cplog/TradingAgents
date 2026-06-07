@@ -48,7 +48,7 @@ def _messages_with_json_fallback_hint(messages: list[dict]) -> list[dict]:
     return out
 
 
-def _build_prompt(facts: FactSnapshot, reports: Dict[str, str]) -> list[dict]:
+def _build_prompt(facts: FactSnapshot, reports: Dict[str, str], *, peer_scope: Optional[str] = None, data_quality_flags: Optional[List[str]] = None) -> list[dict]:
     facts_json = json.dumps(facts.model_dump(), default=str, indent=2)
     body = [f"## Facts\n```json\n{facts_json}\n```"]
     for key in ("market", "social", "news", "fundamentals"):
@@ -58,6 +58,24 @@ def _build_prompt(facts: FactSnapshot, reports: Dict[str, str]) -> list[dict]:
         text = (reports.get(key) or "").strip()
         if text:
             body.append(f"## {title} Analyst Report (supplementary)\n{text}")
+
+    # Inject known data blind spots so the LLM does not hallucinate confidence
+    # where facts are genuinely missing.
+    caveats: List[str] = []
+    if data_quality_flags:
+        for flag in data_quality_flags:
+            if flag.startswith("missing_"):
+                caveats.append(flag)
+    if peer_scope == "unavailable":
+        caveats.append("peer_universe_unavailable — no peer-relative calibration possible")
+    if caveats:
+        body.append(
+            "## Data Caveats\n"
+            "The following metrics are missing or synthetic; score conservatively "
+            "(avoid extreme 1 or 5 scores) when they affect a dimension:\n"
+            + "\n".join(f"- {c}" for c in caveats)
+        )
+
     return [
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": "\n\n".join(body)},
@@ -145,9 +163,11 @@ def score_pillars(
     facts: FactSnapshot,
     analyst_reports: Dict[str, str],
     llm: Any,
+    peer_scope: Optional[str] = None,
+    data_quality_flags: Optional[List[str]] = None,
 ) -> PillarScores:
     """Returns parsed PillarScores. Raises PillarScoringError on any failure."""
-    messages = _build_prompt(facts, analyst_reports)
+    messages = _build_prompt(facts, analyst_reports, peer_scope=peer_scope, data_quality_flags=data_quality_flags)
     try:
         structured = llm.with_structured_output(PillarScores)
         result = structured.invoke(messages)

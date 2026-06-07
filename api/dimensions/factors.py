@@ -116,17 +116,44 @@ def compute_factors_with_flags(
         value_inputs = {}
         flags.append("factor_value_missing_peer_percentiles")
 
-    growth_score, growth_inputs = _weighted([
+    # EPS growth percentile with revenue-growth fallback proxy
+    eps_growth_pct = _pct_to_100(peer_pct.get("eps_growth_yoy"))
+    revenue_growth_pct = _pct_to_100(peer_pct.get("revenue_growth_yoy"))
+    growth_proxy_applied: Optional[str] = None
+    if eps_growth_pct is None and revenue_growth_pct is not None:
+        eps_growth_pct = revenue_growth_pct
+        growth_proxy_applied = "eps_growth_proxy_from_revenue_growth"
+
+    # Default growth blend
+    growth_components = [
         ("growth_pillar", scale_1_5_to_0_100(pillars.fundamentals.growth.score), 0.5),
-        ("eps_growth_pct", _pct_to_100(peer_pct.get("eps_growth_yoy")), 0.25),
-        ("revenue_growth_pct", _pct_to_100(peer_pct.get("revenue_growth_yoy")), 0.25),
-    ])
+        ("eps_growth_pct", eps_growth_pct, 0.25),
+        ("revenue_growth_pct", revenue_growth_pct, 0.25),
+    ]
+
+    # Price-momentum weak proxy when both earnings/revenue growth percentiles are missing
+    if eps_growth_pct is None and revenue_growth_pct is None:
+        mom_proxy = _pct_to_100(peer_pct.get("return_12m"))
+        if mom_proxy is not None:
+            growth_components = [
+                ("growth_pillar", scale_1_5_to_0_100(pillars.fundamentals.growth.score), 0.6),
+                ("return_12m_pct", mom_proxy, 0.4),
+            ]
+            flags.append("growth_proxy_from_price_momentum")
+
+    growth_score, growth_inputs = _weighted(growth_components)
+    if growth_proxy_applied:
+        flags.append(growth_proxy_applied)
+
     if enforce_peer_pct_for_style_factors and (
         peer_pct.get("eps_growth_yoy") is None and peer_pct.get("revenue_growth_yoy") is None
     ):
+        # Blank only if the strict mode is on AND the raw percentiles were missing.
+        # The proxy fills above already attempted rescue.
         growth_score = None
         growth_inputs = {}
-        flags.append("factor_growth_missing_peer_percentiles")
+        if "growth_proxy_from_price_momentum" not in flags:
+            flags.append("factor_growth_missing_peer_percentiles")
 
     quality_score, quality_inputs = _weighted([
         ("profitability_pillar",

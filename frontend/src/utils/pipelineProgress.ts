@@ -60,6 +60,9 @@ function classifyEvent(message: string, stage: string): PipelineNodeId | null {
   if (
     m.includes("langgraph") ||
     m.includes("still in langgraph") ||
+    m.includes("still running") ||
+    m.includes("waiting for current graph step") ||
+    m.includes("completed node:") ||
     m.includes("debate") ||
     m.includes("research manager") ||
     m.includes("portfolio manager") ||

@@ -1,32 +1,54 @@
-# Product Specification: TradingAgents Command Center
+# Product Specification: TradingAgents
 
-> **Version**: 1.0-fusion  
-> **Last Updated**: 2026-05-17  
-> **Scope**: TradingAgents-astock × Awesome-finance-skills integration  
-> **Design System**: [TradingAgents Command Center Design System](../design-system.md)
+> **Version**: 2.0-pivot (brand surface)
+> **Last Updated**: 2026-06-05
+> **Scope**: Brand-led consumer-facing surface wrapping the multi-agent research interface
+> **Design System**: see [DESIGN.md](./DESIGN.md) — die-cut paper, visible grain, Mailchimp × Revolut help-center lane
 
 ---
 
 ## 1. Product Overview
 
 ### 1.1 Elevator Pitch
-TradingAgents Command Center is an **operational research interface** that transforms complex multi-agent market analysis into an actionable, repeatable workflow. Users configure a ticker, trigger a 7-analyst + AI prediction pipeline backed by **[Awesome-finance-skills](https://github.com/RKiding/Awesome-finance-skills)**-aligned data (multi-source news, A-share/HK/US market data, sentiment, search/RAG, Kronos forecasting), and receive a structured decision package—rating, evidence chain, forecast chart, and risk assessment—in under 4 minutes.
+TradingAgents is a financial research interface wrapped in a handcrafted brand surface. The wrapper carries personality: die-cut paper, visible grain, witty-but-precise voice, the **Mailchimp-meets-Revolut-help-center** lane. Inside, a 7-analyst + Kronos pipeline turns a ticker into a structured decision package — rating, evidence chain, forecast chart, risk assessment — in under 4 minutes. The product isn't just the analysis; it's the relationship between the brand surface and the analysis. Visible craft on the outside, serious work on the inside.
 
 ### 1.2 Product Purpose
-Turn a complex research pipeline into an actionable flow: **configure → run → inspect artifacts → decide next steps**. Success means users complete an analysis loop with high confidence in what happened, why the rating was produced, and what to do next—without hunting across multiple tools.
+Turn a complex research pipeline into an experience people want to open: **arrive curious → see the craft → run an analysis → trust the result**. Success means a user lands on the brand surface, feels the handmade quality, runs a real analysis inside the embedded interface, and leaves with a decision they understand and remember.
 
 ### 1.3 Brand Personality
-**Approachable, guided, and competent.**
+**Handmade, witty, sharp.**
 
-Voice and tone reduce cognitive load for non-expert users while preserving technical trust for advanced users. The interface feels calm and clear under uncertainty, with explicit status language and practical next actions.
+Voice and tone are crafted the way good stationery is: warm, considered, never sloppy. The interface earns trust through visible craft (die-cut paper edges, visible grain, hand-cut imperfection) and earns respect through sharp typographic detail, accurate financial copy, and surfaces that respect the user's intelligence. The Mailchimp lane: warm but never cute. The Revolut help-center lane: warm but never dumbed down. Personality means we make the craft visible AND we say precise things about it.
+
+Three-word test: anything that reads as *cold, severe, generic, corporate, sterile* fails.
 
 ### 1.4 Anti-References (What We Reject)
-- ❌ Generic glossy SaaS marketing aesthetics that prioritize decoration over utility.
-- ❌ Neon trading-terminal visuals that increase urgency and fatigue.
-- ❌ Dense enterprise backoffice complexity with overloaded controls and jargon-heavy labels.
-- ❌ Playful consumer-app styling that weakens financial-research credibility.
+- ❌ **The previous retro-dark mission-control aesthetic.** Phosphor green, monospace readouts, scanlines, terminal vibes. Explicitly retired.
+- ❌ **Generic SaaS cream-and-pastel.** Gradient hero cards, hero-metric templates, identical feature grids, glassmorphism defaults, the "AI workflow tool" look.
+- ❌ **Aggressive trading-app urgency.** Red/green tickers, dense Bloomberg-aesthetic data, "ACT NOW" framing, gamified confetti.
+- ❌ **Sterile enterprise backoffice.** Jargon-heavy labels, overloaded controls, dense tables, configuration-on-configuration.
+- ❌ **Decorative paper collage without system discipline.** Ad-hoc cutouts, illustrations that don't share a grammar, paper grain as decoration rather than as a coherent material language. The reference lane is Mailchimp's illustration *system*, not a one-off cutout.
 
-### 1.5 Data Sources & Awesome-finance-skills Modules
+### 1.5 The Brand Surface
+
+The product is presented inside a brand surface that carries the personality. Functional specs (the research interface) live inside it. The brand surface itself has its own information architecture:
+
+**Brand surface sections (top-down):**
+1. **Hero.** One handmade headline, one demonstration artifact (a screenshot of an analysis or a small data piece rendered as paper), one CTA — "Run a sample analysis" or "See the craft." No second column, no metric bar.
+2. **Story.** A short narrative about the multi-agent approach, written in the witty voice. No bullet lists, no feature walls. The story earns trust by being honest about the workflow.
+3. **How it works.** A 3-step paper-collage explainer — *Configure → Run → Decide* — each step illustrated with a die-cut paper diagram that reuses motifs from the embedded interface.
+4. **Live demo.** The research interface itself, embedded. The user runs a real analysis on a sample ticker (000001, 00700, SOFI, NVDA). The demo IS the product.
+5. **Principles.** 3-4 cards explaining design principles ("Show the craft, then ship the work"). Each card is itself a small paper-collage composition, not a checkbox list.
+6. **Sample decisions.** A scrollable strip of past analysis results, each presented as a paper artifact with a torn edge and hand-cut label.
+7. **CTA + footer.** Run it, learn more, see the open-source repo. Footer uses a quiet paper-tape strip, not a corporate link wall.
+
+**Rules:**
+- The brand surface uses the full pastel paper-collage system freely: layered depth, hand-cut edges, visible grain, watercolor accents, sharp witty copy.
+- The embedded research interface inherits the warm personality but is calmer and more legible. Less decorative motion, more typographic precision, denser information.
+- The transition from brand surface to research interface is a single deliberate visual move (a fold, a paper-tape strip, a torn edge across the viewport), not a generic route change.
+- The brand surface and the research interface share a paper grammar: same palette, same cutout shapes, same grain. A illustration on the hero should share a hand with an empty-state card inside the analysis page.
+
+### 1.6 Data Sources & Awesome-finance-skills Modules
 
 Upstream **[Awesome-finance-skills](https://github.com/RKiding/Awesome-finance-skills)** ships plug-in agent skills; this product integrates them as the **canonical research-data and artifact layer** alongside TradingAgents LangGraph nodes.
 
@@ -84,11 +106,11 @@ Upstream **[Awesome-finance-skills](https://github.com/RKiding/Awesome-finance-s
 
 ## 3. Design Principles
 
-1. **Guide first, expose depth progressively.** Keep essential actions obvious and move advanced controls behind clear disclosures.
-2. **Make system state legible at a glance.** Users should always know run status, progress, and failure context without digging.
-3. **Keep evidence close to decisions.** Present ratings, confidence, and report context in one continuous flow.
-4. **Optimize for repeatable workflows.** Favor consistency across dashboard, history, screener, and system views so frequent users build speed.
-5. **Prefer clarity over spectacle.** Visual design supports trust, readability, and decision quality, not novelty.
+1. **Show the craft, then ship the work.** Visible handcraft is the brand's first promise; serious analysis is the second. Both must be present on every surface.
+2. **Paper as material, not decoration.** A fixed paper grammar (3-4 weights, 1-2 cutout shapes, a committed pastel palette, visible grain) makes the 30th illustration feel related to the 1st.
+3. **Wit is precision, not noise.** Sharp copy and sharp typography carry the personality. Decoration that doesn't earn its place gets cut.
+4. **Calm under uncertainty, even when the surface is warm.** A BUY/SELL decision in a paper-collage interface still has to be legible at a glance. Warmth never overrides clarity.
+5. **The brand wrapper and the research interface share a grammar.** The hero, the story, and the analysis run page should feel like the same hands made them.
 
 ---
 
@@ -692,16 +714,29 @@ Frontend (React)
 
 ## 10. Accessibility
 
-### 10.1 Current Baseline
-- Readable contrast and typographic hierarchy on all primary surfaces.
-- Keyboard-reachable controls for core run and review flows.
-- Reduced-motion user preferences respected where motion is used.
+### 10.1 Target
+WCAG 2.1 AA across all surfaces (brand surface, research interface, embedded demo). The paper-collage aesthetic must never compromise legibility, contrast, or motion safety.
 
-### 10.2 WCAG 2.1 AA Milestone
-- **Color**: Signal Blue (`#3ba6f1`) on white passes AA. Ensure semantic red/green on charts have pattern/texture alternatives for colorblind users.
-- **Keyboard**: Full pipeline configuration and result review navigable without mouse.
-- **Screen Reader**: Progress monitor announces node completions. Evidence chain has ARIA labels for tree navigation.
-- **Motion**: Respect `prefers-reduced-motion`. Disable spinner animations, use static progress indicators.
+### 10.2 Texture as a known concern
+Die-cut paper with visible grain is a deliberate aesthetic choice, but layered depth + grain can be visually noisy for some users (vestibular disorders, migraine triggers, attention sensitivities). Mitigations:
+- Honor `prefers-reduced-motion` for all decorative motion (parallax, layered entrance, paper-tape transitions).
+- Decorative motion and parallax must not block task completion; functional motion (progress, status) is allowed but skippable.
+- The interface must remain fully functional with `prefers-reduced-motion: reduce`. Decorative layers fall back to flat compositions; functional motion uses static state indicators.
+
+### 10.3 Color and contrast
+- Pastel palette is committed (one warm hue carries 30-60% of the brand surface; restrained pastels on the research interface). The committed hue must hit AA contrast on every text/background pairing it touches.
+- Charts: semantic red/green (BUY/SELL) require pattern or label alternatives for colorblind users. Don't rely on hue alone for signal state.
+- Rating badges in the research interface use shape and label in addition to color: BUY = filled rounded chip, HOLD = outlined, SELL = filled square. Color reinforces; shape carries the signal.
+
+### 10.4 Keyboard
+- Full pipeline configuration and result review navigable without mouse.
+- Brand surface sections (hero CTA, story, demo entry) are reachable and operable via keyboard alone.
+- Paper-tape and torn-edge transitions are visual; they don't gate navigation.
+
+### 10.5 Screen reader
+- Progress monitor announces node completions. Evidence chain has ARIA labels for tree navigation.
+- Embedded research interface inside the brand surface exposes the same a11y semantics as the standalone interface.
+- Decorative paper-collage elements get `aria-hidden="true"` so they don't pollute the screen-reader tree.
 
 ---
 

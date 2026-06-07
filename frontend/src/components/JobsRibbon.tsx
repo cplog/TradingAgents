@@ -202,7 +202,7 @@ export function JobsRibbon() {
   if (active.length === 0 && toasts.length === 0 && !error) return null;
 
   return (
-    <div className="analysis-status-bar" role="region" aria-label="Analysis status">
+    <div className="analysis-status-bar" role="region" aria-label="Analysis status" style={{ viewTransitionName: "app-jobs-ribbon" } as React.CSSProperties}>
       <div className="analysis-status-bar__head">
         <span className="analysis-status-bar__title">Analysis</span>
         {active.length > 0 && slotCount > 0 && (

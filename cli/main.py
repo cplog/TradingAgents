@@ -881,6 +881,11 @@ def display_complete_report(final_state):
             console.print(Panel("[bold]V. Portfolio Manager Decision[/bold]", border_style="green"))
             console.print(Panel(Markdown(risk["judge_decision"]), title="Portfolio Manager", border_style="blue", padding=(1, 2)))
 
+    # VI. Options Strategy
+    if final_state.get("options_recommendation"):
+        console.print(Panel("[bold]VI. Options Strategy[/bold]", border_style="bright_cyan"))
+        console.print(Panel(Markdown(final_state["options_recommendation"]), title="Options Strategist", border_style="blue", padding=(1, 2)))
+
 
 def update_research_team_status(status):
     """Update status for research team members (not Trader)."""

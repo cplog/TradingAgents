@@ -230,7 +230,7 @@ export function RunDetailPage() {
     <PageFrame className="run-detail-page">
       <PageHeader
         title={ticker}
-        description="Run-level report — one analysis job, full agent output and dimensions."
+        description="Run-level report: one analysis job, full agent output and dimensions."
         meta={
           <>
             <AppBreadcrumbs
@@ -280,7 +280,7 @@ export function RunDetailPage() {
               <div ref={eventsLogRef}>
                 {events.map((e, i) => (
                   <div key={`${e.ts}-${i}`} className="dashboard-progress-log__entry">
-                    <span style={{ color: "#94a3b8" }}>[{e.stage}]</span> {e.message}
+                    <span style={{ color: "var(--color-ink-faint)" }}>[{e.stage}]</span> {e.message}
                   </div>
                 ))}
               </div>

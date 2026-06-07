@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from api.dimensions.facts import FactSnapshot
 from api.dimensions.peer_store import load_peer_facts_for_slug
 from api.dimensions.peers import (
+    LOCAL_SECTOR_WIDE_INDUSTRY,
     market_bucket_from_exchange_currency,
     peer_universe_id,
     peer_universe_label_local,
@@ -86,6 +87,13 @@ def _build_candidate_tiers(facts: FactSnapshot) -> Tuple[List[_TIER], Optional[s
         lbl_g = peer_universe_id(facts.sector, facts.industry)
         if slug_g and lbl_g:
             tiers.append((slug_g, lbl_g, "global_fallback"))
+
+    # 4th tier: global sector-wide (ignore industry, broader peer set)
+    if facts.sector:
+        slug_gs = slug_for_sector(facts.sector, LOCAL_SECTOR_WIDE_INDUSTRY)
+        lbl_gs = peer_universe_id(facts.sector, LOCAL_SECTOR_WIDE_INDUSTRY)
+        if slug_gs and lbl_gs:
+            tiers.append((slug_gs, lbl_gs, "global_fallback"))
 
     return tiers, mb
 

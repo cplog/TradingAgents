@@ -72,7 +72,7 @@ function inferRowFactorSource(
 function factorSourceLabel(source: RowFactorSource): string {
   if (source === "run_snapshot") return "run";
   if (source === "live_preview") return "live";
-  if (source === "loading") return "loading";
+  if (source === "loading") return "…";
   return "n/a";
 }
 
@@ -332,7 +332,7 @@ export function HistoryRunsTable({
                         className="ui-btn-secondary"
                         style={{ fontSize: "var(--text-ui-sm)", padding: "2px 8px" }}
                         disabled={rerunPendingRunId === r.run_id}
-                        title="Re-run with same ticker, date, and analysts — choose models in the dialog"
+                        title="Re-run with same ticker, date, and analysts. Choose models in the dialog."
                         onClick={() => onRerunRun(r)}
                       >
                         {rerunPendingRunId === r.run_id ? "…" : "Re-run"}

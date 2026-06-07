@@ -24,6 +24,7 @@ from .risk_mgmt.neutral_debator import create_neutral_debator
 from .managers.research_manager import create_research_manager
 from .managers.portfolio_manager import create_portfolio_manager
 
+from .options_strategist.options_strategist import create_options_strategist
 from .trader.trader import create_trader
 
 __all__ = [
@@ -48,5 +49,6 @@ __all__ = [
     "create_conservative_debator",
     "create_sentiment_analyst",
     "create_social_media_analyst",  # deprecated; will be removed in a future version
+    "create_options_strategist",
     "create_trader",
 ]

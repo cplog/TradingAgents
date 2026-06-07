@@ -97,10 +97,9 @@ const EMBEDDED_CSS = `
     z-index: 5;
     margin: 0 0 20px;
     padding: 12px 14px;
-    background: color-mix(in oklab, var(--surface) 92%, var(--soft));
+    background: var(--surface);
     border: 1px solid var(--rule);
     border-radius: 12px;
-    backdrop-filter: blur(6px);
   }
   .export-toc__label {
     margin: 0 0 10px;
@@ -557,13 +556,12 @@ const EMBEDDED_CSS = `
   .report-body .report-section--first { padding-top: 0; }
   .report-body .report-section__title {
     margin: 0 0 16px;
-    padding: 0 0 10px 14px;
+    padding: 0 0 10px;
     font-size: clamp(1.15rem, 2.2vw, 1.4rem);
     font-weight: 700;
     color: var(--ink);
     text-transform: none;
     letter-spacing: -0.01em;
-    border-left: 4px solid var(--accent);
     border-bottom: 1px solid var(--rule);
     line-height: 1.3;
   }
@@ -680,10 +678,10 @@ const EMBEDDED_CSS = `
   .report-body blockquote {
     margin: 0 0 1em;
     padding: 8px 16px;
-    border-left: 3px solid var(--accent);
+    border: 1px solid var(--rule);
     color: var(--muted);
     background: var(--soft);
-    border-radius: 0 8px 8px 0;
+    border-radius: 8px;
     max-width: 78ch;
   }
   .report-body hr {
@@ -821,7 +819,7 @@ export function buildStandaloneReportHtml(input: StandaloneReportInput): string 
     generatedAt = new Date().toISOString(),
   } = input;
 
-  const title = `${ticker} — Agent report`;
+  const title = `${ticker} Agent report`;
 
   const navSections = template === "weekly_report" ? buildNavSections(input) : [];
   const tocBlock = navSections.length > 1 ? renderToc(navSections) : "";
@@ -899,7 +897,7 @@ export function buildStandaloneReportHtml(input: StandaloneReportInput): string 
 
 /**
  * Open standalone report HTML in a new tab and run the browser print dialog.
- * Save as PDF there — avoids printing the TradingAgents app shell.
+ * Save as PDF there; avoids printing the TradingAgents app shell.
  */
 export function printStandaloneReport(html: string): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;

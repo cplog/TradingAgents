@@ -45,7 +45,7 @@ describe("buildStandaloneReportHtml", () => {
       },
     });
     expect(html).toMatch(/^<!doctype html>/);
-    expect(html).toContain("<title>NVDA — Agent report</title>");
+    expect(html).toContain("<title>NVDA Agent report</title>");
     expect(html).toContain("Buy");
     expect(html).toContain("Highest conviction bullish view");
     expect(html).toContain("Add or open position");
@@ -139,6 +139,27 @@ describe("buildStandaloneReportHtml", () => {
     expect(html).toContain('id="analyst-coverage"');
     expect(html).toContain('href="#report-section-market"');
     expect(html).toContain("Market</a>");
+  });
+
+  it("avoids side-accent borders and em dash copy in exported report chrome", () => {
+    const html = buildStandaloneReportHtml({
+      ticker: "NVDA",
+      rating: "Buy",
+      date: "2026-05-19",
+      confidencePct: 92,
+      whyNow: [],
+      invalidation: null,
+      reportBodyHtml:
+        '<section id="report-section-market" class="report-section"><h2 class="report-section__title">Market</h2><blockquote>Quoted context.</blockquote></section>',
+      reportSections: [{ id: "report-section-market", label: "Market" }],
+      generatedAt: "2026-05-20T00:00:00.000Z",
+    });
+
+    const sideAccent = ["border", "left"].join("-");
+    expect(html).not.toContain(`${sideAccent}: 4px solid var(--accent)`);
+    expect(html).not.toContain(`${sideAccent}: 3px solid var(--accent)`);
+    expect(html).not.toContain(`\u2014 Agent report`);
+    expect(html).not.toContain(`Save as PDF there \u2014`);
   });
 
   it("escapes HTML in user-controlled fields but preserves report-body markup", () => {

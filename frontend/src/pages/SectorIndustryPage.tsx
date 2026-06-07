@@ -127,15 +127,15 @@ function CoverageDots({
         borderRadius: 999,
         background: on ? color : "transparent",
         border: on ? "none" : "1px solid var(--color-platinum-outline)",
-        boxShadow: on ? `0 0 6px ${color}66` : "none",
+        boxShadow: on ? "0 0 0 2px rgba(42, 32, 24, 0.06)" : "none",
       }}
     />
   );
   return (
     <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
-      {dot(!!hasReport, "report", "#78f0a8")}
-      {dot(!!hasDims, "dimensions", "#38bdf8")}
-      {dot(!!hasComm, "commentary", "#c4b5fd")}
+      {dot(!!hasReport, "report", "var(--color-sage)")}
+      {dot(!!hasDims, "dimensions", "var(--color-apricot-soft)")}
+      {dot(!!hasComm, "commentary", "var(--color-taupe)")}
     </span>
   );
 }
@@ -628,27 +628,13 @@ export function SectorIndustryPage() {
 
             {selectedIndustry && (
               <>
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: 8,
-                    alignItems: "center",
-                    marginBottom: 8,
-                  }}
-                >
+                <div className="sector-filter-row">
                   <input
+                    className="sector-filter-input"
                     type="search"
                     placeholder="Filter tickers…"
                     value={tickerSearch}
                     onChange={(e) => setTickerSearch(e.target.value)}
-                    style={{
-                      flex: "1 1 200px",
-                      padding: "8px 10px",
-                      borderRadius: "var(--radius-buttons)",
-                      border: "1px solid var(--color-platinum-outline)",
-                      fontSize: "var(--text-body-sm)",
-                    }}
                   />
                   <div style={{ display: "flex", gap: 4 }}>
                     {(

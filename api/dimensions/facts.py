@@ -158,6 +158,27 @@ def _compute_avg_dollar_volume_30d(closes, volumes) -> Optional[float]:
     return avg
 
 
+def _apply_pe_proxies(payload: dict, info: dict, flags: List[str]) -> None:
+    """If P/E TTM is missing, try synthetic fills so peer percentiles don't vanish.
+
+    Order of attempt:
+      1. price / trailingEps (yfinance sometimes has EPS but not P/E)
+      2. forward_pe as a proxy (flagged explicitly)
+    """
+    if payload.get("pe_ttm") is not None:
+        return
+    price = payload.get("price")
+    trailing_eps = _maybe_float(info.get("trailingEps"))
+    if price is not None and trailing_eps is not None and trailing_eps > 0:
+        payload["pe_ttm"] = price / trailing_eps
+        flags.append("pe_ttm_computed_from_eps")
+        return
+    forward_pe = _maybe_float(info.get("forwardPE"))
+    if forward_pe is not None and forward_pe > 0:
+        payload["pe_ttm"] = forward_pe
+        flags.append("pe_ttm_proxy_from_forward_pe")
+
+
 def _apply_non_payer_defaults(payload: dict, info: dict) -> None:
     """If yfinance signals zero dividend activity, set yield/payout to 0.0.
 
@@ -238,6 +259,9 @@ def extract_facts(ticker: str, as_of_date: str) -> Tuple[FactSnapshot, List[str]
             payload[field] = str(raw) if isinstance(raw, str) and raw else None
         else:
             payload[field] = _maybe_float(raw)
+
+    # P/E synthetic fill: try price/trailingEps, then forward_pe proxy.
+    _apply_pe_proxies(payload, info, flags)
 
     # Non-payer detection: yfinance returns None for dividend_yield / payout_ratio
     # when a company simply doesn't pay a dividend. Distinguish that from a

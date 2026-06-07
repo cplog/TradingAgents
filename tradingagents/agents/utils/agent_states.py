@@ -114,3 +114,5 @@ class AgentState(MessagesState):
 
     overnight_signal: NotRequired[str]
     alt_data_report: NotRequired[str]
+    options_recommendation: NotRequired[str]
+    options_chain_snapshot: NotRequired[dict]

@@ -31,7 +31,7 @@ export function FactsTable({ facts }: { facts: FactSnapshot }) {
             <tbody>
               {keys.map(k => (
                 <tr key={k as string}>
-                  <td style={{ padding: '4px 8px', color: '#555' }}>
+                  <td style={{ padding: '4px 8px', color: 'var(--color-ink-muted)' }}>
                     {(k as string).replace(/_/g, ' ')}
                   </td>
                   <td style={{ padding: '4px 8px', textAlign: 'right' }}>

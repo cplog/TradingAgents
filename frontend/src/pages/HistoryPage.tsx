@@ -1107,27 +1107,11 @@ export function HistoryPage() {
               date.
             </p>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))",
-                gap: "var(--spacing-16)",
-              }}
-            >
+            <div className="page-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))" }}>
               {(["a", "b"] as const).map((side) => {
                 const dims = compareDims[side];
                 return (
-                  <div
-                    key={`radar-${side}`}
-                    style={{
-                      background: "var(--surface-canvas-fog)",
-                      borderRadius: "var(--radius-cards)",
-                      border: "1px solid var(--color-stone-border)",
-                      padding: "var(--spacing-16)",
-                      display: "grid",
-                      gap: "var(--spacing-12)",
-                    }}
-                  >
+                  <div key={`radar-${side}`} className="compare-radar-card">
                     <div
                       style={{
                         fontSize: "var(--text-caption)",
@@ -1162,19 +1146,7 @@ export function HistoryPage() {
 
             <div className="compare-two-col">
               {[compare.a, compare.b].map((side, idx) => (
-                <article
-                  key={side.run_id ?? String(idx)}
-                  style={{
-                    background: "var(--surface-cloud-white)",
-                    padding: "clamp(var(--spacing-16), 3vw, var(--spacing-24))",
-                    borderRadius: "var(--radius-largecard)",
-                    border: "1px solid var(--color-stone-border)",
-                    boxShadow: "var(--shadow-md)",
-                    minWidth: 0,
-                    display: "grid",
-                    gap: "var(--spacing-24)",
-                  }}
-                >
+                <article key={side.run_id ?? String(idx)} className="compare-card">
                   <section
                     style={{
                       display: "grid",

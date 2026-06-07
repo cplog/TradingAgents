@@ -10,7 +10,7 @@ export function colorTier(score: number): Tier {
 
 const TIER_COLORS: Record<Tier, string> = {
   red: "var(--color-danger)",
-  orange: "#f59e0b",
+  orange: "var(--color-warning)",
   amber: "var(--color-amber-readout)",
   lime: "var(--color-phosphor-dim)",
   green: "var(--color-phosphor)",
@@ -30,7 +30,9 @@ export interface FactorBarProps {
   width?: number;
 }
 
-export function FactorBar({ label, score, width = 120 }: FactorBarProps) {
+import { memo } from "react";
+
+export const FactorBar = memo(function FactorBar({ label, score, width = 120 }: FactorBarProps) {
   if (score == null) {
     return (
       <div className="factor-bar">
@@ -58,4 +60,4 @@ export function FactorBar({ label, score, width = 120 }: FactorBarProps) {
       </span>
     </div>
   );
-}
+});

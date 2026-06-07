@@ -1,7 +1,6 @@
-import { Suspense } from "react";
-import { AnimatePresence, motion } from "motion/react";
-import { Link, NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
-import { useRouteTransitionMotion } from "../hooks/useRouteTransitionMotion";
+import { Suspense, useEffect, useState, ViewTransition } from "react";
+import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
+import { TransitionLink, TransitionNavLink } from "./TransitionLink";
 import { JobsRibbon } from "./JobsRibbon";
 import { JobsTrackerProvider } from "../contexts/JobsTrackerContext";
 import { isRunsWorkflowPath, paths } from "../navigation/routes";
@@ -111,25 +110,42 @@ function SidebarContext() {
 
 export function Layout() {
   const location = useLocation();
-  const routeMotion = useRouteTransitionMotion();
   const pathname = location.pathname;
   const inRunsWorkflow = isRunsWorkflowPath(pathname);
+  const [navOpen, setNavOpen] = useState(false);
+
+  useEffect(() => {
+    setNavOpen(false);
+  }, [pathname]);
 
   return (
     <JobsTrackerProvider>
-    <div className="app-shell">
-      <aside className="app-shell__nav" aria-label="Application navigation">
-        <Link to={paths.dashboard} className="app-shell__brand">
+    <a className="app-shell__skip" href="#main-content">
+      Skip to main content
+    </a>
+    <div className={`app-shell${navOpen ? " app-shell--nav-open" : ""}`}>
+      <button
+        type="button"
+        className="app-shell__nav-toggle"
+        onClick={() => setNavOpen((v) => !v)}
+        aria-expanded={navOpen}
+        aria-controls="app-shell-nav"
+        aria-label={navOpen ? "Close navigation" : "Open navigation"}
+      >
+        {navOpen ? "Close" : "Menu"}
+      </button>
+      <aside id="app-shell-nav" className="app-shell__nav" aria-label="Application navigation" style={{ viewTransitionName: "app-nav" } as React.CSSProperties}>
+        <TransitionLink to={paths.dashboard} direction="nav-back" className="app-shell__brand">
           <div className="app-shell__brand-title">TradingAgents</div>
-          <div className="app-shell__brand-sub">Command center</div>
-        </Link>
+          <div className="app-shell__brand-sub">Research studio</div>
+        </TransitionLink>
 
         {navGroups.map((group) => (
           <div key={group.label} className="app-shell__nav-group">
             <div className="app-shell__nav-group-label">{group.label}</div>
             <nav className="app-shell__nav-links" aria-label={group.label}>
               {group.items.map(({ to, label, hint, end, activePrefixes }) => (
-                <NavLink
+                <TransitionNavLink
                   key={to}
                   to={to}
                   end={end}
@@ -142,7 +158,7 @@ export function Layout() {
                 >
                   <span className="app-shell__nav-link-label">{label}</span>
                   {hint ? <span className="app-shell__nav-link-hint">{hint}</span> : null}
-                </NavLink>
+                </TransitionNavLink>
               ))}
             </nav>
           </div>
@@ -158,19 +174,30 @@ export function Layout() {
       </aside>
 
       <div className="app-shell__content">
-        <div className="app-shell__status" role="status" aria-live="polite">
+        <div className="app-shell__status" role="status" aria-live="polite" style={{ viewTransitionName: "app-status" } as React.CSSProperties}>
           <span className="app-shell__status-dot" aria-hidden />
-          <span className="app-shell__status-text">Research terminal · retro digital</span>
+          <span className="app-shell__status-text">Paper brief, live research pipeline</span>
         </div>
         <JobsRibbon />
         <main className="app-shell__main" id="main-content">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={location.pathname} {...routeMotion} className="app-shell__page">
-              <Suspense fallback={<div className="page-route-fallback" role="status">Loading…</div>}>
-                <Outlet />
+          <ViewTransition
+            key={location.pathname}
+            enter={{ "nav-forward": "nav-forward", "nav-back": "nav-back", default: "fade-in" }}
+            exit={{ "nav-forward": "nav-forward", "nav-back": "nav-back", default: "fade-out" }}
+            default="none"
+          >
+            <div className="app-shell__page">
+              <Suspense fallback={
+                <ViewTransition exit="fade-out" default="none">
+                  <div className="page-route-fallback" role="status">Loading…</div>
+                </ViewTransition>
+              }>
+                <ViewTransition enter="fade-in" default="none">
+                  <Outlet />
+                </ViewTransition>
               </Suspense>
-            </motion.div>
-          </AnimatePresence>
+            </div>
+          </ViewTransition>
         </main>
       </div>
     </div>

@@ -19,7 +19,7 @@ so that:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -225,4 +225,106 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Options Strategist
+# ---------------------------------------------------------------------------
+
+
+class OptionsLeg(BaseModel):
+    """One leg of a multi-leg options strategy."""
+
+    side: Literal["buy", "sell"] = Field(
+        ..., description="Whether to buy (debit) or sell (credit) this leg."
+    )
+    option_type: Literal["call", "put"] = Field(..., description="Call or put.")
+    strike: float = Field(..., description="Strike price in the underlying's currency.")
+    expiration_dte: int = Field(..., description="Days to expiration at recommendation time.")
+    expiration_date: Optional[str] = Field(
+        default=None, description="Expiration date as YYYY-MM-DD."
+    )
+
+
+class OptionsRecommendation(BaseModel):
+    """Structured options strategy produced by the Options Strategist.
+
+    The strategist reads the Portfolio Manager's directional rating, the Trader's
+    entry/stop levels, and live options chain data (IV, volume, OI) to propose a
+    concrete options implementation of the equity view.
+    """
+
+    strategy_name: str = Field(
+        ..., description="Human-readable strategy name, e.g. 'Bull Call Spread'."
+    )
+    directional_bias: Literal["bullish", "bearish", "neutral", "volatility"] = Field(
+        ..., description="Primary directional bias of the strategy."
+    )
+    underlying_action: str = Field(
+        ..., description="What to do with the underlying, e.g. 'Buy at entry'."
+    )
+    legs: List[OptionsLeg] = Field(
+        default_factory=list,
+        description="Ordered legs. Single-leg strategies have one entry."
+    )
+    max_risk: Optional[str] = Field(
+        default=None,
+        description="Maximum loss, e.g. 'Limited to $2.00 debit per spread'."
+    )
+    max_reward: Optional[str] = Field(
+        default=None,
+        description="Maximum gain, e.g. 'Unlimited above $180'."
+    )
+    breakeven_at_expiry: Optional[str] = Field(
+        default=None,
+        description="Breakeven price at expiration, e.g. '$172.50'."
+    )
+    rationale: str = Field(
+        ..., description="Two to four sentences tying the strategy to the PM rating, vol regime, and price levels."
+    )
+    alternative: Optional[str] = Field(
+        default=None,
+        description="Simpler fallback if the primary strategy is unsuitable, e.g. 'Use underlying equity only'."
+    )
+    iv_context: Optional[str] = Field(
+        default=None,
+        description="One sentence describing the implied volatility regime (cheap, expensive, average)."
+    )
+
+
+def render_options_recommendation(rec: OptionsRecommendation) -> str:
+    """Render an OptionsRecommendation to markdown for storage and display."""
+    parts = [
+        f"**Strategy**: {rec.strategy_name}",
+        "",
+        f"**Directional Bias**: {rec.directional_bias.value if hasattr(rec.directional_bias, 'value') else rec.directional_bias}",
+        f"**Underlying Action**: {rec.underlying_action}",
+    ]
+
+    if rec.iv_context:
+        parts.extend(["", f"**IV Context**: {rec.iv_context}"])
+
+    if rec.legs:
+        parts.extend(["", "**Legs**:", ""])
+        parts.append("| Leg | Side | Type | Strike | Expiration |")
+        parts.append("|-----|------|------|--------|------------|")
+        for i, leg in enumerate(rec.legs, start=1):
+            exp = leg.expiration_date or f"{leg.expiration_dte} DTE"
+            parts.append(
+                f"| {i} | {leg.side} | {leg.option_type} | {leg.strike} | {exp} |"
+            )
+
+    if rec.max_risk:
+        parts.extend(["", f"**Max Risk**: {rec.max_risk}"])
+    if rec.max_reward:
+        parts.extend(["", f"**Max Reward**: {rec.max_reward}"])
+    if rec.breakeven_at_expiry:
+        parts.extend(["", f"**Breakeven at Expiry**: {rec.breakeven_at_expiry}"])
+
+    parts.extend(["", f"**Rationale**: {rec.rationale}"])
+
+    if rec.alternative:
+        parts.extend(["", f"**Alternative**: {rec.alternative}"])
+
     return "\n".join(parts)

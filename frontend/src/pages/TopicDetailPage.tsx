@@ -38,7 +38,7 @@ export function TopicDetailPage() {
   const [editQuery, setEditQuery] = useState("");
   const [editCadence, setEditCadence] = useState<TopicCadence>("daily");
   const [editing, setEditing] = useState(false);
-  useDocumentTitle(topic ? `${topic.label} — Topic` : "Topic");
+  useDocumentTitle(topic ? `${topic.label} · Topic` : "Topic");
 
   const candidates = latestRun?.candidates ?? [];
   const articles = latestRun?.articles ?? [];
@@ -195,7 +195,7 @@ export function TopicDetailPage() {
               <ul className="topics-run-history">
                 {runs.map((r) => (
                   <li key={r.run_id}>
-                    {new Date(r.started_at).toLocaleString()} — {r.status} ({r.candidates.length} tickers)
+                    {new Date(r.started_at).toLocaleString()} · {r.status} ({r.candidates.length} tickers)
                   </li>
                 ))}
               </ul>

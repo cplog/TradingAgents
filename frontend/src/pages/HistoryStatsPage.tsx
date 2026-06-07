@@ -75,7 +75,7 @@ export function HistoryStatsPage() {
 
       <p className="page-lead">
         Aggregates from the latest <span className="mono">GET /api/history/runs?limit=500</span> snapshot (ratings and
-        confidence only — not realized returns).
+        confidence only, not realized returns).
       </p>
 
       {loading ? <p>Loading…</p> : null}
@@ -107,13 +107,13 @@ export function HistoryStatsPage() {
             </div>
           </div>
 
-          <h2 style={{ fontSize: "var(--text-title)", fontWeight: 600, marginBottom: 12 }}>
+          <h2 style={{ fontSize: "var(--text-title)", fontWeight: 600 }} className="section-gap-sm">
             Rating distribution
           </h2>
           <HistoryRatingChart runs={runs} />
 
           {ratingRows.length === 0 ? (
-            <p style={{ color: "var(--color-ash-gray)", marginTop: 12 }}>No runs with ratings yet.</p>
+            <p className="section-gap-sm" style={{ color: "var(--color-ash-gray)" }}>No runs with ratings yet.</p>
           ) : (
             <div className="ui-table-wrap" style={{ marginTop: 16 }}>
               <table className="ui-table">

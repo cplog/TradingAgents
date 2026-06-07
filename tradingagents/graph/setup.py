@@ -19,6 +19,7 @@ from tradingagents.agents import (
     create_msg_delete,
     create_neutral_debator,
     create_news_analyst,
+    create_options_strategist,
     create_policy_analyst,
     create_portfolio_manager,
     create_research_manager,
@@ -141,6 +142,12 @@ class GraphSetup:
         neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
         conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
         portfolio_manager_node = create_portfolio_manager(self.deep_thinking_llm)
+
+        options_strategist_node = None
+        if self.config.get("options_strategist_enabled"):
+            options_strategist_node = create_options_strategist(
+                self.deep_thinking_llm, self.config
+            )
 
         dimensions_snapshot_node = create_dimensions_snapshot_node(
             self.quick_thinking_llm, self.config
@@ -267,6 +274,11 @@ class GraphSetup:
             },
         )
 
-        workflow.add_edge("Portfolio Manager", END)
+        if options_strategist_node is not None:
+            workflow.add_node("Options Strategist", options_strategist_node)
+            workflow.add_edge("Portfolio Manager", "Options Strategist")
+            workflow.add_edge("Options Strategist", END)
+        else:
+            workflow.add_edge("Portfolio Manager", END)
 
         return workflow

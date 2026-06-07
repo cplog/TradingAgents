@@ -105,7 +105,7 @@ export function LiveVsPlanStrip({ context, tradeDate, loading, error }: Props) {
 
       {isInvalidatedStatus(comparison.status) ? (
         <p className="live-vs-plan__historical">
-          Historical rating unchanged — this warning reflects <strong>current price vs this run&apos;s levels</strong>.
+          Historical rating unchanged. This warning reflects <strong>current price vs this run&apos;s levels</strong>.
           {suggestRefresh
             ? " Refresh analysis with today\u2019s date before acting."
             : " Analysis already used the live quote at run time; do not use these levels as-is."}

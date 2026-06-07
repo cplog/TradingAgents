@@ -58,6 +58,13 @@ TOOLS_CATEGORIES: dict[str, _CategoryInfo] = {
             "get_macro_data",
         ],
     },
+    "options_data": {
+        "description": "Options chain data (expirations, strikes, IV, volume, OI)",
+        "tools": [
+            "get_options_chain",
+            "get_options_expirations",
+        ],
+    },
 }
 
 # Order used when merging configured primaries with fallbacks. Per-method entries

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchJobs, type JobStatus } from "../api";
 import { sortActiveJobs } from "../utils/activeJobsDisplay";
 
@@ -46,6 +46,29 @@ function jobEndedAtMs(job: JobStatus): number {
   return parseTs(job.created_at);
 }
 
+function shallowSameJobs(a: JobStatus[] | null, b: JobStatus[]): boolean {
+  if (!a) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i].job_id !== b[i].job_id ||
+      a[i].status !== b[i].status ||
+      a[i].progress_events?.length !== b[i].progress_events?.length ||
+      a[i].last_graph_step !== b[i].last_graph_step
+    ) return false;
+  }
+  return true;
+}
+
+function shallowSameStringArrays(a: string[] | null, b: string[]): boolean {
+  if (!a) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 export type JobsTracker = {
   active: JobStatus[];
   recentlyCompleted: JobStatus[];
@@ -69,6 +92,10 @@ export function useJobsTracker(): JobsTracker {
   const [pulse, setPulse] = useState(0);
 
   const knownStatuses = useRef<Map<string, string>>(new Map());
+  const prevSnapshot = useRef<JobStatus[] | null>(null);
+  const prevActive = useRef<JobStatus[] | null>(null);
+  const prevRecent = useRef<JobStatus[] | null>(null);
+  const prevCompleted = useRef<string[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,7 +105,6 @@ export function useJobsTracker(): JobsTracker {
       try {
         const jobs = await fetchJobs(100);
         if (cancelled) return;
-        setJobsSnapshot(jobs);
         const now = Date.now();
         const nextActive: JobStatus[] = [];
         const nextRecent: JobStatus[] = [];
@@ -105,9 +131,23 @@ export function useJobsTracker(): JobsTracker {
         nextRecent.sort((a, b) => jobEndedAtMs(b) - jobEndedAtMs(a));
 
         if (cancelled) return;
-        setActive(sortedActive);
-        setRecentlyCompleted(nextRecent);
-        setJustCompletedIds(newlyCompleted);
+        // Only update state when data actually changed to avoid cascading re-renders
+        if (!shallowSameJobs(prevSnapshot.current, jobs)) {
+          setJobsSnapshot(jobs);
+          prevSnapshot.current = jobs;
+        }
+        if (!shallowSameJobs(prevActive.current, sortedActive)) {
+          setActive(sortedActive);
+          prevActive.current = sortedActive;
+        }
+        if (!shallowSameJobs(prevRecent.current, nextRecent)) {
+          setRecentlyCompleted(nextRecent);
+          prevRecent.current = nextRecent;
+        }
+        if (!shallowSameStringArrays(prevCompleted.current, newlyCompleted)) {
+          setJustCompletedIds(newlyCompleted);
+          prevCompleted.current = newlyCompleted;
+        }
         setError(null);
         // Fast poll while jobs are in-flight (heartbeats + step labels). Slower when idle
         // so a stray submit still appears within a few seconds without hammering the API.
@@ -134,13 +174,18 @@ export function useJobsTracker(): JobsTracker {
     setPulse((n) => n + 1);
   }
 
-  return {
-    active,
-    recentlyCompleted,
-    jobsSnapshot,
-    justCompletedIds,
-    loading,
-    error,
-    refresh,
-  };
+  const value = useMemo(
+    () => ({
+      active,
+      recentlyCompleted,
+      jobsSnapshot,
+      justCompletedIds,
+      loading,
+      error,
+      refresh,
+    }),
+    [active, recentlyCompleted, jobsSnapshot, justCompletedIds, loading, error],
+  );
+
+  return value;
 }

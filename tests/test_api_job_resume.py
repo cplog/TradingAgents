@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.jobs import JobStore
+from api.kronos.config import KronosConfig
 from api.state_store import reset_state_store_for_tests
 
 
@@ -16,7 +17,7 @@ class _FailOnceGraph:
     def __init__(self, **kwargs):
         pass
 
-    def propagate(self, ticker, date):
+    def propagate(self, ticker, date, **kwargs):
         _FailOnceGraph.calls += 1
         if _FailOnceGraph.calls == 1:
             raise RuntimeError("simulated pipeline failure")
@@ -49,6 +50,10 @@ def api_client(tmp_path, monkeypatch):
     reset_state_store_for_tests()
     _FailOnceGraph.calls = 0
     monkeypatch.setattr("api.jobs.TradingAgentsGraph", _FailOnceGraph)
+    monkeypatch.setattr(
+        "api.jobs.KronosConfig.from_env",
+        lambda: KronosConfig(enabled=False),
+    )
 
     from api.main import app
 
@@ -82,7 +87,7 @@ def test_resume_endpoint_requires_failed_job(api_client: TestClient, monkeypatch
         def __init__(self, **kwargs):
             pass
 
-        def propagate(self, ticker, date):
+        def propagate(self, ticker, date, **kwargs):
             return (
                 {
                     "market_report": "## Market\nOK",

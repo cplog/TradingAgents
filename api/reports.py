@@ -304,6 +304,8 @@ def build_result(
         reports["trader_plan"] = final_state["trader_investment_plan"]
     if final_state.get("final_trade_decision"):
         reports["portfolio_decision"] = final_state["final_trade_decision"]
+    if final_state.get("options_recommendation"):
+        reports["options_recommendation"] = final_state["options_recommendation"]
 
     # Structured fields (if present in state from structured-output agents)
     structured: Dict[str, Any] = {}
@@ -316,12 +318,18 @@ def build_result(
     if risk.get("judge_decision"):
         structured["portfolio_manager_decision"] = risk["judge_decision"]
 
-    # Write markdown artifact to disk
+    # Write artifacts to disk
     results_dir = Path(config.get("results_dir", "./results"))
     safe_ticker = _safe_ticker_component(ticker)
     report_dir = results_dir / safe_ticker / date / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = _write_markdown_artifact(report_dir, final_state, ticker, date)
+    report_format = config.get("report_format", "markdown")
+    if report_format == "json":
+        artifact_path = _write_json_artifact(report_dir, payload, ticker, date)
+    elif report_format == "structured":
+        artifact_path = _write_structured_artifact(report_dir, structured, ticker, date)
+    else:
+        artifact_path = _write_markdown_artifact(report_dir, final_state, ticker, date)
 
     payload: Dict[str, Any] = {
         "ticker": ticker,
@@ -333,6 +341,8 @@ def build_result(
         "artifacts_path": str(artifact_path),
         "completed_at": datetime.utcnow().isoformat() + "Z",
         "dimensions_in_graph": dimensions_in_graph,
+        "options_recommendation": final_state.get("options_recommendation"),
+        "options_chain_snapshot": final_state.get("options_chain_snapshot"),
     }
     if analyst_coverage is not None:
         payload["analyst_coverage"] = analyst_coverage
@@ -453,7 +463,42 @@ def _write_markdown_artifact(
             f"## V. Portfolio Manager Decision\n\n### Portfolio Manager\n{risk['judge_decision']}"
         )
 
+    if final_state.get("options_recommendation"):
+        sections.append(
+            f"## VI. Options Strategy\n\n### Options Strategist\n{final_state['options_recommendation']}"
+        )
+
     header = f"# Trading Analysis Report: {ticker}\n\nDate: {date}\nGenerated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
     report_path = save_path / "complete_report.md"
     report_path.write_text(header + "\n\n".join(sections), encoding="utf-8")
     return report_path
+
+
+def _write_json_artifact(
+    save_path: Path,
+    payload: Dict[str, Any],
+    ticker: str,
+    date: str,
+) -> Path:
+    """Write the full analysis payload as JSON."""
+    artifact_path = save_path / "complete_report.json"
+    artifact_path.write_text(
+        json.dumps(payload, indent=2, default=str, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return artifact_path
+
+
+def _write_structured_artifact(
+    save_path: Path,
+    structured: Dict[str, Any],
+    ticker: str,
+    date: str,
+) -> Path:
+    """Write just the structured decision fields as JSON."""
+    artifact_path = save_path / "structured_fields.json"
+    artifact_path.write_text(
+        json.dumps(structured, indent=2, default=str, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return artifact_path

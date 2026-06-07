@@ -1,12 +1,33 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { dashboardPath } from "../navigation/routes";
 import { getDimensionsByTicker } from "../api";
 import { FactorBar } from "../components/dimensions/FactorBar";
 import { PageFrame, PageHeader } from "../components/PageFrame";
 import { Pressable } from "../components/Pressable";
+import { WashiTape, WorkspaceScene } from "../components/paper";
 import type { FactorScores, StockDimensions } from "../dimensions-types";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+
+const PaperStackScene = lazy(() =>
+  import("../components/three/PaperStackScene").then((m) => ({
+    default: m.PaperStackScene,
+  })),
+);
+
+function PaperStackFallback() {
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        height: 180,
+        background: "var(--color-paper-newsprint)",
+        borderRadius: "var(--radius-cards)",
+        opacity: 0.5,
+      }}
+    />
+  );
+}
 
 interface Row {
   ticker: string;
@@ -93,7 +114,7 @@ export function ScreenerPage() {
     <PageFrame wide>
       <PageHeader
         title="Screener"
-        description="Facts-only dimensions preview — fast factor snapshot without full LLM cost."
+        description="Facts-only dimensions preview. Fast factor snapshot without full LLM cost."
       />
 
       <div className="flow-banner">
@@ -101,6 +122,27 @@ export function ScreenerPage() {
         <span className="mono">GET /api/dimensions/{"{ticker}"}</span> for instant factor scores. For multi-agent
         reports and PM ratings, use Batch or Analysis from the sidebar.
       </div>
+
+      {rows.length === 0 && !loading && !error && (
+        <section className="screener-empty" aria-label="Empty state">
+          <div className="screener-empty__tape">
+            <WashiTape width={140} height={26} rotation={-3} color="var(--color-apricot-soft)" />
+          </div>
+          <div className="screener-empty__scene">
+            <WorkspaceScene width={300} height={240} />
+          </div>
+          <h2 className="screener-empty__title">A workspace, not a chart wall.</h2>
+          <p className="screener-empty__copy">
+            Drop in a handful of tickers and the page draws a small desk of paper artifacts: factor bars,
+            a torn-edge chart, a sage-green line. Fetch dimensions to see your own.
+          </p>
+          <div className="screener-empty__stack">
+            <Suspense fallback={<PaperStackFallback />}>
+              <PaperStackScene height={180} />
+            </Suspense>
+          </div>
+        </section>
+      )}
 
       <section className="ui-panel-section">
         <label className="ui-field">

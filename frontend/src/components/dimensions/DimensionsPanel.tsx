@@ -30,7 +30,7 @@ export function DimensionsPanel({ dimensions, commentary, error, commentaryError
   if (!dimensions) {
     return (
       <div className="panel dimensions-empty">
-        Dimensions not available — this run predates v1.0 of the dimensions layer.
+        Dimensions not available. This run predates v1.0 of the dimensions layer.
       </div>
     );
   }
@@ -67,7 +67,7 @@ export function DimensionsPanel({ dimensions, commentary, error, commentaryError
         <div
           style={{
             padding: 12,
-            border: '1px solid #ea3',
+            border: '1px solid var(--color-warning)',
             borderRadius: 'var(--radius-cards)',
             background: 'var(--surface-cloud-white)',
             fontSize: 'var(--text-caption)',

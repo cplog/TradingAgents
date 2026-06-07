@@ -2,7 +2,7 @@ import type { PillarScore, PillarScores } from "../../dimensions-types";
 
 const SCORE_COLORS = [
   "var(--color-danger)",
-  "#f59e0b",
+  "var(--color-warning)",
   "var(--color-amber-readout)",
   "var(--color-phosphor-dim)",
   "var(--color-phosphor)",

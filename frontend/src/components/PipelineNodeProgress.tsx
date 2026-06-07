@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import type { JobStatus } from "../api";
 import {
   buildPipelineNodeRows,
@@ -25,7 +25,11 @@ function stateIcon(state: PipelineNodeRow["state"]): string {
   }
 }
 
-export function PipelineNodeProgress({ job, events, className = "" }: Props) {
+export const PipelineNodeProgress = memo(function PipelineNodeProgress({
+  job,
+  events,
+  className = "",
+}: Props) {
   const [, tick] = useState(0);
   const jobActive =
     job?.status === "running" || job?.status === "queued" || job?.status === "resuming";
@@ -42,6 +46,8 @@ export function PipelineNodeProgress({ job, events, className = "" }: Props) {
         createdAt: job?.created_at,
         lastGraphStep: job?.last_graph_step,
       }),
+    // tick forces Date.now() refresh for the elapsed counter
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [job?.status, job?.created_at, job?.last_graph_step, events, tick]
   );
 
@@ -56,7 +62,7 @@ export function PipelineNodeProgress({ job, events, className = "" }: Props) {
         <span className="ui-label">Pipeline stages</span>
         {jobActive && (
           <span className="pipeline-nodes__heartbeat" role="status">
-            Live · heartbeat ~45s during long LLM calls
+            Live · updated each heartbeat
           </span>
         )}
       </div>
@@ -87,4 +93,4 @@ export function PipelineNodeProgress({ job, events, className = "" }: Props) {
       </ol>
     </section>
   );
-}
+});

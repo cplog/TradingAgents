@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { DecisionSummary } from "../utils/decisionSummary";
 import { RATING_GUIDE, RATING_TIERS_ORDER, normalizeRatingTier } from "../utils/ratingGuide";
 import { ratingTone } from "../utils/historyDisplay";
@@ -78,7 +78,7 @@ function confidenceTone(pct: number | null): "strong" | "balanced" | "weak" | "n
   return "weak";
 }
 
-export function DecisionBrief({
+export const DecisionBrief = memo(function DecisionBrief({
   rating,
   confidencePct,
   summary,
@@ -256,4 +256,4 @@ export function DecisionBrief({
       )}
     </section>
   );
-}
+});

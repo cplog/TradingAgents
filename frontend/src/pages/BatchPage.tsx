@@ -277,7 +277,7 @@ export function BatchPage() {
           <Link to={paths.topics}>Browse all topics</Link>
         </div>
       ) : null}
-      <div className="flow-banner">
+      <div className="flow-banner section-gap-sm">
         <strong>High cost / long runtime.</strong> Each ticker runs the full analyst → debate → PM pipeline (~3 min
         each). For a quick factor screen first, use Screener from the sidebar (facts-only, no LLM).
       </div>
@@ -296,26 +296,22 @@ export function BatchPage() {
         />
       </label>
       {tickerCount > 0 && (
-        <p style={{ margin: "0 0 var(--spacing-12)", fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
+        <p className="ui-hint">
           {tickerCount} ticker{tickerCount === 1 ? "" : "s"} · rough estimate ~{estMinutes} min total (sequential
           mental model; server may run in parallel)
         </p>
       )}
-      <details open style={{ marginTop: 12, marginBottom: 12 }}>
-        <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: "var(--text-caption)" }}>
-          LLM routing
-        </summary>
-        <div style={{ marginTop: 8 }}>
+      <details open className="batch-details">
+        <summary className="batch-details__summary">LLM routing</summary>
+        <div className="batch-details__body">
           <LlmPicker value={llmConfig} onChange={setLlmConfig} onReset={resetLlm} variant="compact" />
         </div>
       </details>
-      <div style={{ marginTop: 12 }}>
-        <span style={{ fontSize: "var(--text-caption)", display: "block", marginBottom: 6 }}>
-          Focus area (analysts)
-        </span>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+      <div className="section-gap-sm">
+        <span className="ui-field__label">Focus area (analysts)</span>
+        <div className="ui-form-row">
           {ANALYST_OPTIONS.map((a) => (
-            <label key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
+            <label key={a.id} className="ui-field-row">
               <input
                 type="checkbox"
                 checked={selectedAnalysts.includes(a.id)}
@@ -340,7 +336,7 @@ export function BatchPage() {
         {apiSupportedAnalystIds === undefined ? "Checking API…" : "Submit batch"}
       </Pressable>
       {batchId && (
-        <p className="mono" style={{ marginTop: 8 }}>
+        <p className="mono batch-id">
           batch_id: {batchId}
         </p>
       )}
@@ -348,49 +344,23 @@ export function BatchPage() {
 
       {batch && (
         <>
-          <section aria-label="Batch summary" style={{ display: "grid", gap: "var(--spacing-8)" }}>
+          <section className="stack-sm">
             <h2 style={{ margin: 0, fontSize: "var(--text-heading-sm)" }}>Summary</h2>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-8)" }}>
+            <div className="batch-chips">
               {Object.entries(batch.summary).map(([k, v]) => (
-                <span
-                  key={k}
-                  className="mono"
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    padding: "6px 12px",
-                    borderRadius: "var(--radius-cards)",
-                    border: "1px solid var(--color-stone-border)",
-                    background: "var(--surface-cloud-white)",
-                    fontSize: "var(--text-caption)",
-                    color: "var(--color-slate-text)",
-                  }}
-                >
-                  <span style={{ color: "var(--color-ash-gray)", marginRight: 6 }}>{k}</span>
+                <span key={k} className="mono batch-chip">
+                  <span className="batch-chip__key">{k}</span>
                   {v}
                 </span>
               ))}
             </div>
           </section>
 
-          <div
-            style={{
-              marginBottom: 12,
-              padding: 12,
-              border: "1px solid var(--color-stone-border)",
-              borderRadius: "var(--radius-md)",
-              background: "var(--surface-canvas-fog)",
-            }}
-          >
-            <div style={{ fontSize: "var(--text-caption)", fontWeight: 600, marginBottom: 6 }}>
-              Filter by minimum factor score (URL-persisted)
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <div className="filter-card">
+            <div className="filter-card__title">Filter by minimum factor score (URL-persisted)</div>
+            <div className="filter-card__body">
               {FACTOR_KEYS.map((k) => (
-                <label
-                  key={k}
-                  style={{ display: "flex", flexDirection: "column", fontSize: 12 }}
-                >
+                <label key={k} className="filter-card__field">
                   <span>min {FACTOR_LABELS[k]}</span>
                   <input
                     type="number"
@@ -399,42 +369,27 @@ export function BatchPage() {
                     value={filters[k] ?? ""}
                     placeholder="—"
                     onChange={(e) => setFilter(k, e.target.value)}
-                    style={{ width: 72, padding: 4 }}
+                    className="filter-card__num"
                   />
                 </label>
               ))}
             </div>
           </div>
 
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                background: "var(--surface-cloud-white)",
-                borderRadius: "var(--radius-md)",
-                overflow: "hidden",
-                boxShadow: "var(--shadow-subtle)",
-                fontSize: 13,
-              }}
-            >
+          <div className="batch-table-wrap">
+            <table className="batch-table">
               <thead>
-                <tr style={{ background: "var(--color-sky-tint)", textAlign: "left" }}>
-                  <th style={{ padding: 12 }}>Ticker</th>
-                  <th style={{ padding: 12 }}>Status</th>
-                  <th style={{ padding: 12 }}>Decision</th>
-                  <th style={{ padding: 12 }}>Confidence</th>
+                <tr className="batch-table__head-row">
+                  <th className="batch-table__th">Ticker</th>
+                  <th className="batch-table__th">Status</th>
+                  <th className="batch-table__th">Decision</th>
+                  <th className="batch-table__th">Confidence</th>
                   {FACTOR_KEYS.map((k) => (
                     <th
                       key={k}
                       onClick={() => toggleSort(k)}
                       title={`Sort by ${FACTOR_LABELS[k]}`}
-                      style={{
-                        padding: 12,
-                        cursor: "pointer",
-                        userSelect: "none",
-                        whiteSpace: "nowrap",
-                      }}
+                      className="batch-table__th batch-table__th--sortable"
                     >
                       {FACTOR_LABELS[k]}
                       {sortKey === k ? (sortDir === "desc" ? " ▼" : " ▲") : ""}
@@ -446,19 +401,19 @@ export function BatchPage() {
                 {visibleJobs.map((j) => {
                   const dims = dimsByJob[j.job_id];
                   return (
-                    <tr key={j.job_id} style={{ borderTop: "1px solid var(--color-stone-border)" }}>
-                      <td style={{ padding: 12 }} className="mono">
+                    <tr key={j.job_id} className="batch-table__row">
+                      <td className="batch-table__td mono">
                         {j.ticker ?? j.result?.ticker ?? "—"}
                       </td>
-                      <td style={{ padding: 12 }}>{j.status}</td>
-                      <td style={{ padding: 12 }}>{j.result?.rating ?? "—"}</td>
-                      <td style={{ padding: 12 }}>
+                      <td className="batch-table__td">{j.status}</td>
+                      <td className="batch-table__td">{j.result?.rating ?? "—"}</td>
+                      <td className="batch-table__td">
                         {j.result?.confidence != null
                           ? `${(j.result.confidence * 100).toFixed(0)}%`
                           : "—"}
                       </td>
                       {FACTOR_KEYS.map((k) => (
-                        <td key={k} style={{ padding: "4px 8px" }}>
+                        <td key={k} className="batch-table__td batch-table__td--factor">
                           <FactorBar
                             label=""
                             score={dims?.factor_scores[k]?.score ?? null}
@@ -473,7 +428,7 @@ export function BatchPage() {
                   <tr>
                     <td
                       colSpan={4 + FACTOR_KEYS.length}
-                      style={{ padding: 16, textAlign: "center", color: "var(--color-ash-gray)" }}
+                      className="batch-table__empty"
                     >
                       No jobs match the current filters.
                     </td>

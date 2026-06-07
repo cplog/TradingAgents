@@ -71,6 +71,9 @@ export function SentimentTimelineChart({ items }: { items: NewsItem[] }) {
               Number(value).toFixed(2),
               `avg · ${(props.payload as { articles: number }).articles} articles`,
             ]}
+            wrapperClassName="chart-tooltip"
+            labelClassName="chart-tooltip__label"
+            aria-label="Sentiment score tooltip"
           />
           <Line
             type="monotone"
