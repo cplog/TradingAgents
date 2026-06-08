@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
 import { paths, runsPath } from "../navigation/routes";
@@ -117,7 +118,7 @@ export function StockPage() {
   }
 
   return (
-    <PageFrame className="stock-page">
+      <PageFrame className="stock-page content-entrance">
       <PageHeader
         title={ticker}
             description="Stock-level view. All persisted runs for this symbol. Open a run for the full report; compare runs with matching model and data setup."
@@ -137,7 +138,12 @@ export function StockPage() {
       {loading && <p className="ui-muted">Loading runs…</p>}
 
       {latest && (
-        <section className="stock-page__summary">
+        <motion.section
+          className="stock-page__summary"
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: [0.25, 1, 0.5, 1] }}
+        >
           <div>
             <p className="ui-label">Latest completed</p>
             <p className="stock-page__latest-rating">{latest.rating ?? "—"}</p>
@@ -154,7 +160,7 @@ export function StockPage() {
               Rerun latest setup
             </button>
           </div>
-        </section>
+          </motion.section>
       )}
 
       {historyRefs.length >= 2 && (
@@ -240,14 +246,21 @@ export function StockPage() {
             </button>
           </div>
           {compareError && <p className="notice notice--error">{compareError}</p>}
-          {compare && (
-            <div className="stock-page__compare-result">
+          <AnimatePresence>
+            {compare && (
+              <motion.div
+                className="stock-page__compare-result"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: [0.25, 1, 0.5, 1] } }}
+                exit={{ opacity: 0, y: -6, transition: { duration: 0.15, ease: [0.25, 1, 0.5, 1] } }}
+              >
               <p>
                 <strong>A:</strong> {compare.a.rating} ({compare.a.date}) · <strong>B:</strong>{" "}
                 {compare.b.rating} ({compare.b.date})
               </p>
-            </div>
-          )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </section>
       )}
     </PageFrame>

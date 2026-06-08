@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Link } from "react-router-dom";
 import { dashboardPath, paths } from "../navigation/routes";
 import { PageFrame, PageHeader } from "../components/PageFrame";
@@ -160,34 +161,43 @@ export function WatchlistPage() {
           Pin as topic
         </button>
       </div>
-      {pinOpen ? (
-        <div className="topics-pin-modal" role="dialog" aria-label="Pin as topic">
-          <h3>Pin watchlist as topic</h3>
-          <label>
-            Label
-            <input className="ui-input" value={pinLabel} onChange={(e) => setPinLabel(e.target.value)} />
-          </label>
-          <label>
-            Search query
-            <input className="ui-input" value={pinQuery} onChange={(e) => setPinQuery(e.target.value)} />
-          </label>
-          <label>
-            Cadence
-            <CadenceSelect value={pinCadence} onChange={setPinCadence} />
-          </label>
-          <div style={{ display: "flex", gap: "var(--spacing-8)", marginTop: "var(--spacing-12)" }}>
-            <button type="button" className="ui-btn ui-btn--primary" disabled={pinBusy} onClick={() => void submitPinTopic()}>
-              {pinBusy ? "Creating…" : "Create topic"}
-            </button>
-            <button type="button" className="ui-btn ui-btn--ghost" onClick={() => setPinOpen(false)}>
-              Cancel
-            </button>
-            <Link to={paths.topics} className="ui-btn ui-btn--ghost">
-              Open topics
-            </Link>
-          </div>
-        </div>
-      ) : null}
+      <AnimatePresence>
+        {pinOpen && (
+          <motion.div
+            className="topics-pin-modal"
+            role="dialog"
+            aria-label="Pin as topic"
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1, transition: { duration: 0.2, ease: [0.25, 1, 0.5, 1] } }}
+            exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15, ease: [0.25, 1, 0.5, 1] } }}
+          >
+            <h3>Pin watchlist as topic</h3>
+            <label>
+              Label
+              <input className="ui-input" value={pinLabel} onChange={(e) => setPinLabel(e.target.value)} />
+            </label>
+            <label>
+              Search query
+              <input className="ui-input" value={pinQuery} onChange={(e) => setPinQuery(e.target.value)} />
+            </label>
+            <label>
+              Cadence
+              <CadenceSelect value={pinCadence} onChange={setPinCadence} />
+            </label>
+            <div style={{ display: "flex", gap: "var(--spacing-8)", marginTop: "var(--spacing-12)" }}>
+              <button type="button" className="ui-btn ui-btn--primary" disabled={pinBusy} onClick={() => void submitPinTopic()}>
+                {pinBusy ? "Creating…" : "Create topic"}
+              </button>
+              <button type="button" className="ui-btn ui-btn--ghost" onClick={() => setPinOpen(false)}>
+                Cancel
+              </button>
+              <Link to={paths.topics} className="ui-btn ui-btn--ghost">
+                Open topics
+              </Link>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {error ? (
         <p style={{ color: "var(--color-danger)", marginBottom: "var(--spacing-12)" }}>{error}</p>
       ) : null}
@@ -196,48 +206,54 @@ export function WatchlistPage() {
         <p style={{ color: "var(--color-ash-gray)" }}>No symbols yet.</p>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-          {tickers.map((t) => (
-            <li
-              key={t}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "var(--spacing-12)",
-                borderBottom: "1px solid var(--color-stone-border)",
-                gap: "var(--spacing-12)",
-              }}
-            >
-              <span className="mono" style={{ fontWeight: 600 }}>
-                {t}
-              </span>
-              <span style={{ display: "flex", gap: "var(--spacing-8)" }}>
-                <Link
-                  to={dashboardPath({ ticker: t })}
-                  style={{
-                    color: "var(--color-chartwell-blue)",
-                    fontWeight: 600,
-                    textDecoration: "none",
-                  }}
-                >
-                  Analyze
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => removeTicker(t)}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    color: "var(--color-ash-gray)",
-                    cursor: "pointer",
-                    textDecoration: "underline",
-                  }}
-                >
-                  Remove
-                </button>
-              </span>
-            </li>
-          ))}
+          <AnimatePresence>
+            {tickers.map((t) => (
+              <motion.li
+                key={t}
+                layout
+                initial={{ opacity: 0, x: -12 }}
+                animate={{ opacity: 1, x: 0, transition: { duration: 0.2, ease: [0.25, 1, 0.5, 1] } }}
+                exit={{ opacity: 0, x: -12, transition: { duration: 0.15, ease: [0.25, 1, 0.5, 1] } }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "var(--spacing-12)",
+                  borderBottom: "1px solid var(--color-stone-border)",
+                  gap: "var(--spacing-12)",
+                }}
+              >
+                <span className="mono" style={{ fontWeight: 600 }}>
+                  {t}
+                </span>
+                <span style={{ display: "flex", gap: "var(--spacing-8)" }}>
+                  <Link
+                    to={dashboardPath({ ticker: t })}
+                    style={{
+                      color: "var(--color-chartwell-blue)",
+                      fontWeight: 600,
+                      textDecoration: "none",
+                    }}
+                  >
+                    Analyze
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => removeTicker(t)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "var(--color-ash-gray)",
+                      cursor: "pointer",
+                      textDecoration: "underline",
+                    }}
+                  >
+                    Remove
+                  </button>
+                </span>
+              </motion.li>
+            ))}
+          </AnimatePresence>
         </ul>
       )}
     </PageFrame>

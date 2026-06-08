@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
-import { paths, runsPath } from "../navigation/routes";
+import { runsPath } from "../navigation/routes";
 import { Pressable } from "../components/Pressable";
 import { PageFrame, PageHeader, Panel } from "../components/PageFrame";
 import { LlmPicker, llmConfigToOverrides, useLlmConfig } from "../components/LlmPicker";
@@ -84,6 +85,7 @@ export function DashboardPage() {
   const [configHint, setConfigHint] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [jobNotice, setJobNotice] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const activeJobIdRef = useRef<string | null>(null);
   useDocumentTitle(ticker.trim() ? `${ticker.trim().toUpperCase()} · Analysis` : "Analysis");
 
@@ -179,36 +181,114 @@ export function DashboardPage() {
   }
 
   const hintLine = complexityHint(selectedAnalysts.length, debate, riskRounds);
-  const pipelineLabels = ["Queued", "Pipeline", "Report", "Done"];
-
-  function pipelineDotClass(): string {
-    return "pipeline-dot pipeline-dot--todo";
-  }
 
   return (
-    <PageFrame className="dashboard-page">
+    <PageFrame className="dashboard-page content-entrance">
       <PageHeader
         title="Main analysis"
         description="Start a single-stock analysis here. Live progress and reports open on the run page. Outputs are research artifacts, not financial advice."
         meta={
           <>
             <AppBreadcrumbs items={[{ label: "Analysis" }]} />
-            {configHint && <p className="notice">{configHint}</p>}
-            {jobNotice && <p className="notice notice--warn">{jobNotice}</p>}
+            <AnimatePresence>
+              {configHint && (
+                <motion.p
+                  key="config-hint"
+                  className="notice"
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+                >
+                  {configHint}
+                </motion.p>
+              )}
+            </AnimatePresence>
+            <AnimatePresence>
+              {jobNotice && (
+                <motion.p
+                  key="job-notice"
+                  className="notice notice--warn"
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+                >
+                  {jobNotice}
+                </motion.p>
+              )}
+            </AnimatePresence>
           </>
         }
       />
 
-      <section className="dashboard-workspace" aria-label="Configuration and run">
+      <motion.section
+        className="dashboard-workspace"
+        aria-label="Configuration and run"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ staggerChildren: 0.08, delayChildren: 0.05 }}
+      >
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, ease: [0.25, 1, 0.5, 1] }}
+        >
         <Panel
           className="dashboard-setup-card"
           title="Setup"
-          subtitle="Essentials cover most runs. Open Advanced for routing, sampling, and debate depth."
+          subtitle="Ticker and date are all you need. Open Advanced for routing, analysts, and debate depth."
         >
-          <fieldset className="field-group">
-            <legend style={{ fontWeight: 600, marginBottom: "var(--spacing-12)", fontSize: "var(--text-caption)" }}>
-              Essentials
-            </legend>
+
+          <div className="dashboard-advanced">
+            <button
+              type="button"
+              className="dashboard-advanced__summary"
+              onClick={() => setAdvancedOpen((prev) => !prev)}
+              aria-expanded={advancedOpen}
+            >
+              Advanced
+              <motion.span
+                style={{ display: "inline-block", marginLeft: 6 }}
+                animate={{ rotate: advancedOpen ? 180 : 0 }}
+                transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+                aria-hidden
+              >
+                ▼
+              </motion.span>
+            </button>
+            <AnimatePresence initial={false}>
+              {advancedOpen && (
+                <motion.div
+                  key="advanced-content"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto", transition: { duration: 0.2, ease: [0.25, 1, 0.5, 1] } }}
+                  exit={{ opacity: 0, height: 0, transition: { duration: 0.15, ease: [0.25, 1, 0.5, 1] } }}
+                >
+            <label className="ui-field">
+              <span className="ui-field__label">
+                Temperature: {temperature.toFixed(2)}
+              </span>
+              <label className="ui-field-row">
+                <input
+                  type="checkbox"
+                  checked={applyTemperature}
+                  disabled={jobActive}
+                  onChange={(e) => setApplyTemperature(e.target.checked)}
+                />
+                <span>Send temperature on each run (otherwise model default)</span>
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={2}
+                step={0.05}
+                value={temperature}
+                onChange={(e) => setTemperature(Number(e.target.value))}
+                disabled={!applyTemperature || jobActive}
+                className="dashboard-advanced__range"
+              />
+            </label>
             <LlmPicker
               value={llmConfig}
               onChange={setLlmConfig}
@@ -261,34 +341,6 @@ export function DashboardPage() {
                 ))}
               </select>
             </label>
-          </fieldset>
-
-          <details className="dashboard-advanced">
-            <summary className="dashboard-advanced__summary">Advanced</summary>
-            <label className="ui-field">
-              <span className="ui-field__label">
-                Temperature: {temperature.toFixed(2)}
-              </span>
-              <label className="ui-field-row">
-                <input
-                  type="checkbox"
-                  checked={applyTemperature}
-                  disabled={jobActive}
-                  onChange={(e) => setApplyTemperature(e.target.checked)}
-                />
-                <span>Send temperature on each run (otherwise model default)</span>
-              </label>
-              <input
-                type="range"
-                min={0}
-                max={2}
-                step={0.05}
-                value={temperature}
-                onChange={(e) => setTemperature(Number(e.target.value))}
-                disabled={!applyTemperature || jobActive}
-                className="dashboard-advanced__range"
-              />
-            </label>
             <label className="ui-field">
               <span className="ui-field__label">Debate rounds</span>
               <input
@@ -313,9 +365,18 @@ export function DashboardPage() {
                 onChange={(e) => setRiskRounds(Number(e.target.value))}
               />
             </label>
-          </details>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </Panel>
+        </motion.div>
 
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, delay: 0.08, ease: [0.25, 1, 0.5, 1] }}
+        >
         <Panel className="dashboard-run-card panel--sticky" title="Run">
           <label className="ui-field">
             <span className="ui-field__label">Ticker</span>
@@ -344,17 +405,6 @@ export function DashboardPage() {
             {hintLine && <span>· {hintLine}</span>}
           </div>
 
-          <div className="pipeline-track">
-            <div className="pipeline-track__dots">
-              {pipelineLabels.map((label, i) => (
-                <div key={label} className="pipeline-track__cell">
-                  <div className={pipelineDotClass()} title={label} />
-                  <div className="pipeline-track__label">{label}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
           <Pressable
             className="ui-btn-primary ui-btn-full"
             disabled={jobActive || apiSupportedAnalystIds === undefined}
@@ -363,12 +413,22 @@ export function DashboardPage() {
             {apiSupportedAnalystIds === undefined
               ? "Checking API…"
               : submitting
-                ? "Starting…"
+                ? (
+                    <motion.span
+                      key="starting"
+                      initial={{ opacity: 0.6 }}
+                      animate={{ opacity: [0.6, 1, 0.6] }}
+                      transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+                    >
+                      Starting…
+                    </motion.span>
+                  )
                 : "Start analysis"}
           </Pressable>
 
         </Panel>
-      </section>
+        </motion.div>
+      </motion.section>
 
     </PageFrame>
   );

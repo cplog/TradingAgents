@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import { DimensionsRadar } from './DimensionsRadar';
 import { PillarGrid } from './PillarGrid';
 import { FactsTable } from './FactsTable';
@@ -109,9 +110,15 @@ export function DimensionsPanel({ dimensions, commentary, error, commentaryError
       </nav>
 
       {commentary && (
-        <div id="ta-dim-alignment" style={{ scrollMarginTop: 24 }}>
+        <motion.div
+          id="ta-dim-alignment"
+          style={{ scrollMarginTop: 24 }}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, ease: [0.25, 1, 0.5, 1] }}
+        >
           <CommentaryCard commentary={commentary} />
-        </div>
+        </motion.div>
       )}
 
       <div id="ta-dim-factors" style={{ scrollMarginTop: 24 }}>

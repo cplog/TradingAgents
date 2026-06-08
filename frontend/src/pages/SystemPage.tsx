@@ -31,7 +31,7 @@ export function SystemPage() {
   }, []);
 
   return (
-    <PageFrame>
+    <PageFrame className="content-entrance">
       <PageHeader
         title="System and maintenance"
         description="Service health, runtime config, and cache controls."

@@ -62,6 +62,8 @@ describe("buildStandaloneReportHtml", () => {
     expect(html).toContain("@media print");
     expect(html).toContain("export-page");
     expect(html).toContain("Jump to section");
+    expect(html).toContain("--accent: #e88c4d");
+    expect(html).not.toContain("#1f6feb");
   });
 
   it("includes dimensions, provenance, and section nav from structured input", () => {

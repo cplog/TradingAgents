@@ -31,6 +31,7 @@ export interface FactorBarProps {
 }
 
 import { memo } from "react";
+import { motion } from "motion/react";
 
 export const FactorBar = memo(function FactorBar({ label, score, width = 120 }: FactorBarProps) {
   if (score == null) {
@@ -47,7 +48,13 @@ export const FactorBar = memo(function FactorBar({ label, score, width = 120 }: 
     <div className="factor-bar">
       <span className="factor-bar__label">{label}</span>
       <div className="factor-bar__track" style={{ width }}>
-        <div className="factor-bar__fill" style={{ width: `${pct}%`, background: TIER_COLORS[tier] }} />
+        <motion.div
+          className="factor-bar__fill"
+          initial={{ width: 0 }}
+          animate={{ width: `${pct}%` }}
+          transition={{ duration: 0.4, ease: [0.25, 1, 0.5, 1], delay: 0.08 }}
+          style={{ background: TIER_COLORS[tier] }}
+        />
       </div>
       <span className="factor-bar__value">{Math.round(score)}</span>
       <span

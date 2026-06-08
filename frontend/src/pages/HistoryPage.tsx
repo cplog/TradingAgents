@@ -1,26 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
 import { paths, runsPath, stocksPath } from "../navigation/routes";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   bulkDeleteHistoryRuns,
   deleteAllHistoryRuns,
   deleteHistoryRun,
   fetchHistoryRun,
   fetchHistoryRuns,
-  getDimensionsByTicker,
   postHistoryCompare,
   submitAnalyze,
-  submitBatch,
   type HistoryCompareResponse,
   type HistoryRunRef,
 } from "../api";
 import { HistoryRunsTable } from "../components/history/HistoryRunsTable";
-import { HistoryTickerCards } from "../components/history/HistoryTickerCards";
+import { RunComparisonResults } from "../components/history/RunComparisonResults";
 import { PageFrame, PageHeader, Panel } from "../components/PageFrame";
-import type { TickerRollup } from "../utils/historyRollup";
 import {
   buildRerunAnalyzePayload,
   formatPriorRunLlmLabel,
@@ -36,30 +32,12 @@ import {
   type HistorySortKey,
   type HistoryTableRow,
 } from "../utils/historyDisplay";
-import { DimensionsRadar } from "../components/dimensions/DimensionsRadar";
-import type { StockDimensions } from "../dimensions-types";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import {
   useJobsRefresh,
   useJobsTrackerContext,
 } from "../contexts/JobsTrackerContext";
 import { useThumbDimensions } from "../hooks/useThumbDimensions";
-
-import type { Components } from "react-markdown";
-import { prepareReportMarkdown } from "../utils/reportMarkdown";
-
-const REPORT_MD_COMPONENTS: Components = {
-  table: ({ children, ...rest }) => (
-    <div className="markdown-table-wrap">
-      <table {...rest}>{children}</table>
-    </div>
-  ),
-};
-
-function pct(conf: number | null | undefined): string {
-  if (conf == null || !Number.isFinite(conf)) return "—";
-  return `${Math.round(conf * 100)}%`;
-}
 
 export function HistoryPage() {
   const navigate = useNavigate();
@@ -85,8 +63,8 @@ export function HistoryPage() {
   const [tickerFilter, setTickerFilter] = useState(() => searchParams.get("ticker") ?? "");
   const [dateFrom, setDateFrom] = useState(() => searchParams.get("from") ?? "");
   const [dateTo, setDateTo] = useState(() => searchParams.get("to") ?? "");
-  const [runIdA, setRunIdA] = useState("");
-  const [runIdB, setRunIdB] = useState("");
+  const [runIdA, setRunIdA] = useState(() => searchParams.get("compareA") ?? "");
+  const [runIdB, setRunIdB] = useState(() => searchParams.get("compareB") ?? "");
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareError, setCompareError] = useState<string | null>(null);
   const [compare, setCompare] = useState<HistoryCompareResponse | null>(null);
@@ -97,10 +75,7 @@ export function HistoryPage() {
   const [showFullPm, setShowFullPm] = useState(false);
   const compareResultsRef = useRef<HTMLElement | null>(null);
 
-  const [viewMode, setViewMode] = useState<"cards" | "table">(
-    () => (searchParams.get("view") === "cards" ? "cards" : "table"),
-  );
-  const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
+  const viewMode = "table" as const;
   const [rerunPendingTickers, setRerunPendingTickers] = useState<Set<string>>(new Set());
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [bulkRerunSubmitting, setBulkRerunSubmitting] = useState(false);
@@ -121,10 +96,6 @@ export function HistoryPage() {
   const [bulkRetrySubmitting, setBulkRetrySubmitting] = useState(false);
   const [failedRetryRunId, setFailedRetryRunId] = useState<string | null>(null);
   const [retrySummary, setRetrySummary] = useState<string | null>(null);
-  const [compareDims, setCompareDims] = useState<{
-    a: StockDimensions | null;
-    b: StockDimensions | null;
-  }>({ a: null, b: null });
 
   const mergeFilters = useMemo(
     () => ({
@@ -148,38 +119,18 @@ export function HistoryPage() {
 
   const thumbDims = useThumbDimensions(runs, viewMode === "table");
 
-  // Fetch compare-side dimensions (by ticker) when a compare response loads
+  // Auto-run compare when both IDs are present in URL on first load
+  const compareInitiated = useRef(false);
   useEffect(() => {
-    if (!compare) {
-      setCompareDims({ a: null, b: null });
-      return;
+    if (compareInitiated.current) return;
+    const ca = searchParams.get("compareA")?.trim();
+    const cb = searchParams.get("compareB")?.trim();
+    if (ca && cb && ca !== cb && !compare && !compareLoading) {
+      compareInitiated.current = true;
+      void onCompare();
     }
-    let cancelled = false;
-    const aTicker = compare.a.ticker;
-    const bTicker = compare.b.ticker;
-    setCompareDims({ a: null, b: null });
-    if (aTicker) {
-      void getDimensionsByTicker(aTicker)
-        .then((d) => {
-          if (!cancelled) setCompareDims((prev) => ({ ...prev, a: d }));
-        })
-        .catch(() => {
-          if (!cancelled) setCompareDims((prev) => ({ ...prev, a: null }));
-        });
-    }
-    if (bTicker) {
-      void getDimensionsByTicker(bTicker)
-        .then((d) => {
-          if (!cancelled) setCompareDims((prev) => ({ ...prev, b: d }));
-        })
-        .catch(() => {
-          if (!cancelled) setCompareDims((prev) => ({ ...prev, b: null }));
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [compare]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   useEffect(() => {
     if (compare && compareResultsRef.current) {
@@ -243,7 +194,8 @@ export function HistoryPage() {
     setOrDel("live", includeLiveJobs ? null : "0");
     setOrDel("overnight", overnightOnly ? "1" : null);
     setOrDel("failed", failedOnly ? "1" : null);
-    setOrDel("view", viewMode === "table" ? null : viewMode);
+    setOrDel("compareA", runIdA.trim() || null);
+    setOrDel("compareB", runIdB.trim() || null);
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true });
     }
@@ -256,7 +208,8 @@ export function HistoryPage() {
     includeLiveJobs,
     overnightOnly,
     failedOnly,
-    viewMode,
+    runIdA,
+    runIdB,
   ]);
 
   useEffect(() => {
@@ -467,15 +420,6 @@ export function HistoryPage() {
 
 
 
-  function toggleTickerSelection(ticker: string) {
-    setSelectedTickers((prev) => {
-      const next = new Set(prev);
-      if (next.has(ticker)) next.delete(ticker);
-      else next.add(ticker);
-      return next;
-    });
-  }
-
   function openRerunDialog(runId: string, ticker: string) {
     setRerunError(null);
     setRerunDialogDetail(null);
@@ -491,12 +435,6 @@ export function HistoryPage() {
       .catch(() => {
         setRerunDialogDetail({ priorLlm: null });
       });
-  }
-
-  function onCardRerun(rollup: TickerRollup) {
-    const baseRun = rollup.latestCompletedRun;
-    if (!baseRun) return;
-    openRerunDialog(baseRun.run_id, rollup.ticker);
   }
 
   function onTableRerun(row: HistoryTableRow) {
@@ -555,25 +493,6 @@ export function HistoryPage() {
       return;
     }
 
-    if (rerunTarget.kind === "bulk") {
-      setBulkRerunSubmitting(true);
-      try {
-        const r = await submitBatch({
-          tickers: rerunTarget.tickers,
-          config_overrides: llmConfigToOverrides(llm),
-        });
-        refreshJobsRibbon();
-        setSelectedTickers(new Set());
-        setRerunTarget(null);
-        navigate(`/batch?id=${encodeURIComponent(r.batch_id)}`);
-      } catch (e: unknown) {
-        setRerunError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setBulkRerunSubmitting(false);
-      }
-      return;
-    }
-
     const { runId, ticker } = rerunTarget;
     setRerunPendingTickers((prev) => new Set(prev).add(ticker));
     try {
@@ -592,17 +511,6 @@ export function HistoryPage() {
         return next;
       });
     }
-  }
-
-  function onCardOpenLatest(rollup: TickerRollup) {
-    const row = rollup.latestCompletedRun ?? rollup.latestRun;
-    if (!row) return;
-    if (row.job_status === "completed") {
-      openRun(row.run_id);
-      return;
-    }
-    const jobId = row.job_id ?? row.run_id;
-    navigate(runsPath(jobId));
   }
 
   async function onRetryOneFailed(row: HistoryTableRow) {
@@ -657,23 +565,12 @@ export function HistoryPage() {
     }
   }
 
-  function onBulkRerunSelected() {
-    const tickers = [...selectedTickers].filter(Boolean);
-    if (!tickers.length) return;
-    setRerunError(null);
-    setRerunDialogDetail(null);
-    setRerunTarget({ kind: "bulk", tickers });
-  }
-
-
-
   const runA = runSelectOptions.find((o) => o.id === runIdA.trim());
   const runB = runSelectOptions.find((o) => o.id === runIdB.trim());
   const compareDockOpen =
     runSelectOptions.length >= 2 ||
     Boolean(runIdA.trim() || runIdB.trim() || compare || compareError);
-  const hasBulkSelection =
-    viewMode === "cards" ? selectedTickers.size > 0 : selectedRunIds.size > 0;
+  const hasBulkSelection = selectedRunIds.size > 0;
 
   function clearCompareSelection() {
     setRunIdA("");
@@ -682,23 +579,8 @@ export function HistoryPage() {
     setCompareError(null);
   }
 
-  const sortOptions: { value: HistorySortKey; label: string }[] = [
-    { value: "processing_desc", label: "Newest first" },
-    { value: "processing_asc", label: "Oldest first" },
-    { value: "status_desc", label: "Active first" },
-    { value: "status_asc", label: "Completed first" },
-    { value: "trade_date_desc", label: "Trade date ↓" },
-    { value: "trade_date_asc", label: "Trade date ↑" },
-    { value: "ticker_asc", label: "Ticker A→Z" },
-    { value: "ticker_desc", label: "Ticker Z→A" },
-    { value: "rating_desc", label: "Rating bullish" },
-    { value: "rating_asc", label: "Rating bearish" },
-    { value: "confidence_desc", label: "Confidence high" },
-    { value: "confidence_asc", label: "Confidence low" },
-  ];
-
   return (
-    <PageFrame className="history-page" wide>
+        <PageFrame className="history-page content-entrance" wide>
       <PageHeader
         title="Runs"
         description="Past analyses and live jobs. Times in HKT."
@@ -743,37 +625,7 @@ export function HistoryPage() {
                 className="mono"
               />
             </label>
-            <label className="history-page__field history-page__field--wide">
-              <span className="history-page__field-label">Sort</span>
-              <select
-                aria-label="Sort history runs"
-                value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as HistorySortKey)}
-              >
-                {sortOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div
-              className="history-page__view-toggle"
-              role="tablist"
-              aria-label="Runs view mode"
-            >
-              {(["table", "cards"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  role="tab"
-                  aria-selected={viewMode === m}
-                  onClick={() => setViewMode(m)}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
+
             <button
               type="button"
               className="ui-btn-ghost history-page__refresh"
@@ -858,36 +710,19 @@ export function HistoryPage() {
         {hasBulkSelection && (
           <div className="history-page__selection-bar" role="toolbar" aria-label="Bulk actions">
             <span className="history-page__selection-count">
-              {viewMode === "cards"
-                ? `${selectedTickers.size} ticker${selectedTickers.size === 1 ? "" : "s"}`
-                : `${selectedRunIds.size} run${selectedRunIds.size === 1 ? "" : "s"}`}{" "}
-              selected
+              {selectedRunIds.size} run{selectedRunIds.size === 1 ? "" : "s"} selected
             </span>
             <div className="history-page__bulk-actions">
-              {viewMode === "cards" && (
-                <button
-                  type="button"
-                  className="ui-btn-primary"
-                  disabled={bulkRerunSubmitting || selectedTickers.size === 0}
-                  onClick={() => void onBulkRerunSelected()}
-                >
-                  {bulkRerunSubmitting
-                    ? "Submitting…"
-                    : `Re-run tickers (${selectedTickers.size})`}
-                </button>
-              )}
-              {viewMode === "table" && (
-                <button
-                  type="button"
-                  className="ui-btn-primary"
-                  disabled={bulkRerunSubmitting || selectedCompletedRunIds.length === 0}
-                  onClick={() => onBulkRerunSelectedRuns()}
-                >
-                  {bulkRerunSubmitting
-                    ? "Submitting…"
-                    : `Re-run (${selectedCompletedRunIds.length})`}
-                </button>
-              )}
+              <button
+                type="button"
+                className="ui-btn-primary"
+                disabled={bulkRerunSubmitting || selectedCompletedRunIds.length === 0}
+                onClick={() => onBulkRerunSelectedRuns()}
+              >
+                {bulkRerunSubmitting
+                  ? "Submitting…"
+                  : `Re-run (${selectedCompletedRunIds.length})`}
+              </button>
               <button
                 type="button"
                 className="ui-btn-danger"
@@ -941,16 +776,6 @@ export function HistoryPage() {
               </Link>
             )}
           </div>
-        ) : viewMode === "cards" ? (
-          <HistoryTickerCards
-            rows={visibleRuns}
-            selectedTickers={selectedTickers}
-            onToggleTicker={toggleTickerSelection}
-            onRerun={(roll) => void onCardRerun(roll)}
-            onOpenLatest={onCardOpenLatest}
-            rerunPending={rerunPendingTickers}
-            rerunError={rerunError}
-          />
         ) : (
           <HistoryRunsTable
             rows={visibleRuns}
@@ -983,8 +808,16 @@ export function HistoryPage() {
           />
         )}
 
-        {compareDockOpen && (
-          <div className="history-page__compare-dock" aria-label="Compare runs">
+        <AnimatePresence>
+          {compareDockOpen && (
+            <motion.div
+              key="compare-dock"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: [0.25, 1, 0.5, 1] } }}
+              exit={{ opacity: 0, y: -8, transition: { duration: 0.15, ease: [0.25, 1, 0.5, 1] } }}
+              className="history-page__compare-dock"
+              aria-label="Compare runs"
+            >
             <div className="history-page__compare-dock-head">
               <span className="history-page__compare-dock-label">Compare</span>
               <span
@@ -1071,240 +904,42 @@ export function HistoryPage() {
               </button>
             </div>
             <p className="history-page__compare-hint">
-              {viewMode === "table" ? (
-                <>
-                  Click <strong>A</strong>/<strong>B</strong> on a row, or use the dropdowns.
-                </>
-              ) : (
-                <>Switch to table view for row shortcuts, or use the dropdowns.</>
-              )}{" "}
+              Click <strong>A</strong>/<strong>B</strong> on a row, or use the dropdowns.{" "}
               Match model and sources for a fair read.
             </p>
             {compareError && <p className="panel__error">{compareError}</p>}
-          </div>
+          </motion.div>
         )}
+        </AnimatePresence>
 
-        {compare && (
-          <div ref={compareResultsRef} className="history-page__compare-results">
-            <header className="history-page__compare-results-head">
-              <div>
-                <p className="history-page__compare-results-kicker">Comparison</p>
-                <h3 className="history-page__compare-results-title">
-                  Side-by-side · A left · B right
-                </h3>
-              </div>
-              <label className="history-page__compare-pm-toggle">
-                <input
-                  type="checkbox"
-                  checked={showFullPm}
-                  onChange={(e) => setShowFullPm(e.target.checked)}
-                />
-                Full PM markdown
-              </label>
-            </header>
-            <p className="history-page__compare-results-note">
-              Radar facets use a live facts-only fetch by ticker when available, not necessarily each run&apos;s as-of
-              date.
-            </p>
-
-            <div className="page-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))" }}>
-              {(["a", "b"] as const).map((side) => {
-                const dims = compareDims[side];
-                return (
-                  <div key={`radar-${side}`} className="compare-radar-card">
-                    <div
-                      style={{
-                        fontSize: "var(--text-caption)",
-                        fontWeight: 600,
-                        color: "var(--color-slate-text)",
-                      }}
-                    >
-                      {side === "a" ? "Run A · Dimensions" : "Run B · Dimensions"}
-                    </div>
-                    {dims ? (
-                      <DimensionsRadar factorScores={dims.factor_scores} height={220} />
-                    ) : (
-                      <div
-                        style={{
-                          height: 220,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          color: "var(--color-ash-gray)",
-                          fontSize: "var(--text-caption)",
-                          textAlign: "center",
-                          padding: "var(--spacing-16)",
-                        }}
-                      >
-                        Dimensions unavailable for this side.
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="compare-two-col">
-              {[compare.a, compare.b].map((side, idx) => (
-                <article key={side.run_id ?? String(idx)} className="compare-card">
-                  <section
-                    style={{
-                      display: "grid",
-                      gap: "var(--spacing-16)",
-                      paddingBottom: "var(--spacing-24)",
-                      borderBottom: "1px solid var(--color-stone-border)",
-                    }}
-                  >
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "var(--text-caption)",
-                        fontWeight: 600,
-                        letterSpacing: "0.02em",
-                        textTransform: "uppercase",
-                        color: "var(--color-steel-gray)",
-                      }}
-                    >
-                      {idx === 0 ? "Run A" : "Run B"}
-                    </p>
-                    <div
-                      style={{
-                        fontSize: "var(--text-heading)",
-                        fontWeight: 600,
-                        letterSpacing: "-0.02em",
-                        lineHeight: 1.2,
-                        color: "var(--color-slate-text)",
-                      }}
-                    >
-                      {side.rating ?? "—"}
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexWrap: "wrap",
-                        alignItems: "baseline",
-                        gap: "var(--spacing-8) var(--spacing-16)",
-                        fontSize: "var(--text-caption)",
-                        color: "var(--color-steel-gray)",
-                      }}
-                    >
-                      <span className="mono" style={{ color: "var(--color-slate-text)", fontWeight: 600 }}>
-                        {side.ticker ?? "—"}
-                      </span>
-                      <span>{side.date ? `As of ${side.date}` : "—"}</span>
-                      <span>
-                        Conviction <span style={{ color: "var(--color-ash-gray)" }}>(heuristic)</span>:{" "}
-                        {pct(side.confidence ?? undefined)}
-                      </span>
-                    </div>
-                    {side.run_id ? (
-                      <div className="mono" style={{ fontSize: "var(--text-caption)", color: "var(--color-steel-gray)" }}>
-                        {side.run_id}
-                      </div>
-                    ) : null}
-                    {side.config_snapshot && typeof side.config_snapshot.llm_provider === "string" ? (
-                      <div style={{ fontSize: "var(--text-caption)", color: "var(--color-steel-gray)" }}>
-                        Provider:{" "}
-                        <span className="mono" style={{ color: "var(--color-slate-text)" }}>
-                          {String(side.config_snapshot.llm_provider)}
-                        </span>
-                      </div>
-                    ) : null}
-                  </section>
-
-                  <section style={{ display: "grid", gap: "var(--spacing-12)", minWidth: 0 }}>
-                    <h4
-                      style={{
-                        margin: 0,
-                        fontSize: "var(--text-heading-sm)",
-                        fontWeight: 600,
-                        color: "var(--color-slate-text)",
-                      }}
-                    >
-                      Trader plan (excerpt)
-                    </h4>
-                    <pre
-                      className="mono"
-                      style={{
-                        margin: 0,
-                        whiteSpace: "pre-wrap",
-                        fontSize: "var(--text-caption)",
-                        lineHeight: 1.55,
-                        background: "var(--surface-canvas-fog)",
-                        border: "1px solid var(--color-stone-border)",
-                        padding: "var(--spacing-16)",
-                        borderRadius: "var(--radius-cards)",
-                        maxHeight: 220,
-                        overflow: "auto",
-                      }}
-                    >
-                      {side.excerpt_trader_plan || "—"}
-                    </pre>
-                  </section>
-
-                  <section style={{ display: "grid", gap: "var(--spacing-12)", minWidth: 0 }}>
-                    <h4
-                      style={{
-                        margin: 0,
-                        fontSize: "var(--text-heading-sm)",
-                        fontWeight: 600,
-                        color: "var(--color-slate-text)",
-                      }}
-                    >
-                      Portfolio decision
-                    </h4>
-                    {showFullPm ? (
-                      <div
-                        className="markdown-body"
-                        style={{
-                          fontSize: "var(--text-caption)",
-                          padding: "var(--spacing-16)",
-                          background: "var(--surface-canvas-fog)",
-                          border: "1px solid var(--color-stone-border)",
-                          borderRadius: "var(--radius-cards)",
-                          maxHeight: 360,
-                          overflow: "auto",
-                        }}
-                      >
-                        {side.reports?.portfolio_decision?.trim() ? (
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={REPORT_MD_COMPONENTS}
-                          >
-                            {prepareReportMarkdown(
-                              "portfolio_decision",
-                              side.reports.portfolio_decision,
-                            )}
-                          </ReactMarkdown>
-                        ) : (
-                          <span style={{ color: "var(--color-ash-gray)" }}>—</span>
-                        )}
-                      </div>
-                    ) : (
-                      <pre
-                        className="mono"
-                        style={{
-                          margin: 0,
-                          whiteSpace: "pre-wrap",
-                          fontSize: "var(--text-caption)",
-                          lineHeight: 1.55,
-                          background: "var(--surface-canvas-fog)",
-                          border: "1px solid var(--color-stone-border)",
-                          padding: "var(--spacing-16)",
-                          borderRadius: "var(--radius-cards)",
-                          maxHeight: 280,
-                          overflow: "auto",
-                        }}
-                      >
-                        {side.excerpt_portfolio_decision || "—"}
-                      </pre>
-                    )}
-                  </section>
-                </article>
-              ))}
-            </div>
-          </div>
-        )}
+        <AnimatePresence>
+          {compare && (
+            <motion.div
+              ref={compareResultsRef}
+              className="history-page__compare-results"
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+            >
+              <header className="history-page__compare-results-head">
+                <div>
+                  <p className="history-page__compare-results-kicker">Comparison</p>
+                  <h3 className="history-page__compare-results-title">
+                    {compare.a.ticker && compare.b.ticker && compare.a.ticker.toUpperCase() === compare.b.ticker.toUpperCase()
+                      ? `${compare.a.ticker} · ${compare.a.date ?? ''} vs ${compare.b.date ?? ''}`
+                      : `${compare.a.ticker ?? 'A'} vs ${compare.b.ticker ?? 'B'}`}
+                  </h3>
+                </div>
+              </header>
+              <RunComparisonResults
+                compare={compare}
+                showFullPm={showFullPm}
+                onToggleFullPm={() => setShowFullPm((v) => !v)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </Panel>
       <RerunSetupDialog
         open={rerunTarget != null}

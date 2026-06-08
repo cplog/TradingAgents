@@ -1,11 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Link, useNavigate } from "react-router-dom";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { dashboardPath, runsPath, stocksPath } from "../navigation/routes";
-import type { CatalogStatus, HistoryCoverageRow, IndustryConstituentRow } from "../api";
+import type {
+  BloomSignal,
+  CatalogStatus,
+  CoverageQualitySummary,
+  FactorAggregate,
+  HistoryCoverageRow,
+  IndustryConstituentRow,
+  RatingDistributionBucket,
+  SectorAnalyticsResponse,
+} from "../api";
 import {
   fetchCatalogStatus,
   fetchHistoryCoverage,
   fetchIndustryConstituents,
+  fetchSectorAnalytics,
 } from "../api";
 
 function formatCatalogAge(epochSeconds: number | null | undefined): {
@@ -83,6 +95,7 @@ const listBtn = (active: boolean, hasRuns: boolean): React.CSSProperties => ({
   cursor: "pointer",
   fontSize: "var(--text-body-sm)",
   fontWeight: active ? 600 : 500,
+  transition: "background 0.18s, border-color 0.18s, color 0.18s, transform 0.12s",
 });
 
 function RunsPill({ count }: { count: number }) {
@@ -151,6 +164,7 @@ const segBtn = (active: boolean): React.CSSProperties => ({
   fontSize: "var(--text-caption)",
   fontWeight: 600,
   cursor: "pointer",
+  transition: "background 0.18s, border-color 0.18s, color 0.18s",
 });
 
 export function SectorIndustryPage() {
@@ -176,6 +190,10 @@ export function SectorIndustryPage() {
   const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
 
   const [catalogStatus, setCatalogStatus] = useState<CatalogStatus | null>(null);
+
+  const [analytics, setAnalytics] = useState<SectorAnalyticsResponse | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -266,11 +284,34 @@ export function SectorIndustryPage() {
 
   useEffect(() => {
     if (!selectedSector || !selectedIndustry) {
+      setAnalytics(null);
+      setAnalyticsLoading(false);
+      setAnalyticsError(null);
       setConstituents([]);
       setConstError(null);
       return;
     }
     let cancelled = false;
+
+    async function loadAnalytics() {
+      setAnalyticsLoading(true);
+      setAnalyticsError(null);
+      try {
+        const data = await fetchSectorAnalytics({
+          sector: selectedSector!,
+          industry: selectedIndustry!,
+          market: marketFilter,
+        });
+        if (!cancelled) setAnalytics(data);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!cancelled) setAnalyticsError(msg);
+      } finally {
+        if (!cancelled) setAnalyticsLoading(false);
+      }
+    }
+    void loadAnalytics();
+
     async function loadConstituents() {
       setConstLoading(true);
       setConstError(null);
@@ -456,6 +497,7 @@ export function SectorIndustryPage() {
       )}
 
       {!covLoading && !covError && (
+        <div className="content-entrance">
         <div
           style={{
             display: "grid",
@@ -548,37 +590,49 @@ export function SectorIndustryPage() {
               </p>
             )}
             <div style={{ overflowY: "auto", flex: 1 }}>
-              {industriesForSector.length === 0 && selectedSector && (
-                <p style={{ color: "var(--color-ash-gray)", fontSize: "var(--text-body-sm)" }}>
-                  No matching industries{onlyWithRuns ? " with runs" : ""}.
-                </p>
-              )}
-              {industriesForSector.map((r) => {
-                const active =
-                  selectedSector === r.sector && selectedIndustry === r.industry;
-                return (
-                  <button
-                    key={`${r.sector}|${r.industry}`}
-                    type="button"
-                    onClick={() => selectIndustry(r.sector, r.industry)}
-                    style={listBtn(active, (r.run_count || 0) > 0)}
+              <AnimatePresence mode="wait">
+                {selectedSector && (
+                  <motion.div
+                    key={selectedSector}
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.18, ease: [0.25, 1, 0.5, 1] }}
                   >
-                    <div
-                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+                {industriesForSector.length === 0 && (
+                  <p style={{ color: "var(--color-ash-gray)", fontSize: "var(--text-body-sm)" }}>
+                    No matching industries{onlyWithRuns ? " with runs" : ""}.
+                  </p>
+                )}
+                {industriesForSector.map((r) => {
+                  const active =
+                    selectedSector === r.sector && selectedIndustry === r.industry;
+                  return (
+                    <button
+                      key={`${r.sector}|${r.industry}`}
+                      type="button"
+                      onClick={() => selectIndustry(r.sector, r.industry)}
+                      style={listBtn(active, (r.run_count || 0) > 0)}
                     >
-                      <span>{r.industry}</span>
-                      <RunsPill count={r.run_count || 0} />
-                    </div>
-                    <div
-                      style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}
-                    >
-                      {r.run_count > 0
-                        ? `dims ${r.with_dimensions_count} · notes ${r.with_commentary_count}`
-                        : "no runs yet"}
-                    </div>
-                  </button>
-                );
-              })}
+                      <div
+                        style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+                      >
+                        <span>{r.industry}</span>
+                        <RunsPill count={r.run_count || 0} />
+                      </div>
+                      <div
+                        style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}
+                      >
+                        {r.run_count > 0
+                          ? `dims ${r.with_dimensions_count} · notes ${r.with_commentary_count}`
+                          : "no runs yet"}
+                      </div>
+                    </button>
+                  );
+                })}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </section>
 
@@ -626,8 +680,15 @@ export function SectorIndustryPage() {
               <p style={{ color: "var(--color-ash-gray)" }}>Select an industry to list tickers.</p>
             )}
 
+            <AnimatePresence mode="wait">
             {selectedIndustry && (
-              <>
+              <motion.div
+                key={`${selectedSector}|${selectedIndustry}`}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.18, ease: [0.25, 1, 0.5, 1] }}
+              >
                 <div className="sector-filter-row">
                   <input
                     className="sector-filter-input"
@@ -671,50 +732,338 @@ export function SectorIndustryPage() {
                     {filteredConstituents.length} of {summary.total} tickers ·{" "}
                     {summary.withReport} with reports · {summary.withDims} with dimensions
                   </span>
-                  {selectedTickers.size > 0 && (
-                    <span
+                  <AnimatePresence>
+                    {selectedTickers.size > 0 && (
+                      <motion.span
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: 0.18, ease: [0.25, 1, 0.5, 1] }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <strong style={{ color: "var(--color-slate-text)" }}>
+                          {selectedTickers.size} selected
+                        </strong>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTickers(new Set())}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "var(--color-chartwell-blue)",
+                            cursor: "pointer",
+                            padding: 0,
+                            fontSize: "var(--text-caption)",
+                          }}
+                        >
+                          clear
+                        </button>
+                        <button
+                          type="button"
+                          onClick={launchBulkAnalyze}
+                          style={{
+                            padding: "4px 10px",
+                            background: "var(--color-phosphor)",
+                            color: "var(--color-deep-space)",
+                            border: "1px solid var(--color-phosphor-dim)",
+                            borderRadius: "var(--radius-buttons)",
+                            cursor: "pointer",
+                            fontWeight: 600,
+                            fontSize: "var(--text-caption)",
+                          }}
+                        >
+                          Analyze {selectedTickers.size} in batch
+                        </button>
+                      </motion.span>
+                    )}
+                    </AnimatePresence>
+                </div>
+
+                {/* ── Sector Analytics ── */}
+                {analyticsLoading && (
+                  <p style={{ color: "var(--color-ash-gray)", fontSize: "var(--text-body-sm)", marginBottom: 12 }}>
+                    Loading analytics…
+                  </p>
+                )}
+                {analyticsError && !analytics && (
+                  <p
+                    style={{
+                      color: "var(--color-amber-readout)",
+                      fontSize: "var(--text-body-sm)",
+                      marginBottom: 12,
+                    }}
+                  >
+                    Analytics unavailable: {analyticsError}
+                  </p>
+                )}
+                {analytics && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 10,
+                      marginBottom: 14,
+                    }}
+                  >
+                    {/* Health score */}
+                    <div
                       style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 8,
+                        flex: "1 1 160px",
+                        minWidth: 140,
+                        padding: "10px 12px",
+                        borderRadius: "var(--radius-cards)",
+                        border: "1px solid var(--color-stone-border)",
+                        background: "var(--surface-cloud-white)",
                       }}
                     >
-                      <strong style={{ color: "var(--color-slate-text)" }}>
-                        {selectedTickers.size} selected
-                      </strong>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedTickers(new Set())}
+                      <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginBottom: 4 }}>
+                        Health score
+                      </div>
+                      <div
                         style={{
-                          background: "transparent",
-                          border: "none",
-                          color: "var(--color-chartwell-blue)",
-                          cursor: "pointer",
-                          padding: 0,
-                          fontSize: "var(--text-caption)",
+                          fontSize: "var(--text-heading-lg)",
+                          fontWeight: 700,
+                          color:
+                            analytics.health_score >= 60
+                              ? "var(--color-phosphor)"
+                              : analytics.health_score >= 35
+                                ? "var(--color-amber-readout)"
+                                : "var(--color-strawberry)",
                         }}
                       >
-                        clear
-                      </button>
-                      <button
-                        type="button"
-                        onClick={launchBulkAnalyze}
+                        {Math.round(analytics.health_score)}
+                        <span style={{ fontSize: "var(--text-body-sm)", fontWeight: 400, color: "var(--color-ash-gray)", marginLeft: 4 }}>
+                          /100
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginTop: 4 }}>
+                        <span title="Rating contribution">R {Math.round(analytics.rating_score)}</span>
+                        {" · "}
+                        <span title="Factor contribution">F {Math.round(analytics.factor_score)}</span>
+                        {" · "}
+                        <span title="Freshness contribution">Fr {Math.round(analytics.freshness_score)}</span>
+                      </div>
+                    </div>
+
+                    {/* Bloom / expansion signal */}
+                    <div
+                      style={{
+                        flex: "1 1 200px",
+                        minWidth: 160,
+                        padding: "10px 12px",
+                        borderRadius: "var(--radius-cards)",
+                        border: "1px solid var(--color-stone-border)",
+                        background: "var(--surface-cloud-white)",
+                      }}
+                    >
+                      <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginBottom: 4 }}>
+                        Expansion signal
+                      </div>
+                      <div
                         style={{
-                          padding: "4px 10px",
-                          background: "var(--color-phosphor)",
-                          color: "var(--color-deep-space)",
-                          border: "1px solid var(--color-phosphor-dim)",
-                          borderRadius: "var(--radius-buttons)",
-                          cursor: "pointer",
-                          fontWeight: 600,
-                          fontSize: "var(--text-caption)",
+                          fontSize: "var(--text-body-lg)",
+                          fontWeight: 700,
+                          color:
+                            analytics.bloom.bloom_label === "Hot"
+                              ? "var(--color-strawberry)"
+                              : analytics.bloom.bloom_label === "Accelerating"
+                                ? "var(--color-amber-readout)"
+                                : analytics.bloom.bloom_label === "Emerging"
+                                  ? "var(--color-chartwell-blue)"
+                                  : "var(--color-ash-gray)",
                         }}
                       >
-                        Analyze {selectedTickers.size} in batch
-                      </button>
-                    </span>
-                  )}
-                </div>
+                        {analytics.bloom.bloom_label}
+                        {analytics.bloom.bloom_score > 0 && (
+                          <span style={{ fontSize: "var(--text-caption)", fontWeight: 400, color: "var(--color-ash-gray)", marginLeft: 6 }}>
+                            ({Math.round(analytics.bloom.bloom_score)})
+                          </span>
+                        )}
+                      </div>
+                      {analytics.bloom.reasons.length > 0 && (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: 4,
+                            marginTop: 6,
+                          }}
+                        >
+                          {analytics.bloom.reasons.map((r, i) => (
+                            <span
+                              key={i}
+                              style={{
+                                fontSize: "var(--text-caption)",
+                                padding: "1px 6px",
+                                borderRadius: 999,
+                                background: "rgba(42, 32, 24, 0.06)",
+                                color: "var(--color-slate-text)",
+                                border: "1px solid var(--color-platinum-outline)",
+                              }}
+                            >
+                              {r}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Coverage quality */}
+                    <div
+                      style={{
+                        flex: "1 1 160px",
+                        minWidth: 140,
+                        padding: "10px 12px",
+                        borderRadius: "var(--radius-cards)",
+                        border: "1px solid var(--color-stone-border)",
+                        background: "var(--surface-cloud-white)",
+                      }}
+                    >
+                      <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginBottom: 4 }}>
+                        Coverage
+                      </div>
+                      <div style={{ fontSize: "var(--text-body-lg)", fontWeight: 700, color: "var(--color-slate-text)" }}>
+                        {analytics.coverage_quality.analyzed_tickers}
+                        <span style={{ fontSize: "var(--text-caption)", fontWeight: 400, color: "var(--color-ash-gray)", marginLeft: 4 }}>
+                          / {analytics.coverage_quality.total_constituents}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginTop: 4 }}>
+                        {Math.round(analytics.coverage_quality.pct_with_dimensions)}% dims · {Math.round(analytics.coverage_quality.pct_with_commentary)}% notes
+                      </div>
+                      {analytics.coverage_quality.freshness_days_median != null && (
+                        <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}>
+                          μ {Math.round(analytics.coverage_quality.freshness_days_median)}d · p90 {analytics.coverage_quality.freshness_days_p90 != null ? `${Math.round(analytics.coverage_quality.freshness_days_p90)}d` : "—"}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Avg confidence */}
+                    <div
+                      style={{
+                        flex: "1 1 100px",
+                        minWidth: 80,
+                        padding: "10px 12px",
+                        borderRadius: "var(--radius-cards)",
+                        border: "1px solid var(--color-stone-border)",
+                        background: "var(--surface-cloud-white)",
+                      }}
+                    >
+                      <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginBottom: 4 }}>
+                        Avg confidence
+                      </div>
+                      <div style={{ fontSize: "var(--text-body-lg)", fontWeight: 700, color: "var(--color-slate-text)" }}>
+                        {analytics.avg_confidence > 0 ? Math.round(analytics.avg_confidence) : "—"}
+                      </div>
+                    </div>
+
+                    {/* Rating distribution mini chart */}
+                    {analytics.rating_distribution.some((b) => b.count > 0) && (
+                      <div
+                        style={{
+                          flex: "2 1 240px",
+                          minWidth: 200,
+                          padding: "10px 12px",
+                          borderRadius: "var(--radius-cards)",
+                          border: "1px solid var(--color-stone-border)",
+                          background: "var(--surface-cloud-white)",
+                          height: 100,
+                        }}
+                      >
+                        <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginBottom: 2 }}>
+                          Rating distribution
+                        </div>
+                        <ResponsiveContainer width="100%" height={68}>
+                          <BarChart
+                            data={analytics.rating_distribution.filter((b) => b.count > 0)}
+                            layout="vertical"
+                            margin={{ top: 0, right: 4, left: 4, bottom: 0 }}
+                          >
+                            <CartesianGrid stroke="var(--color-stone-border)" strokeDasharray="3 3" horizontal={false} />
+                            <XAxis type="number" tick={false} axisLine={false} />
+                            <YAxis
+                              type="category"
+                              dataKey="rating"
+                              width={60}
+                              tick={{ fontSize: 8, fill: "var(--color-ash-gray)" }}
+                            />
+                            <Tooltip
+                              contentStyle={{
+                                background: "var(--surface-elevated)",
+                                border: "1px solid var(--color-stone-border)",
+                                borderRadius: "var(--radius-md)",
+                                fontSize: 11,
+                              }}
+                              formatter={(value: number, _name: string, props: { payload: RatingDistributionBucket }) => [
+                                `${value} (${props.payload.pct}%)`,
+                                props.payload.rating,
+                              ]}
+                            />
+                            <Bar dataKey="count" fill="var(--color-phosphor)" radius={[0, 2, 2, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+
+                    {/* Factor medians mini chart */}
+                    {analytics.factor_medians.some((f) => f.median > 0) && (
+                      <div
+                        style={{
+                          flex: "2 1 240px",
+                          minWidth: 200,
+                          padding: "10px 12px",
+                          borderRadius: "var(--radius-cards)",
+                          border: "1px solid var(--color-stone-border)",
+                          background: "var(--surface-cloud-white)",
+                          height: 100,
+                        }}
+                      >
+                        <div style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)", marginBottom: 2 }}>
+                          Factor medians
+                        </div>
+                        <ResponsiveContainer width="100%" height={68}>
+                          <BarChart
+                            data={analytics.factor_medians}
+                            layout="vertical"
+                            margin={{ top: 0, right: 4, left: 4, bottom: 0 }}
+                          >
+                            <CartesianGrid stroke="var(--color-stone-border)" strokeDasharray="3 3" horizontal={false} />
+                            <XAxis
+                              type="number"
+                              domain={[0, 100]}
+                              tick={false}
+                              axisLine={false}
+                            />
+                            <YAxis
+                              type="category"
+                              dataKey="factor"
+                              width={52}
+                              tick={{ fontSize: 8, fill: "var(--color-ash-gray)" }}
+                            />
+                            <Tooltip
+                              contentStyle={{
+                                background: "var(--surface-elevated)",
+                                border: "1px solid var(--color-stone-border)",
+                                borderRadius: "var(--radius-md)",
+                                fontSize: 11,
+                              }}
+                              formatter={(value: number, _name: string, props: { payload: FactorAggregate }) => [
+                                `${value} (n=${props.payload.tickers_with_data})`,
+                                props.payload.factor,
+                              ]}
+                            />
+                            <Bar dataKey="median" fill="var(--color-apricot-soft)" radius={[0, 2, 2, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {constLoading && (
                   <p style={{ color: "var(--color-ash-gray)" }}>Loading tickers…</p>
                 )}
@@ -813,13 +1162,14 @@ export function SectorIndustryPage() {
                           return (
                             <tr
                               key={`${c.market}-${c.ticker}`}
-                              style={
-                                selected
+                              style={{
+                                transition: "background 0.18s",
+                                ...(selected
                                   ? { background: "var(--color-phosphor-glow)" }
                                   : c.has_report
                                     ? { background: "rgba(120, 240, 168, 0.05)" }
-                                    : undefined
-                              }
+                                    : {}),
+                              }}
                             >
                               <td
                                 style={{
@@ -933,10 +1283,12 @@ export function SectorIndustryPage() {
                     </table>
                   </div>
                 )}
-              </>
+              </motion.div>
             )}
+          </AnimatePresence>
           </section>
         </div>
+      </div>
       )}
     </div>
   );

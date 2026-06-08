@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
-from datetime import datetime
+import statistics
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -893,6 +895,491 @@ def list_history_coverage() -> List[Dict[str, Any]]:
     return merge_coverage_with_catalog(catalog, aggregates)
 
 
+_RATING_ORDER = ("Buy", "Overweight", "Hold", "Underweight", "Sell")
+_RATING_WEIGHTS: Dict[str, float] = {
+    "Buy": 100.0,
+    "Overweight": 75.0,
+    "Hold": 50.0,
+    "Underweight": 25.0,
+    "Sell": 0.0,
+}
+_BLOOM_LABELS = {
+    "hot": "Hot",
+    "accelerating": "Accelerating",
+    "emerging": "Emerging",
+    "insufficient_data": "Insufficient Data",
+}
+
+
+def _latest_per_ticker(rows: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """Keep only the newest completed run per ticker."""
+    by_ticker: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        tid = r.get("ticker") or ""
+        if not tid:
+            continue
+        existing = by_ticker.get(tid)
+        existing_at = existing.get("completed_at") or "" if existing else ""
+        cur_at = r.get("completed_at") or ""
+        if not existing or cur_at > existing_at:
+            by_ticker[tid] = r
+    return list(by_ticker.values())
+
+
+def _parse_factor_scores(raw: Any) -> Dict[str, float]:
+    """Parse factor_scores_json into a dict of factor -> score."""
+    parsed = _parse_factor_scores_json(raw)
+    if parsed:
+        return parsed
+    return {}
+
+
+def _compute_median(values: list[float]) -> Optional[float]:
+    if not values:
+        return None
+    try:
+        return round(statistics.median(values), 2)
+    except statistics.StatisticsError:
+        return None
+
+
+def _compute_rating_score(distribution: list[Dict[str, Any]]) -> float:
+    """Weighted rating score 0-100 from distribution buckets."""
+    total = sum(b["count"] for b in distribution)
+    if total == 0:
+        return 0.0
+    weighted = sum(
+        b["count"] * _RATING_WEIGHTS.get(b["rating"], 50.0) for b in distribution
+    )
+    return round(weighted / total, 2)
+
+
+def _compute_factor_score(medians: list[Dict[str, Any]]) -> float:
+    """Average of available factor medians 0-100."""
+    vals = [m["median"] for m in medians if m.get("median") is not None]
+    if not vals:
+        return 0.0
+    return round(sum(vals) / len(vals), 2)
+
+
+def _compute_freshness_score(
+    now_ts: str,
+    analyzed: int,
+    total_constituents: int,
+    completed_times: list[str],
+) -> float:
+    """Freshness/coverage score 0-100 (20% weight in overall health)."""
+    coverage_pct = analyzed / total_constituents if total_constituents > 0 else 0
+    coverage_score = min(100, coverage_pct * 100)
+
+    if not completed_times:
+        return round(coverage_score * 0.5, 2)
+
+    try:
+        now_dt = datetime.fromisoformat(now_ts)
+        days_list: list[float] = []
+        for ct in completed_times:
+            if not ct:
+                continue
+            try:
+                ct_dt = datetime.fromisoformat(ct)
+                days_list.append(abs((now_dt - ct_dt).total_seconds()) / 86400)
+            except (ValueError, TypeError):
+                continue
+        if not days_list:
+            return round(coverage_score * 0.5, 2)
+        median_days = _compute_median(days_list)
+        if median_days is None:
+            median_days = 30.0
+        fresh_score = max(0, 100 - median_days * 2)
+    except (ValueError, TypeError):
+        fresh_score = 50.0
+
+    return round(0.6 * fresh_score + 0.4 * coverage_score, 2)
+
+
+def _compute_bloom_signal(
+    rows: list[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Detect early expansion/bloom signals for an industry.
+
+    Returns bloom_score (0-100), bloom_label, and reason strings.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff_14 = now.timestamp() - 14 * 86400
+    cutoff_28 = now.timestamp() - 28 * 86400
+
+    recent_runs: list[Dict[str, Any]] = []
+    mid_runs: list[Dict[str, Any]] = []
+    older_runs: list[Dict[str, Any]] = []
+
+    for r in rows:
+        cat = r.get("completed_at") or ""
+        try:
+            ts = datetime.fromisoformat(cat).timestamp()
+        except (ValueError, TypeError):
+            continue
+        if ts >= cutoff_14:
+            recent_runs.append(r)
+        elif ts >= cutoff_28:
+            mid_runs.append(r)
+        else:
+            older_runs.append(r)
+
+    reasons: list[str] = []
+    score = 0.0
+
+    # 1) Recent activity growth
+    recent_count = len({r.get("ticker") for r in recent_runs if r.get("ticker")})
+    prior_count = len({r.get("ticker") for r in mid_runs if r.get("ticker")})
+    total_recent = len(recent_runs)
+    total_prior = len(mid_runs)
+    if prior_count > 0 and total_prior > 0:
+        growth = (recent_count - prior_count) / prior_count
+        run_growth = (total_recent - total_prior) / total_prior
+        activity_score = min(25, max(0, (growth + run_growth) * 12.5))
+        score += activity_score
+        if growth > 0.3:
+            reasons.append(f"analysis activity +{round(growth * 100)}% vs prior 14 days")
+    elif recent_count > 0 and prior_count == 0:
+        score += 30
+        reasons.append("first analyses appearing in this window")
+
+    # 2) Coverage expansion
+    tickers_all = {r.get("ticker") for r in rows if r.get("ticker")}
+    recent_tickers = {r.get("ticker") for r in recent_runs if r.get("ticker")}
+    if tickers_all and recent_tickers:
+        new_share = len(recent_tickers - {
+            r.get("ticker") for r in older_runs if r.get("ticker")
+        }) / len(tickers_all)
+        expansion_score = min(20, new_share * 25)
+        score += expansion_score
+        if new_share > 0.15:
+            reasons.append(f"{round(new_share * 100)}% of tickers newly analyzed")
+
+    # 3) Momentum acceleration
+    def _momentum_of(runs: list[Dict[str, Any]]) -> Optional[float]:
+        vals = []
+        for r in runs:
+            fs = _parse_factor_scores(r.get("factor_scores_json"))
+            v = fs.get("momentum")
+            if v is not None:
+                vals.append(v)
+        return _compute_median(vals)
+
+    recent_mom = _momentum_of(recent_runs)
+    older_mom = _momentum_of(older_runs + mid_runs)
+    if recent_mom is not None and older_mom is not None:
+        mom_delta = recent_mom - older_mom
+        mom_score = min(15, max(0, mom_delta * 1.5))
+        score += mom_score
+        if mom_delta > 5:
+            reasons.append(f"momentum up {round(mom_delta, 1)} pts vs older runs")
+        elif mom_delta > 2:
+            reasons.append(f"momentum +{round(mom_delta, 1)} pts")
+    elif recent_mom is not None and len(rows) > 0:
+        score += 5
+        reasons.append("momentum data established for first time")
+
+    # 4) Rating migration
+    def _rating_bullish(r: Dict[str, Any]) -> Optional[float]:
+        rat = r.get("rating")
+        if rat in ("Buy", "Overweight"):
+            return 1.0
+        if rat in ("Underweight", "Sell"):
+            return -1.0
+        if rat == "Hold":
+            return 0.0
+        return None
+
+    recent_sent = [_rating_bullish(r) for r in recent_runs if _rating_bullish(r) is not None]
+    older_sent = [_rating_bullish(r) for r in (mid_runs + older_runs) if _rating_bullish(r) is not None]
+    if recent_sent and older_sent:
+        migration = (sum(recent_sent) / len(recent_sent)) - (sum(older_sent) / len(older_sent))
+        mig_score = min(15, max(0, migration * 15))
+        score += mig_score
+        if migration > 0.2:
+            reasons.append("ratings migrating bullish")
+        elif migration > 0.1:
+            reasons.append("slightly more bullish ratings")
+    elif recent_sent and not older_sent:
+        score += 10
+        bullish_share = sum(1 for s in recent_sent if s > 0) / len(recent_sent)
+        if bullish_share > 0.5:
+            reasons.append("predominantly bullish initial ratings")
+
+    # 5) Freshness burst
+    if len(recent_runs) >= 3:
+        score += 12
+        reasons.append("activity cluster in last 14 days")
+
+    score = min(100, max(0, score))
+
+    if len(rows) < 3:
+        return {
+            "bloom_score": 0,
+            "bloom_label": _BLOOM_LABELS["insufficient_data"],
+            "reasons": ["fewer than 3 runs — insufficient data for bloom signal"],
+        }
+    if score >= 50:
+        label = _BLOOM_LABELS["hot"]
+    elif score >= 25:
+        label = _BLOOM_LABELS["accelerating"]
+    elif score >= 10:
+        label = _BLOOM_LABELS["emerging"]
+    else:
+        label = _BLOOM_LABELS["insufficient_data"]
+
+    return {
+        "bloom_score": round(score, 1),
+        "bloom_label": label,
+        "reasons": reasons[:4],
+    }
+
+
+def compute_sector_analytics(
+    *,
+    sector: str,
+    industry: str,
+    total_constituents: int = 0,
+) -> Dict[str, Any]:
+    """Aggregate analytics for a sector/industry from D1 runs.
+
+    Requires D1 to be configured. Returns a dict matching SectorAnalyticsResponse.
+    """
+    if not d1_history_enabled():
+        raise RuntimeError("d1_not_configured")
+
+    _ensure_d1_schema()
+
+    where, params = _run_filter_clauses(
+        ticker=None,
+        date_from=None,
+        date_to=None,
+        sector=sector,
+        industry=industry,
+    )
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+
+    timeout = float(os.getenv("TRADINGAGENTS_D1_LIST_TIMEOUT", "20"))
+
+    sql = f"""
+        SELECT {_D1_LIST_COLUMNS}
+        FROM analysis_runs
+        {where_sql}
+        ORDER BY completed_at DESC
+    """
+    rows = _d1_query(sql, params or None, timeout=timeout)
+    if not rows:
+        now_str = datetime.now(timezone.utc).isoformat()
+        return {
+            "sector": sector,
+            "industry": industry,
+            "market": "ALL",
+            "health_score": 0,
+            "rating_distribution": [
+                {"rating": r, "count": 0, "pct": 0.0} for r in _RATING_ORDER
+            ],
+            "factor_medians": [
+                {"factor": f, "median": 0.0, "tickers_with_data": 0}
+                for f in _FACTOR_SCORE_KEYS
+            ],
+            "coverage_quality": {
+                "analyzed_tickers": 0,
+                "total_constituents": total_constituents,
+                "pct_with_dimensions": 0.0,
+                "pct_with_commentary": 0.0,
+                "freshness_days_median": None,
+                "freshness_days_p90": None,
+                "latest_run_link": None,
+            },
+            "avg_confidence": 0.0,
+            "rating_score": 0.0,
+            "factor_score": 0.0,
+            "freshness_score": 0.0,
+            "bloom": _compute_bloom_signal([]),
+            "generated_at": now_str,
+        }
+
+    latest = _latest_per_ticker(rows)
+    now_str = datetime.now(timezone.utc).isoformat()
+
+    # --- Rating distribution ---
+    rating_counts: Dict[str, int] = {r: 0 for r in _RATING_ORDER}
+    for r in latest:
+        rat = r.get("rating") or ""
+        if rat in rating_counts:
+            rating_counts[rat] += 1
+    total_rated = len(latest)
+    distribution = [
+        {
+            "rating": rating,
+            "count": count,
+            "pct": round(count / total_rated * 100, 1) if total_rated > 0 else 0.0,
+        }
+        for rating, count in rating_counts.items()
+    ]
+
+    # --- Factor medians ---
+    factor_values: Dict[str, list[float]] = {f: [] for f in _FACTOR_SCORE_KEYS}
+    for r in latest:
+        fs = _parse_factor_scores(r.get("factor_scores_json"))
+        for f in _FACTOR_SCORE_KEYS:
+            v = fs.get(f)
+            if v is not None:
+                try:
+                    factor_values[f].append(float(v))
+                except (TypeError, ValueError):
+                    continue
+
+    factor_medians = []
+    for f in _FACTOR_SCORE_KEYS:
+        vals = factor_values[f]
+        factor_medians.append(
+            {
+                "factor": f,
+                "median": _compute_median(vals) or 0.0,
+                "tickers_with_data": len(vals),
+            }
+        )
+
+    # --- Coverage quality ---
+    dims_count = sum(1 for r in latest if r.get("has_dimensions"))
+    comm_count = sum(1 for r in latest if r.get("has_commentary"))
+    completed_times = [
+        r.get("completed_at") or "" for r in latest if r.get("completed_at")
+    ]
+
+    freshness_days: list[float] = []
+    if completed_times:
+        now_dt = datetime.fromisoformat(now_str)
+        for ct in completed_times:
+            try:
+                ct_dt = datetime.fromisoformat(ct)
+                freshness_days.append(abs((now_dt - ct_dt).total_seconds()) / 86400)
+            except (ValueError, TypeError):
+                continue
+    sorted_days = sorted(freshness_days)
+
+    latest_run_link = None
+    sorted_by_time = sorted(latest, key=lambda r: r.get("completed_at") or "", reverse=True)
+    if sorted_by_time:
+        latest_id = sorted_by_time[0].get("run_id") or ""
+        if latest_id:
+            latest_run_link = f"/runs/{latest_id}"
+
+    coverage_quality = {
+        "analyzed_tickers": total_rated,
+        "total_constituents": total_constituents,
+        "pct_with_dimensions": round(dims_count / total_rated * 100, 1) if total_rated > 0 else 0.0,
+        "pct_with_commentary": round(comm_count / total_rated * 100, 1) if total_rated > 0 else 0.0,
+        "freshness_days_median": _compute_median(sorted_days),
+        "freshness_days_p90": (
+            sorted_days[min(9, len(sorted_days) - 1)] if len(sorted_days) >= 10
+            else sorted_days[-1] if sorted_days
+            else None
+        ),
+        "latest_run_link": latest_run_link,
+    }
+
+    # --- Confidence ---
+    confidences = [
+        r.get("confidence") for r in latest
+        if isinstance(r.get("confidence"), (int, float))
+    ]
+    avg_confidence = round(sum(confidences) / len(confidences), 2) if confidences else 0.0
+
+    # --- Sub-scores ---
+    rating_score = _compute_rating_score(distribution)
+    factor_score = _compute_factor_score(factor_medians)
+    freshness_score = _compute_freshness_score(
+        now_str, total_rated, total_constituents or total_rated, completed_times
+    )
+
+    # --- Health score (weighted) ---
+    health_score = round(
+        0.45 * rating_score + 0.35 * factor_score + 0.20 * freshness_score, 2
+    )
+
+    # --- Bloom signal ---
+    bloom = _compute_bloom_signal(rows)
+
+    return {
+        "sector": sector,
+        "industry": industry,
+        "market": "ALL",
+        "health_score": health_score,
+        "rating_distribution": distribution,
+        "factor_medians": factor_medians,
+        "coverage_quality": coverage_quality,
+        "avg_confidence": avg_confidence,
+        "rating_score": rating_score,
+        "factor_score": factor_score,
+        "freshness_score": freshness_score,
+        "bloom": bloom,
+        "generated_at": now_str,
+    }
+
+
+def list_blooming_industries(
+    *,
+    market: Optional[str] = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Rank industries by bloom score across the catalog."""
+    if not d1_history_enabled():
+        raise RuntimeError("d1_not_configured")
+
+    _ensure_d1_schema()
+
+    sector_filter = ""
+    params: list[Any] = []
+    if market and market != "ALL":
+        sector_filter = "WHERE json_extract(dimensions_json, '$.facts.sector') = ?"
+        params.append(market)
+
+    timeout = float(os.getenv("TRADINGAGENTS_D1_LIST_TIMEOUT", "20"))
+    sql = f"""
+        SELECT json_extract(dimensions_json, '$.facts.sector') AS sector,
+               json_extract(dimensions_json, '$.facts.industry') AS industry,
+               COUNT(*) AS run_count,
+               MAX(completed_at) AS latest_completed_at
+        FROM analysis_runs
+        {sector_filter}
+        GROUP BY sector, industry
+        HAVING COUNT(*) >= 3
+        ORDER BY COUNT(*) DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    group_rows = _d1_query(sql, params, timeout=timeout)
+
+    results = []
+    for gr in group_rows:
+        sec = gr.get("sector") or ""
+        ind = gr.get("industry") or ""
+        if not sec or not ind:
+            continue
+        try:
+            analytics = compute_sector_analytics(sector=sec, industry=ind)
+        except RuntimeError:
+            continue
+        bloom = analytics.get("bloom", {})
+        results.append({
+            "sector": sec,
+            "industry": ind,
+            "run_count": gr.get("run_count"),
+            "latest_completed_at": gr.get("latest_completed_at"),
+            "bloom_score": bloom.get("bloom_score", 0),
+            "bloom_label": bloom.get("bloom_label", "Insufficient Data"),
+            "bloom_reasons": bloom.get("reasons", []),
+            "health_score": analytics.get("health_score", 0),
+        })
+
+    results.sort(key=lambda x: x["bloom_score"], reverse=True)
+    return results[:limit]
+
+
 def build_compare_payload(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     """Structured side-by-side compare (full reports preserved under each side)."""
 
@@ -919,6 +1406,11 @@ def build_compare_payload(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any
             "artifacts_path": rec.get("artifacts_path"),
             "excerpt_portfolio_decision": excerpt_pm,
             "excerpt_trader_plan": excerpt_trader,
+            "dimensions": rec.get("dimensions"),
+            "dimensions_commentary": rec.get("dimensions_commentary"),
+            "plan_levels": rec.get("plan_levels"),
+            "live_context_at_run": rec.get("live_context_at_run"),
+            "analyst_coverage": rec.get("analyst_coverage"),
         }
 
     return {"a": _side(a), "b": _side(b)}

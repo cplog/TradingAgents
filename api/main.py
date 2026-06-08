@@ -30,11 +30,13 @@ from api.jobs import Worker
 from api.history import (
     MAX_HISTORY_RUNS_QUERY_LIMIT,
     compare_runs,
+    compute_sector_analytics,
     d1_history_enabled,
     delete_all_runs,
     delete_run,
     delete_runs,
     get_run,
+    list_blooming_industries,
     list_history_coverage,
     list_runs,
     persist_completed_run,
@@ -74,6 +76,7 @@ from api.models import (
     ResumeJobResponse,
     RuntimeConfigUpdateRequest,
     SCAN_MODE_ANALYSTS,
+    SectorAnalyticsResponse,
 )
 from api.news import fetch_news_feed
 from api.state_store import ALLOWED_PERSISTED_SECRET_KEYS, get_state_store
@@ -1531,6 +1534,59 @@ async def history_industry_constituents(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return [IndustryConstituentRow.model_validate(r) for r in raw]
+
+
+@app.get("/api/sectors/analytics", response_model=SectorAnalyticsResponse)
+async def sector_analytics(
+    sector: str = Query(..., min_length=1),
+    industry: str = Query(..., min_length=1),
+    market: str = Query("ALL", description="US, HK, or ALL"),
+) -> SectorAnalyticsResponse:
+    """Sector/industry analytics from persisted run data (D1 only)."""
+    if not d1_history_enabled():
+        raise HTTPException(status_code=501, detail="D1 is not configured")
+
+    from api.dimensions.sector_industry_catalog import list_industry_constituents
+
+    try:
+        constituents = list_industry_constituents(sector, industry, market=market if market != "ALL" else None)
+    except RuntimeError:
+        constituents = []
+    total_constituents = len(constituents)
+
+    try:
+        raw = compute_sector_analytics(
+            sector=sector,
+            industry=industry,
+            total_constituents=total_constituents,
+        )
+    except RuntimeError as exc:
+        msg = str(exc)
+        if msg == "d1_not_configured":
+            raise HTTPException(status_code=501, detail="D1 is not configured")
+        raise HTTPException(status_code=500, detail=msg) from exc
+
+    return SectorAnalyticsResponse.model_validate(raw)
+
+
+@app.get("/api/sectors/blooming")
+async def sector_blooming(
+    market: Optional[str] = Query(None, description="US, HK, or omit for all markets"),
+    limit: int = Query(20, ge=1, le=100),
+) -> list[dict[str, Any]]:
+    """Rank industries by bloom/expansion signal across the catalog (D1 only)."""
+    if not d1_history_enabled():
+        raise HTTPException(status_code=501, detail="D1 is not configured")
+
+    try:
+        results = list_blooming_industries(market=market, limit=limit)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if msg == "d1_not_configured":
+            raise HTTPException(status_code=501, detail="D1 is not configured")
+        raise HTTPException(status_code=500, detail=msg) from exc
+
+    return results
 
 
 @app.get("/api/history/runs/{run_id}", response_model=HistoryRunDetail)

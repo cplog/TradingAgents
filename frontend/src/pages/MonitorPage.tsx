@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Link } from "react-router-dom";
 import {
   addMonitorWatchlistTicker,
@@ -207,20 +208,38 @@ export function MonitorPage() {
       </Panel>
 
       <Panel title="Server watchlist (API)">
-        {watchlistEmpty ? (
-          <div className="monitor-page__empty-watchlist" role="status">
-            <p className="monitor-page__empty-title">Add at least one ticker to get started</p>
-            <p className="ui-muted">
-              The monitor only scores symbols you list here. Start with names you would watch for overnight panic
-              dips, then wait for extended hours or click Run poll now.
-            </p>
-          </div>
-        ) : (
-          <p className="ui-hint">
-            {tickers.length} ticker{tickers.length === 1 ? "" : "s"} on the server list. These are intersected with
-            the AKShare US drop scan before scoring.
-          </p>
-        )}
+        <AnimatePresence mode="wait">
+          {watchlistEmpty ? (
+            <motion.div
+              key="empty"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+            >
+              <div className="monitor-page__empty-watchlist" role="status">
+                <p className="monitor-page__empty-title">Add at least one ticker to get started</p>
+                <p className="ui-muted">
+                  The monitor only scores symbols you list here. Start with names you would watch for overnight panic
+                  dips, then wait for extended hours or click Run poll now.
+                </p>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="populated"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+            >
+              <p className="ui-hint">
+                {tickers.length} ticker{tickers.length === 1 ? "" : "s"} on the server list. These are intersected with
+                the AKShare US drop scan before scoring.
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <div className="monitor-page__add-row">
           <input
@@ -234,39 +253,73 @@ export function MonitorPage() {
             }}
           />
           <button type="button" className="ui-btn-primary" disabled={busy} onClick={() => void addTicker()}>
-            Add
+            {busy ? (
+              <motion.span
+                key="busy"
+                initial={{ opacity: 0.6 }}
+                animate={{ opacity: [0.6, 1, 0.6] }}
+                transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+              >
+                Adding…
+              </motion.span>
+            ) : (
+              "Add"
+            )}
           </button>
         </div>
 
         {watchlistEmpty ? (
-          <div className="monitor-page__examples">
+          <motion.div
+            className="monitor-page__examples"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1], staggerChildren: 0.04 }}
+          >
             <span className="monitor-page__examples-label">Quick add:</span>
             {EXAMPLE_TICKERS.map((sym) => (
-              <button
+              <motion.button
                 key={sym}
                 type="button"
                 className="ui-btn-ghost monitor-page__example-chip"
                 disabled={busy}
                 onClick={() => void addTicker(sym)}
+                whileTap={{ scale: 0.97 }}
+                transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
               >
                 {sym}
-              </button>
+              </motion.button>
             ))}
-          </div>
+          </motion.div>
         ) : null}
 
-        {!watchlistEmpty ? (
-          <ul className="monitor-page__watchlist">
-            {tickers.map((t) => (
-              <li key={t}>
-                <span className="mono">{t}</span>
-                <button type="button" className="ui-btn-ghost" disabled={busy} onClick={() => void removeTicker(t)}>
-                  Remove
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
+        <AnimatePresence>
+          {!watchlistEmpty && (
+            <motion.ul
+              className="monitor-page__watchlist"
+              key="watchlist"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+            >
+              {tickers.map((t) => (
+                <motion.li
+                  key={t}
+                  layout
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 8 }}
+                  transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+                >
+                  <span className="mono">{t}</span>
+                  <button type="button" className="ui-btn-ghost" disabled={busy} onClick={() => void removeTicker(t)}>
+                    Remove
+                  </button>
+                </motion.li>
+              ))}
+            </motion.ul>
+          )}
+        </AnimatePresence>
       </Panel>
 
       <Panel title="Recent signals">

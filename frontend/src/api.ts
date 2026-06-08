@@ -433,6 +433,11 @@ export type HistoryCompareSide = {
   artifacts_path?: string | null;
   excerpt_portfolio_decision: string;
   excerpt_trader_plan: string;
+  dimensions?: StockDimensions | null;
+  dimensions_commentary?: DimensionsCommentary | null;
+  plan_levels?: Record<string, unknown> | null;
+  live_context_at_run?: Record<string, unknown> | null;
+  analyst_coverage?: Record<string, { status?: string; section_key?: string }> | null;
 };
 
 export type HistoryCompareResponse = {
@@ -811,4 +816,63 @@ export async function unpinTopic(id: string): Promise<TopicDetail> {
 
 export async function deleteTopic(id: string): Promise<{ deleted: string }> {
   return apiJson(`/api/topics/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// --- Sector Analytics ---
+
+export type RatingDistributionBucket = {
+  rating: "Buy" | "Overweight" | "Hold" | "Underweight" | "Sell";
+  count: number;
+  pct: number;
+};
+
+export type FactorAggregate = {
+  factor: "value" | "growth" | "quality" | "momentum" | "low_risk" | "sentiment";
+  median: number;
+  tickers_with_data: number;
+};
+
+export type CoverageQualitySummary = {
+  analyzed_tickers: number;
+  total_constituents: number;
+  pct_with_dimensions: number;
+  pct_with_commentary: number;
+  freshness_days_median: number | null;
+  freshness_days_p90: number | null;
+  latest_run_link: string | null;
+};
+
+export type BloomSignal = {
+  bloom_score: number;
+  bloom_label: string;
+  reasons: string[];
+};
+
+export type SectorAnalyticsResponse = {
+  sector: string;
+  industry: string;
+  market: string;
+  health_score: number;
+  rating_distribution: RatingDistributionBucket[];
+  factor_medians: FactorAggregate[];
+  coverage_quality: CoverageQualitySummary;
+  avg_confidence: number;
+  rating_score: number;
+  factor_score: number;
+  freshness_score: number;
+  bloom: BloomSignal;
+  generated_at: string;
+};
+
+export async function fetchSectorAnalytics(params: {
+  sector: string;
+  industry: string;
+  market?: string;
+}): Promise<SectorAnalyticsResponse> {
+  const qs = new URLSearchParams({
+    sector: params.sector,
+    industry: params.industry,
+    ...(params.market && params.market !== "ALL" ? { market: params.market } : {}),
+  });
+  return apiJson(`/api/sectors/analytics?${qs}`);
 }

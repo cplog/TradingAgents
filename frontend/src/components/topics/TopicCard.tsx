@@ -1,7 +1,15 @@
+import { motion } from "motion/react";
 import { Link } from "react-router-dom";
 import type { TopicSummary } from "../../api";
 import { topicPath } from "../../navigation/routes";
 import { MarketBadge } from "./MarketBadge";
+
+const EASE_OUT_QUART = [0.25, 1, 0.5, 1] as const;
+
+const cardReveal = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.22, ease: EASE_OUT_QUART } },
+};
 
 type Props = {
   topic: TopicSummary;
@@ -10,7 +18,7 @@ type Props = {
 
 export function TopicCard({ topic, onPinToggle }: Props) {
   return (
-    <article className="topics-card">
+    <motion.article variants={cardReveal} className="topics-card">
       <header className="topics-card__header">
         <Link to={topicPath(topic.id)} className="topics-card__title">
           {topic.label}
@@ -47,6 +55,6 @@ export function TopicCard({ topic, onPinToggle }: Props) {
           ))}
         </ul>
       ) : null}
-    </article>
+    </motion.article>
   );
 }

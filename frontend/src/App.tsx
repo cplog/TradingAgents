@@ -17,7 +17,6 @@ const MonitorPage = lazyPage(() => import("./pages/MonitorPage"), "MonitorPage")
 const NewsPage = lazyPage(() => import("./pages/NewsPage"), "NewsPage");
 const RunDetailPage = lazyPage(() => import("./pages/RunDetailPage"), "RunDetailPage");
 const RunJobResultsPage = lazyPage(() => import("./pages/RunJobResultsPage"), "RunJobResultsPage");
-const ScreenerPage = lazyPage(() => import("./pages/ScreenerPage"), "ScreenerPage");
 const SectorIndustryPage = lazyPage(() => import("./pages/SectorIndustryPage"), "SectorIndustryPage");
 const StockPage = lazyPage(() => import("./pages/StockPage"), "StockPage");
 const SystemPage = lazyPage(() => import("./pages/SystemPage"), "SystemPage");
@@ -34,7 +33,6 @@ export default function App() {
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/history/stats" element={<HistoryStatsPage />} />
         <Route path="/batch" element={<BatchPage />} />
-        <Route path="/screener" element={<ScreenerPage />} />
         <Route path="/sectors" element={<SectorIndustryPage />} />
         <Route path="/news" element={<NewsPage />} />
         <Route path="/topics" element={<TopicsPage />} />

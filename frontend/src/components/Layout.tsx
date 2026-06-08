@@ -48,7 +48,6 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: "Research",
     items: [
-      { to: paths.screener, label: "Screener", hint: "Facts-only screen", end: true },
       { to: paths.sectors, label: "Sectors", hint: "Industry rollups", end: true },
       { to: paths.news, label: "News", hint: "Headlines feed", end: true },
       { to: paths.topics, label: "Topics", hint: "Hot ideas & themes", end: true },
@@ -174,6 +173,16 @@ export function Layout() {
       </aside>
 
       <div className="app-shell__content">
+        {/* Ambient noise grain overlay */}
+        <svg className="app-shell__grain" aria-hidden="true">
+          <filter id="grain">
+            <feTurbulence type="fractalNoise" baseFrequency="0.5" numOctaves="3" stitchTiles="stitch">
+              <animate attributeName="baseFrequency" values="0.5;0.52;0.5" dur="24s" repeatCount="indefinite" />
+            </feTurbulence>
+            <feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.03 0" />
+          </filter>
+          <rect width="100%" height="100%" filter="url(#grain)" opacity="0.4" />
+        </svg>
         <div className="app-shell__status" role="status" aria-live="polite" style={{ viewTransitionName: "app-status" } as React.CSSProperties}>
           <span className="app-shell__status-dot" aria-hidden />
           <span className="app-shell__status-text">Paper brief, live research pipeline</span>

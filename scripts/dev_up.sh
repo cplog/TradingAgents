@@ -9,7 +9,7 @@ BACKEND_PORT="${BACKEND_PORT:-8808}"
 FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
 FRONTEND_PORT="${FRONTEND_PORT:-53173}"
 
-BACKEND_CMD="${BACKEND_CMD:-uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}}"
+BACKEND_CMD="${BACKEND_CMD:-uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT} --reload}"
 FRONTEND_CMD="${FRONTEND_CMD:-npm run dev -- --host ${FRONTEND_HOST} --port ${FRONTEND_PORT}}"
 # Default 0: an old uvicorn on :8808 causes POST /analyze 422 on hot_money/policy/lockup/kronos.
 # Opt in to reuse: REUSE_BACKEND_IF_BUSY=1 ./scripts/dev_up.sh
@@ -200,7 +200,7 @@ if is_port_busy "${BACKEND_PORT}"; then
   if [[ "${REUSE_BACKEND_IF_BUSY}" == "1" ]]; then
     start_backend=0
     echo "Backend port ${BACKEND_PORT} already in use; reusing existing backend."
-    echo "Tip: if new API routes 404 (e.g. Monitor /api/monitor/status, Sectors /api/catalog/industry-constituents), restart that process and re-run this script."
+    echo "Tip: if new API routes 404 (e.g. /api/sectors/analytics, /api/monitor/status), restart that process and re-run this script."
     echo "      POST to missing routes returns 405 from the SPA static handler — same fix."
     echo
     echo "WARNING: An old uvicorn on :${BACKEND_PORT} often causes POST /analyze 422 on hot_money, policy, lockup, kronos"

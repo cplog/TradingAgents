@@ -594,6 +594,43 @@ class HistoryCompareResponse(BaseModel):
     b: HistoryCompareSide
 
 
+class RatingDistributionBucket(BaseModel):
+    rating: Literal["Buy", "Overweight", "Hold", "Underweight", "Sell"]
+    count: int = Field(ge=0)
+    pct: float = Field(ge=0, le=100)
+
+
+class FactorAggregate(BaseModel):
+    factor: Literal["value", "growth", "quality", "momentum", "low_risk", "sentiment"]
+    median: float = Field(ge=0, le=100)
+    tickers_with_data: int = Field(ge=0)
+
+
+class CoverageQualitySummary(BaseModel):
+    analyzed_tickers: int = Field(ge=0)
+    total_constituents: int = Field(ge=0)
+    pct_with_dimensions: float = Field(ge=0, le=100)
+    pct_with_commentary: float = Field(ge=0, le=100)
+    freshness_days_median: Optional[float] = Field(default=None, ge=0)
+    freshness_days_p90: Optional[float] = Field(default=None, ge=0)
+    latest_run_link: Optional[str] = None
+
+
+class SectorAnalyticsResponse(BaseModel):
+    sector: str
+    industry: str
+    market: Literal["ALL", "US", "HK"]
+    health_score: float = Field(ge=0, le=100)
+    rating_distribution: List[RatingDistributionBucket]
+    factor_medians: List[FactorAggregate]
+    coverage_quality: CoverageQualitySummary
+    avg_confidence: float = Field(ge=0, le=100)
+    rating_score: float = Field(ge=0, le=100)
+    factor_score: float = Field(ge=0, le=100)
+    freshness_score: float = Field(ge=0, le=100)
+    generated_at: str
+
+
 class HistoryBulkDeleteRequest(BaseModel):
     run_ids: List[str] = Field(..., min_length=1, max_length=500)
 
@@ -628,5 +665,9 @@ __all__ = [
     "StockDimensions",
     "HistoryCoverageRow",
     "IndustryConstituentRow",
+    "RatingDistributionBucket",
+    "FactorAggregate",
+    "CoverageQualitySummary",
+    "SectorAnalyticsResponse",
 ]
 

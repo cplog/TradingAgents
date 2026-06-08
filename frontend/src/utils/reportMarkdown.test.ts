@@ -4,6 +4,7 @@ import {
   normalizeReportWhitespace,
   sanitizeReportSectionBody,
   stripLeadingFinalTransactionProposal,
+  buildSanitizedReportMarkdown,
 } from "./reportMarkdown";
 
 describe("reportMarkdown", () => {
@@ -31,5 +32,24 @@ describe("reportMarkdown", () => {
     const raw =
       "**Status:** empty — no report text was captured for the **Kronos** analyst.";
     expect(isSectionPlaceholder("kronos", raw)).toBe(true);
+  });
+
+  it("buildSanitizedReportMarkdown omits stubs and internal fields", () => {
+    const md = buildSanitizedReportMarkdown(
+      {
+        market: "**FINAL TRANSACTION PROPOSAL: HOLD**\n\n## Signal\n\nTrend up.",
+        kronos: "**Status:** empty — no report text was captured for the **Kronos** analyst.",
+        fundamentals: "Revenue +20%.\n\n_Internal report field:_ `foo`",
+      },
+      { ticker: "SOFI", date: "2026-06-07", rating: "Overweight" },
+    );
+    expect(md).toContain("# SOFI agent report");
+    expect(md).toContain("**Rating:** Overweight");
+    expect(md).toContain("## Signal");
+    expect(md).toContain("Trend up.");
+    expect(md).toContain("## Fundamentals");
+    expect(md).not.toContain("FINAL TRANSACTION PROPOSAL");
+    expect(md).not.toContain("_Internal report field");
+    expect(md).not.toContain("Kronos");
   });
 });

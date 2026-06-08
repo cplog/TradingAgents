@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { motion } from "motion/react";
 import { Link } from "react-router-dom";
 import { PageFrame, PageHeader, Panel } from "../components/PageFrame";
 import { TopicCard } from "../components/topics/TopicCard";
@@ -8,6 +9,11 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import type { TopicCadence } from "../api";
 import { topicPath } from "../navigation/routes";
 import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
+
+const staggerContainer = {
+  initial: {},
+  animate: { transition: { staggerChildren: 0.06, delayChildren: 0.04 } },
+};
 
 export function TopicsPage() {
   const { pinned, trending, loading, refreshing, error, searching, search, togglePin } = useTopics();
@@ -25,7 +31,7 @@ export function TopicsPage() {
   }
 
   return (
-    <PageFrame>
+    <PageFrame className="content-entrance">
       <PageHeader
         title="Hot Ideas (Topics)"
         description="Discover investment themes via web research. Extract tickers and send them to Batch analysis."
@@ -59,11 +65,16 @@ export function TopicsPage() {
       {!initialLoad && pinned.length > 0 ? (
         <section className="topics-section">
           <h2 className="topics-section__title">Pinned</h2>
-          <div className="topics-grid">
+          <motion.div
+            initial="initial"
+            animate="animate"
+            variants={staggerContainer}
+            className="topics-grid"
+          >
             {pinned.map((t) => (
               <TopicCard key={t.id} topic={t} onPinToggle={togglePin} />
             ))}
-          </div>
+          </motion.div>
         </section>
       ) : null}
 
@@ -72,11 +83,16 @@ export function TopicsPage() {
         {trending.length === 0 && !initialLoad ? (
           <p className="topics-empty">No topics yet. Search above or wait for seed themes to load.</p>
         ) : (
-          <div className="topics-grid">
+          <motion.div
+            initial="initial"
+            animate="animate"
+            variants={staggerContainer}
+            className="topics-grid"
+          >
             {trending.map((t) => (
               <TopicCard key={t.id} topic={t} onPinToggle={togglePin} />
             ))}
-          </div>
+          </motion.div>
         )}
       </section>
 

@@ -1,5 +1,6 @@
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Pressable } from "../components/Pressable";
 import { PageFrame, PageHeader } from "../components/PageFrame";
@@ -252,7 +253,7 @@ export function BatchPage() {
   useDocumentTitle(batchId ? `Batch ${batchId.slice(0, 8)}` : "Batch");
 
   return (
-    <PageFrame wide>
+    <PageFrame className="content-entrance" wide>
       <PageHeader
         title="Batch analysis"
         description="Full multi-agent LLM run per ticker. Parallelism follows server max_concurrency."
@@ -342,16 +343,26 @@ export function BatchPage() {
       )}
       {err && <p className="notice notice--error">{err}</p>}
 
-      {batch && (
-        <>
+      <AnimatePresence>
+        {batch && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0, transition: { duration: 0.25, ease: [0.25, 1, 0.5, 1] } }}
+            exit={{ opacity: 0, y: -4, transition: { duration: 0.15, ease: [0.25, 1, 0.5, 1] } }}
+          >
           <section className="stack-sm">
             <h2 style={{ margin: 0, fontSize: "var(--text-heading-sm)" }}>Summary</h2>
             <div className="batch-chips">
-              {Object.entries(batch.summary).map(([k, v]) => (
-                <span key={k} className="mono batch-chip">
+              {Object.entries(batch.summary).map(([k, v], i) => (
+                <motion.span
+                  key={k}
+                  className="mono batch-chip"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.25, 1, 0.5, 1], delay: i * 0.04 } }}
+                >
                   <span className="batch-chip__key">{k}</span>
                   {v}
-                </span>
+                </motion.span>
               ))}
             </div>
           </section>
@@ -437,8 +448,9 @@ export function BatchPage() {
               </tbody>
             </table>
           </div>
-        </>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </PageFrame>
   );
 }

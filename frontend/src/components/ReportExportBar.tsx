@@ -5,8 +5,8 @@
 type ReportExportBarProps = {
   onExportHtml: () => void;
   onExportPng: () => void;
+  onExportMarkdown: () => void;
   onPrint: () => void;
-  markdownHref: string | null;
   disabled?: boolean;
   disabledHint?: string;
   /** Pins the bar under the app header while scrolling long reports. */
@@ -17,8 +17,8 @@ type ReportExportBarProps = {
 export function ReportExportBar({
   onExportHtml,
   onExportPng,
+  onExportMarkdown,
   onPrint,
-  markdownHref,
   disabled = false,
   disabledHint,
   sticky = false,
@@ -39,7 +39,7 @@ export function ReportExportBar({
         <span className="report-export-bar__hint">
           {disabled && disabledHint
             ? disabledHint
-            : "HTML archive · PNG image · browser PDF · raw markdown"}
+            : "HTML archive · summary PNG · browser PDF · sanitized markdown"}
         </span>
       </div>
       <div className="report-export-bar__actions">
@@ -57,9 +57,9 @@ export function ReportExportBar({
           className="ui-btn-secondary"
           onClick={onExportPng}
           disabled={disabled}
-          title="Download a high-DPI PNG image of the decision card for sharing."
+          title="Download a high-DPI PNG of the decision summary card (not the full report)."
         >
-          PNG
+          PNG (summary)
         </button>
         <button
           type="button"
@@ -70,20 +70,15 @@ export function ReportExportBar({
         >
           Print / PDF
         </button>
-        {markdownHref ? (
-          <a
-            href={markdownHref}
-            className="ui-btn-secondary report-export-bar__link"
-            title="Raw markdown source from the API."
-            download
-          >
-            Markdown
-          </a>
-        ) : (
-          <button type="button" className="ui-btn-secondary" disabled title="No job id for markdown export.">
-            Markdown
-          </button>
-        )}
+        <button
+          type="button"
+          className="ui-btn-secondary"
+          onClick={onExportMarkdown}
+          disabled={disabled}
+          title="Download markdown matching the on-screen report (sanitized, section-ordered)."
+        >
+          Markdown
+        </button>
       </div>
     </div>
   );

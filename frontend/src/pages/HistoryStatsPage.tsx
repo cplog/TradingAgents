@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { motion } from "motion/react";
 import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
 import { paths } from "../navigation/routes";
 import { PageFrame, PageHeader } from "../components/PageFrame";
@@ -10,6 +11,18 @@ function normalizeRating(r: string | null | undefined): string {
   if (!r || typeof r !== "string") return "Unknown";
   return r.trim();
 }
+
+const EASE_OUT_QUART = [0.25, 1, 0.5, 1] as const;
+
+const staggerContainer = {
+  initial: {},
+  animate: { transition: { staggerChildren: 0.08, delayChildren: 0.05 } },
+};
+
+const fadeSlideUp = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.22, ease: EASE_OUT_QUART } },
+};
 
 export function HistoryStatsPage() {
   const [runs, setRuns] = useState<HistoryRunRef[]>([]);
@@ -58,7 +71,7 @@ export function HistoryStatsPage() {
   const ratingRows = Object.entries(stats.byRating).sort((a, b) => b[1] - a[1]);
 
   return (
-    <PageFrame>
+    <PageFrame className="content-entrance">
       <PageHeader
         title="Run statistics"
         meta={
@@ -87,7 +100,10 @@ export function HistoryStatsPage() {
 
       {!loading && !error ? (
         <>
-          <div
+          <motion.div
+            initial="initial"
+            animate="animate"
+            variants={staggerContainer}
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
@@ -95,17 +111,17 @@ export function HistoryStatsPage() {
               marginBottom: "var(--spacing-24)",
             }}
           >
-            <div className="stat-card">
+            <motion.div variants={fadeSlideUp} className="stat-card">
               <div className="stat-card__label">Runs in sample</div>
               <div className="stat-card__value">{stats.total}</div>
-            </div>
-            <div className="stat-card">
+            </motion.div>
+            <motion.div variants={fadeSlideUp} className="stat-card">
               <div className="stat-card__label">Avg confidence</div>
               <div className="stat-card__value">
                 {stats.avgConf != null ? `${Math.round(stats.avgConf * 100)}%` : "—"}
               </div>
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
 
           <h2 style={{ fontSize: "var(--text-title)", fontWeight: 600 }} className="section-gap-sm">
             Rating distribution

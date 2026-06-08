@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { useNavigate } from "react-router-dom";
 import { runsPath } from "../navigation/routes";
 import { fetchConfig, cancelAllActiveJobs, type JobStatus } from "../api";
@@ -63,7 +64,7 @@ function JobChip({ job, index, nowMs, onOpen }: JobChipProps) {
   const showStep = step && step.toLowerCase() !== statusText.toLowerCase();
 
   return (
-    <button
+    <motion.button
       key={job.job_id}
       type="button"
       role="listitem"
@@ -71,6 +72,8 @@ function JobChip({ job, index, nowMs, onOpen }: JobChipProps) {
       data-status={tone}
       style={{ "--chip-index": index } as React.CSSProperties}
       onClick={() => onOpen(job.job_id)}
+      whileTap={{ scale: 0.97 }}
+      transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
       title={
         `${ticker} · ${statusText}${showStep && step ? ` · ${step}` : ""}` +
         (elapsed ? ` · ${elapsed}` : "") +
@@ -82,7 +85,7 @@ function JobChip({ job, index, nowMs, onOpen }: JobChipProps) {
       <span className="analysis-status-bar__item-status">{statusText}</span>
       {showStep ? <span className="analysis-status-bar__item-step">{step}</span> : null}
       {elapsed ? <span className="analysis-status-bar__item-elapsed">{elapsed}</span> : null}
-    </button>
+    </motion.button>
   );
 }
 
@@ -284,30 +287,43 @@ export function JobsRibbon() {
         </div>
       )}
 
-      {toasts.length > 0 && (
-        <div className="analysis-status-bar__toasts" aria-live="polite">
-          {toasts.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={`analysis-status-bar__toast analysis-status-bar__toast--${t.outcome}`}
-              onClick={() =>
-                navigate(
-                  t.outcome === "completed"
-                    ? `${runsPath(t.jobId)}?tab=reports`
-                    : runsPath(t.jobId),
-                )
-              }
-            >
-              <strong>{t.ticker}</strong>{" "}
-              {t.outcome === "completed" ? "done" : t.outcome === "failed" ? "failed" : "stopped"}
-              <span className="analysis-status-bar__toast-action">
-                {t.outcome === "completed" ? "View →" : "Open →"}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
+      <AnimatePresence>
+        {toasts.length > 0 && (
+          <motion.div
+            className="analysis-status-bar__toasts"
+            aria-live="polite"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15, ease: [0.25, 1, 0.5, 1] }}
+          >
+            {toasts.map((t) => (
+              <motion.button
+                key={t.id}
+                type="button"
+                className={`analysis-status-bar__toast analysis-status-bar__toast--${t.outcome}`}
+                initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+                onClick={() =>
+                  navigate(
+                    t.outcome === "completed"
+                      ? `${runsPath(t.jobId)}?tab=reports`
+                      : runsPath(t.jobId),
+                  )
+                }
+              >
+                <strong>{t.ticker}</strong>{" "}
+                {t.outcome === "completed" ? "done" : t.outcome === "failed" ? "failed" : "stopped"}
+                <span className="analysis-status-bar__toast-action">
+                  {t.outcome === "completed" ? "View →" : "Open →"}
+                </span>
+              </motion.button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {error && active.length === 0 && (
         <div className="analysis-status-bar__error" role="alert">

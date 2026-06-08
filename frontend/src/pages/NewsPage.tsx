@@ -82,7 +82,7 @@ export function NewsPage() {
   }, [items]);
 
   return (
-    <PageFrame>
+    <PageFrame className="content-entrance">
       <PageHeader
         title="News and sentiment"
         description="Merged streams from Yahoo, Finnhub, Google RSS, AKShare, Alpha Vantage, Reddit, and StockTwits."

@@ -4,7 +4,7 @@ import type { DimensionsCommentary, StockDimensions } from "../dimensions-types"
 import { deriveDecisionSummary } from "../utils/decisionSummary";
 import { deriveTradingPlan, tradingPlanRows } from "../utils/tradingPlan";
 import type { JobLiveContext } from "../utils/livePlanContext";
-import { orderedReportSectionKeys } from "../utils/reportMarkdown";
+import { orderedReportSectionKeys, buildSanitizedReportMarkdown } from "../utils/reportMarkdown";
 import { reportSectionsFromKeys } from "../utils/reportExportBlocks";
 import {
   buildStandaloneReportHtml,
@@ -18,7 +18,6 @@ export type UseReportExportOptions = {
   /** Visual evidence cards (OHLCV / Kronos) rendered above agent reports. */
   supplementaryRef?: RefObject<HTMLElement | null>;
   pngTargetRef?: RefObject<HTMLElement | null>;
-  jobId?: string | null;
   ticker: string;
   rating?: string | null;
   date?: string | null;
@@ -36,7 +35,6 @@ export function useReportExport({
   reportBodyRef,
   supplementaryRef,
   pngTargetRef,
-  jobId,
   ticker,
   rating,
   date,
@@ -77,7 +75,35 @@ export function useReportExport({
     };
   }, [result]);
 
-  const markdownHref = jobId?.trim() ? `/jobs/${encodeURIComponent(jobId.trim())}/report` : null;
+  const exportBasename = useCallback(() => {
+    const tickerSlug =
+      ticker
+        .toString()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "report";
+    const dateSlug = (date ?? new Date().toISOString().slice(0, 10)).replace(/[^0-9-]/g, "");
+    return `agent-report-${tickerSlug}-${dateSlug}`;
+  }, [ticker, date]);
+
+  const handleExportMarkdown = useCallback(() => {
+    if (!reports || !canExportHtml) return;
+    const md = buildSanitizedReportMarkdown(reports, {
+      ticker,
+      date: date ?? null,
+      rating: rating ?? null,
+    });
+    if (!md.trim()) return;
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${exportBasename()}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [reports, canExportHtml, ticker, date, rating, exportBasename]);
 
   const buildExportHtml = useCallback((): string | null => {
     const body = reportBodyRef.current;
@@ -124,17 +150,6 @@ export function useReportExport({
     confidenceDetail,
   ]);
 
-  const exportBasename = useCallback(() => {
-    const tickerSlug =
-      ticker
-        .toString()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "report";
-    const dateSlug = (date ?? new Date().toISOString().slice(0, 10)).replace(/[^0-9-]/g, "");
-    return `agent-report-${tickerSlug}-${dateSlug}`;
-  }, [ticker, date]);
-
   const handleExportHtml = useCallback(() => {
     const html = buildExportHtml();
     if (!html) return;
@@ -148,7 +163,7 @@ export function useReportExport({
     const dataUrl = await toPng(node, {
       pixelRatio: 2,
       cacheBust: true,
-      backgroundColor: "#ffffff",
+      backgroundColor: "#fffbf3",
     });
     const tickerSlug =
       ticker
@@ -168,9 +183,9 @@ export function useReportExport({
 
   return {
     decisionSummary,
-    markdownHref,
     handleExportHtml,
     handleExportPng,
+    handleExportMarkdown,
     handlePrint,
     exportDisabled: !canExportHtml,
   };

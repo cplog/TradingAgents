@@ -18,7 +18,6 @@ export const paths = {
   history: "/history",
   historyStats: "/history/stats",
   batch: "/batch",
-  screener: "/screener",
   sectors: "/sectors",
   news: "/news",
   topics: "/topics",

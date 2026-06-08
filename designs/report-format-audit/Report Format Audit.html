@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TradingAgents — Report &amp; HTML Format Audit</title>
+<style>
+  :root {
+    --bg: #f7f3ed;
+    --paper: #fffdf9;
+    --ink: #2a2018;
+    --muted: #6b5f54;
+    --rule: #ddd4c8;
+    --accent: #e88c4d;
+    --accent-dim: rgba(232, 140, 77, 0.15);
+    --sage: #5a7a5e;
+    --warn: #b7833b;
+    --fail: #c47b5e;
+    --blue: #4a6fa5;
+    --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --sans: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --max: 920px;
+    --pad: clamp(20px, 4vw, 40px);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--ui);
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--ink);
+    background: var(--bg);
+    background-image: radial-gradient(rgba(42, 32, 24, 0.06) 0.55px, transparent 0.55px);
+    background-size: 18px 18px;
+  }
+  .page {
+    max-width: var(--max);
+    margin: 0 auto;
+    padding: 32px var(--pad) 80px;
+  }
+  header.hero {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 16px;
+    padding: 28px 32px;
+    margin-bottom: 28px;
+    box-shadow: 0 1px 0 rgba(42, 32, 24, 0.04);
+  }
+  header.hero h1 {
+    font-family: var(--sans);
+    font-size: clamp(1.6rem, 4vw, 2.1rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+    line-height: 1.15;
+  }
+  header.hero .lede {
+    margin: 0;
+    color: var(--muted);
+    font-size: 16px;
+    max-width: 62ch;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 18px;
+  }
+  .pill {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    color: var(--muted);
+  }
+  .pill--accent { border-color: var(--accent); color: #9a4f1a; background: var(--accent-dim); }
+  nav.toc {
+    position: sticky;
+    top: 12px;
+    z-index: 2;
+    background: rgba(255, 253, 249, 0.92);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 24px;
+  }
+  nav.toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  nav.toc a {
+    text-decoration: none;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    background: var(--paper);
+  }
+  nav.toc a:hover { color: var(--ink); border-color: var(--accent); }
+  section.card {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    padding: 24px 28px;
+    margin-bottom: 20px;
+  }
+  section.card h2 {
+    font-family: var(--sans);
+    font-size: 1.25rem;
+    margin: 0 0 14px;
+    letter-spacing: -0.01em;
+  }
+  section.card h3 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    margin: 22px 0 10px;
+    font-weight: 700;
+  }
+  p { margin: 0 0 12px; max-width: 72ch; }
+  ul, ol { margin: 0 0 14px; padding-left: 1.25em; max-width: 72ch; }
+  li + li { margin-top: 6px; }
+  .flow {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    background: #f0ebe3;
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    white-space: pre;
+    margin: 0 0 16px;
+  }
+  table.data {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 12px 0 4px;
+  }
+  table.data th, table.data td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  table.data th {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 700;
+  }
+  table.data tr:last-child td { border-bottom: 0; }
+  code, .path {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: #f0ebe3;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .severity {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 3px 7px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .p0 { background: #fde8e4; color: #8b3a2a; }
+  .p1 { background: #fef3e0; color: #8a5a12; }
+  .p2 { background: #eef4ea; color: var(--sage); }
+  .p3 { background: #eef2f8; color: var(--blue); }
+  .compare {
+    display: grid;
+    gap: 14px;
+    margin-top: 12px;
+  }
+  @media (min-width: 720px) {
+    .compare { grid-template-columns: 1fr 1fr; }
+  }
+  .compare-col {
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 14px 16px;
+    background: #faf7f2;
+  }
+  .compare-col h4 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+  }
+  .swatch-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+  .swatch {
+    width: 48px; height: 32px;
+    border-radius: 6px;
+    border: 1px solid rgba(0,0,0,0.08);
+    font-size: 9px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 3px;
+    color: rgba(0,0,0,0.5);
+  }
+  .mock-in-app {
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    padding: 16px;
+    background: linear-gradient(135deg, rgba(244,184,136,0.12), rgba(123,164,127,0.06)), #fffdf9;
+  }
+  .mock-export {
+    border: 1px solid #d8dee6;
+    border-radius: 12px;
+    padding: 16px;
+    background: #f4f6f8;
+    font-family: -apple-system, sans-serif;
+  }
+  .mock-rating {
+    display: inline-block;
+    font-size: 1.5rem;
+    font-weight: 700;
+    padding: 6px 12px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+  .mock-in-app .mock-rating {
+    color: var(--sage);
+    border: 1px solid rgba(123,164,127,0.45);
+    background: rgba(123,164,127,0.08);
+  }
+  .mock-export .mock-rating {
+    color: #15803d;
+    border: 1px solid #86efac;
+    background: #f0fdf4;
+  }
+  footer {
+    margin-top: 32px;
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="page" data-screen-label="01 Audit overview">
+
+<header class="hero">
+  <h1>Report &amp; HTML format audit</h1>
+  <p class="lede">How TradingAgents turns LangGraph agent output into in-app reports, standalone HTML exports, and raw markdown — and where the formats diverge.</p>
+  <div class="meta-row">
+    <span class="pill pill--accent">Investigation</span>
+    <span class="pill">2026-06-08</span>
+    <span class="pill">Run detail · Export · Markdown</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <ul>
+    <li><a href="#pipeline">Pipeline</a></li>
+    <li><a href="#sections">Sections</a></li>
+    <li><a href="#surfaces">Surfaces</a></li>
+    <li><a href="#markdown">Markdown hygiene</a></li>
+    <li><a href="#visual">Visual drift</a></li>
+    <li><a href="#issues">Issues</a></li>
+    <li><a href="#recs">Recommendations</a></li>
+  </ul>
+</nav>
+
+<section class="card" id="pipeline" data-screen-label="02 Pipeline">
+  <h2>1. End-to-end pipeline</h2>
+  <p>Reports are <strong>markdown strings</strong> produced by LLM agents, stored in LangGraph state, serialized through the API, rendered in React, and optionally exported as self-contained HTML.</p>
+
+  <div class="flow">LangGraph agents (analysts → researchers → trader → PM)
+  │  structured output → render_*() → markdown per section
+  ▼
+api/reports.py  build_reports_dict() + analyst_coverage diagnostics
+  │  JobResultPayload.reports: Record&lt;sectionKey, markdown&gt;
+  ▼
+Frontend ingestion
+  ├─ reportMarkdown.ts   sanitize, order, dedupe
+  ├─ ReportSections.tsx  ReactMarkdown + remarkGfm
+  ├─ DecisionBrief.tsx   derived summary (not raw PM paste)
+  └─ useReportExport.ts  DOM scrape → buildStandaloneReportHtml()
+       │
+       ├─ reportExportBlocks.ts  pure HTML fragments (brief, dims, provenance)
+       └─ reportExport.ts        EMBEDDED_CSS (~700 lines) + print rules</div>
+
+  <h3>Key files</h3>
+  <table class="data">
+    <thead><tr><th>Layer</th><th>File</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td>Source</td><td><span class="path">tradingagents/agents/schemas.py</span></td><td>Pydantic → markdown renderers for PM, trader, research plan</td></tr>
+      <tr><td>API</td><td><span class="path">api/reports.py</span></td><td>Section key mapping, coverage status, disk layout</td></tr>
+      <tr><td>Sanitize</td><td><span class="path">frontend/src/utils/reportMarkdown.ts</span></td><td>Order, strip stubs, dedupe news blocks</td></tr>
+      <tr><td>Render</td><td><span class="path">frontend/src/components/ReportSections.tsx</span></td><td>Sectioned GFM with <code>.report-section</code> DOM ids</td></tr>
+      <tr><td>Summary</td><td><span class="path">frontend/src/utils/decisionSummary.ts</span></td><td>Action, why-now, invalidation from PM/trader text</td></tr>
+      <tr><td>Export</td><td><span class="path">frontend/src/utils/reportExport.ts</span></td><td>Standalone HTML + print/PDF path</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card" id="sections" data-screen-label="03 Section inventory">
+  <h2>2. Report section inventory</h2>
+  <p>Eleven canonical sections, fixed order. Unknown keys append alphabetically.</p>
+  <table class="data">
+    <thead><tr><th>Key</th><th>UI label</th><th>Agent source</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>market</code></td><td>Market</td><td>market_analyst</td><td>Tables, indicators common</td></tr>
+      <tr><td><code>social</code></td><td>Social / sentiment</td><td>sentiment_analyst</td><td>Feeds FOMO heuristic in DecisionBrief</td></tr>
+      <tr><td><code>news</code></td><td>News / macro</td><td>news_analyst</td><td>Dedupe pass for repeated tables</td></tr>
+      <tr><td><code>fundamentals</code></td><td>Fundamentals</td><td>fundamentals_analyst</td><td></td></tr>
+      <tr><td><code>hot_money</code></td><td>Hot money</td><td>hot_money_analyst</td><td>Optional analyst</td></tr>
+      <tr><td><code>policy</code></td><td>Policy</td><td>policy_analyst</td><td>Optional</td></tr>
+      <tr><td><code>lockup</code></td><td>Lockup</td><td>lockup_analyst</td><td>Optional</td></tr>
+      <tr><td><code>kronos</code></td><td>Kronos forecast</td><td>kronos_analyst + api/kronos</td><td>Placeholder styling when skipped</td></tr>
+      <tr><td><code>research_plan</code></td><td>Research plan</td><td>Research Manager</td><td>Structured → markdown</td></tr>
+      <tr><td><code>trader_plan</code></td><td>Trader proposal</td><td>Trader</td><td>Entry/stop/target parsed for levels</td></tr>
+      <tr><td><code>portfolio_decision</code></td><td>Portfolio decision</td><td>Portfolio Manager</td><td>5-tier rating extracted separately</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card" id="surfaces" data-screen-label="04 Output surfaces">
+  <h2>3. Four output surfaces</h2>
+
+  <table class="data">
+    <thead><tr><th>Surface</th><th>Format</th><th>Audience</th><th>How produced</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>In-app run detail</strong></td>
+        <td>React + warm paper CSS</td>
+        <td>Primary reading UX</td>
+        <td><code>RunDetailPage</code> → DecisionBrief + tabs (Dimensions / Reports) + ReportSections</td>
+      </tr>
+      <tr>
+        <td><strong>Standalone HTML export</strong></td>
+        <td>Single <code>.html</code> file</td>
+        <td>Archive, email, offline share</td>
+        <td>Scrapes rendered report DOM + rebuilds brief/dims from structured data</td>
+      </tr>
+      <tr>
+        <td><strong>Print / PDF</strong></td>
+        <td>Browser print dialog</td>
+        <td>Desk notes, compliance archive</td>
+        <td>Same HTML as export, opened in new tab; <code>@media print</code> in EMBEDDED_CSS</td>
+      </tr>
+      <tr>
+        <td><strong>Raw markdown</strong></td>
+        <td><code>GET /jobs/{id}/report</code></td>
+        <td>Power users, diffing, LLM re-ingest</td>
+        <td>API concatenates section markdown (not identical to in-app sanitize)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Export toolbar</h3>
+  <p><span class="path">ReportExportBar.tsx</span> offers HTML · PNG (decision card only via html-to-image) · Print/PDF · Markdown download. PNG captures <code>pngTargetRef</code> (decision brief area), not full report.</p>
+
+  <h3>Standalone HTML document structure</h3>
+  <ol>
+    <li>Sticky TOC (section jump links)</li>
+    <li>Decision brief (rating, conviction, levels, live vs plan)</li>
+    <li>Meta cards: provenance + analyst coverage grid</li>
+    <li>Dimensions block (factors, pillars, flags)</li>
+    <li>Visual evidence (OHLCV/Kronos SVG innerHTML if present)</li>
+    <li>Why now + Invalidation cards</li>
+    <li>Agent reports stack (scraped ReactMarkdown HTML)</li>
+    <li>Footer timestamp</li>
+  </ol>
+</section>
+
+<section class="card" id="markdown" data-screen-label="05 Markdown hygiene">
+  <h2>4. Markdown processing quirks</h2>
+  <p><span class="path">reportMarkdown.ts</span> runs before every GFM render. Important behaviors:</p>
+  <ul>
+    <li><strong>Unicode space normalization</strong> — NBSP / thin spaces from LLMs collapsed for stable GFM</li>
+    <li><strong>Strip leading FINAL TRANSACTION PROPOSAL</strong> — removed from analyst sections (kept on trader/PM)</li>
+    <li><strong>Internal field stripping</strong> — <code>_Internal report field:</code> lines removed</li>
+    <li><strong>Kronos placeholders</strong> — empty/skipped sections get muted <code>.report-section--placeholder</code></li>
+    <li><strong>News dedupe</strong> — consecutive duplicate blocks ≥180 chars collapsed</li>
+    <li><strong>Section DOM ids</strong> — <code>report-section-{key}</code> for TOC anchors and export nav</li>
+  </ul>
+  <p><span class="severity p2">Gap</span> Raw markdown download bypasses sanitize pipeline — exported API markdown may include stubs and duplicate blocks that the UI hides.</p>
+</section>
+
+<section class="card" id="visual" data-screen-label="06 Visual drift">
+  <h2>5. Visual system drift: in-app vs export</h2>
+  <p>The in-app experience uses the <strong>warm paper craft</strong> theme (<code>index.css</code>: Inter, phosphor accent, speckle texture, sage/warning tokens). Standalone export uses a <strong>separate design system</strong> baked into <code>EMBEDDED_CSS</code> — cool gray-blue, system sans, GitHub-adjacent markdown styling.</p>
+
+  <div class="compare">
+    <div class="compare-col">
+      <h4>In-app (RunDetailPage)</h4>
+      <div class="mock-in-app">
+        <div class="mock-rating">Overweight</div>
+        <div style="font-size:13px;color:var(--muted)">Build on dips · Calibrated conviction 68%</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#fffdf9">paper</div>
+        <div class="swatch" style="background:#e88c4d">phosphor</div>
+        <div class="swatch" style="background:#7ba47f">sage</div>
+        <div class="swatch" style="background:#f7f3ed">fog</div>
+      </div>
+      <ul style="font-size:13px;margin:0;padding-left:1.1em">
+        <li>Shared <code>.decision-brief</code> class names</li>
+        <li>Motion (Framer) on page enter</li>
+        <li>Dimensions radar in hero</li>
+        <li>Sticky export bar under app chrome</li>
+      </ul>
+    </div>
+    <div class="compare-col">
+      <h4>Standalone export</h4>
+      <div class="mock-export">
+        <div class="mock-rating">Overweight</div>
+        <div style="font-size:13px;color:#5c6b7a">Build on dips · Calibrated conviction 68%</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#ffffff">#fff</div>
+        <div class="swatch" style="background:#1f6feb">accent</div>
+        <div class="swatch" style="background:#15803d">ok</div>
+        <div class="swatch" style="background:#f4f6f8">soft</div>
+      </div>
+      <ul style="font-size:13px;margin:0;padding-left:1.1em">
+        <li>Duplicate CSS (~400 lines decision-brief + markdown)</li>
+        <li>No app texture / brand warmth</li>
+        <li>DOM scrape may drop CSS-var inline styles</li>
+        <li>Print rules tuned for letter/A4</li>
+      </ul>
+    </div>
+  </div>
+
+  <p style="margin-top:14px"><span class="severity p1">Risk</span> Class-name parity (<code>.decision-brief__rating--positive</code>) exists in both, but token values differ — users see a brand shift when downloading HTML.</p>
+</section>
+
+<section class="card" id="issues" data-screen-label="07 Issues">
+  <h2>6. Issues (ranked)</h2>
+  <table class="data">
+    <thead><tr><th>Severity</th><th>Issue</th><th>Impact</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="severity p1">P1</span></td>
+        <td><strong>Export theme ≠ app theme</strong></td>
+        <td>HTML/PDF artifacts look like a different product; undermines warm paper migration</td>
+      </tr>
+      <tr>
+        <td><span class="severity p1">P1</span></td>
+        <td><strong>DOM-scrape export architecture</strong></td>
+        <td>Report body depends on React render + browser CSS; inline <code>var(--…)</code> styles stripped; fragile if markdown components change</td>
+      </tr>
+      <tr>
+        <td><span class="severity p1">P1</span></td>
+        <td><strong>Long reports = high cognitive load</strong></td>
+        <td>All analyst sections expanded by default; no evidence cards, collapsed-by-default, or sticky desk playbook (prior UX notes)</td>
+      </tr>
+      <tr>
+        <td><span class="severity p2">P2</span></td>
+        <td><strong>PNG = decision card only</strong></td>
+        <td>Share image omits analyst depth; may confuse users expecting full report thumbnail</td>
+      </tr>
+      <tr>
+        <td><span class="severity p2">P2</span></td>
+        <td><strong>Raw markdown ≠ sanitized UI</strong></td>
+        <td>Downloaded markdown includes LLM artifacts the UI cleans up</td>
+      </tr>
+      <tr>
+        <td><span class="severity p2">P2</span></td>
+        <td><strong>Duplicate logic</strong></td>
+        <td>DecisionBrief (React) vs renderDecisionBriefHtml (export); factor/flag labels duplicated in 3 files</td>
+      </tr>
+      <tr>
+        <td><span class="severity p3">P3</span></td>
+        <td><strong>History compare uses truncated PM</strong></td>
+        <td>Full PM markdown hidden behind checkbox in RunComparisonResults</td>
+      </tr>
+      <tr>
+        <td><span class="severity p3">P3</span></td>
+        <td><strong>template=classic unused</strong></td>
+        <td><code>buildStandaloneReportHtml</code> accepts <code>classic | weekly_report</code> but caller always uses default weekly_report</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card" id="recs" data-screen-label="08 Recommendations">
+  <h2>7. Recommendations</h2>
+
+  <h3>Quick wins</h3>
+  <ol>
+    <li><strong>Align export tokens</strong> — Replace EMBEDDED_CSS palette with warm paper values from <code>:root</code> in index.css (phosphor, sage, stone-border, paper surface).</li>
+    <li><strong>Sanitize markdown download</strong> — Run <code>sanitizeReportSectionBody</code> server-side or in the download handler so raw == UI.</li>
+    <li><strong>Clarify PNG scope</strong> — Rename button to "PNG (summary card)" or expand capture target.</li>
+  </ol>
+
+  <h3>Medium term</h3>
+  <ol>
+    <li><strong>Markdown-first export</strong> — Build HTML from sanitized markdown + structured JSON (not DOM scrape). Keeps export stable when React changes.</li>
+    <li><strong>Shared brief component</strong> — Single source for DecisionBrief markup (React renders export preview; or shared template literals module).</li>
+    <li><strong>Report reading UX</strong> — Sticky desk playbook (rating + levels + invalidation), analyst sections collapsed by default with coverage badges, evidence callout cards for tables/quotes.</li>
+  </ol>
+
+  <h3>Structural</h3>
+  <ol>
+    <li><strong>Report schema version</strong> — Tag exports with schema version when section keys or brief fields change.</li>
+    <li><strong>Design token package</strong> — Extract CSS custom properties to <code>frontend/src/theme/tokens.css</code> imported by app and inlined in export.</li>
+  </ol>
+</section>
+
+<footer>Generated for TradingAgents design review · Source: codebase audit 2026-06-08</footer>
+</div>
+</body>
+</html>

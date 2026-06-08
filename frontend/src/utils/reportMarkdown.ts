@@ -118,3 +118,34 @@ export function prepareReportMarkdown(sectionKey: string, raw: string): string {
 export function reportSectionDomId(sectionKey: string): string {
   return `report-section-${sectionKey}`;
 }
+
+export type SanitizedReportMarkdownMeta = {
+  ticker?: string;
+  date?: string | null;
+  rating?: string | null;
+};
+
+/** Build markdown matching what the UI renders (sanitized, ordered, stubs omitted). */
+export function buildSanitizedReportMarkdown(
+  reports: Record<string, string> | undefined,
+  meta?: SanitizedReportMarkdownMeta,
+): string {
+  const keys = orderedReportSectionKeys(reports);
+  const parts: string[] = [];
+
+  if (meta?.ticker?.trim()) {
+    parts.push(`# ${meta.ticker.trim()} agent report`);
+    if (meta.date?.trim()) parts.push(`As of ${meta.date.trim()}`);
+    if (meta.rating?.trim()) parts.push(`**Rating:** ${meta.rating.trim()}`);
+    parts.push("");
+  }
+
+  for (const key of keys) {
+    const raw = reports?.[key] ?? "";
+    if (isSectionPlaceholder(key, raw)) continue;
+    const section = prepareReportMarkdown(key, raw);
+    if (section) parts.push(section, "");
+  }
+
+  return parts.join("\n").trimEnd() + (parts.length ? "\n" : "");
+}

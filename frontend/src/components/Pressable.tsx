@@ -19,7 +19,8 @@ export const Pressable = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTML
         ref={ref}
         type="button"
         disabled={disabled}
-        whileTap={{ scale: 0.985 }}
+        whileTap={{ scale: 0.97 }}
+        whileHover={{ scale: 1.02 }}
         transition={{ duration: 0.12, ease: EASE }}
         {...rest}
       />

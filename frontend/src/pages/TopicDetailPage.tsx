@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageFrame, PageHeader, Panel } from "../components/PageFrame";
 import { ArticleList } from "../components/topics/ArticleList";
@@ -131,8 +132,14 @@ export function TopicDetailPage() {
               <p className="topics-empty">No candidates extracted yet.</p>
             ) : (
               <div className="topics-candidates-list">
-                {candidates.map((c) => (
-                  <TickerCandidateRow key={c.ticker} candidate={c} onAddWatchlist={addToWatchlist} />
+                {candidates.map((c, i) => (
+                  <motion.div
+                    key={c.ticker}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0, transition: { duration: 0.2, ease: [0.25, 1, 0.5, 1], delay: i * 0.04 } }}
+                  >
+                    <TickerCandidateRow candidate={c} onAddWatchlist={addToWatchlist} />
+                  </motion.div>
                 ))}
               </div>
             )}
@@ -140,52 +147,66 @@ export function TopicDetailPage() {
         </div>
         <aside className="topics-detail-side">
           <Panel title="Settings">
-            {editing ? (
-              <div className="topics-edit-form">
-                <label>
-                  Label
-                  <input className="ui-input" value={editLabel} onChange={(e) => setEditLabel(e.target.value)} />
-                </label>
-                <label>
-                  Query
-                  <input className="ui-input" value={editQuery} onChange={(e) => setEditQuery(e.target.value)} />
-                </label>
-                <label>
-                  Cadence
-                  <CadenceSelect value={editCadence} onChange={setEditCadence} />
-                </label>
-                <div className="ui-form-row">
-                  <button type="button" className="ui-btn ui-btn--primary" onClick={() => void saveEdit()}>
-                    Save
-                  </button>
-                  <button type="button" className="ui-btn ui-btn--ghost" onClick={() => setEditing(false)}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="topics-meta">
-                <p>
-                  <strong>Cadence:</strong> {topic.cadence}
-                </p>
-                <p>
-                  <strong>Source:</strong> {topic.source}
-                </p>
-                {topic.last_run_at ? (
+            <AnimatePresence mode="wait">
+              {editing ? (
+                <motion.div
+                  key="edit"
+                  className="topics-edit-form"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.25, 1, 0.5, 1] } }}
+                  exit={{ opacity: 0, y: -4, transition: { duration: 0.12, ease: [0.25, 1, 0.5, 1] } }}
+                >
+                  <label>
+                    Label
+                    <input className="ui-input" value={editLabel} onChange={(e) => setEditLabel(e.target.value)} />
+                  </label>
+                  <label>
+                    Query
+                    <input className="ui-input" value={editQuery} onChange={(e) => setEditQuery(e.target.value)} />
+                  </label>
+                  <label>
+                    Cadence
+                    <CadenceSelect value={editCadence} onChange={setEditCadence} />
+                  </label>
+                  <div className="ui-form-row">
+                    <button type="button" className="ui-btn ui-btn--primary" onClick={() => void saveEdit()}>
+                      Save
+                    </button>
+                    <button type="button" className="ui-btn ui-btn--ghost" onClick={() => setEditing(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="meta"
+                  className="topics-meta"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.25, 1, 0.5, 1] } }}
+                  exit={{ opacity: 0, y: -4, transition: { duration: 0.12, ease: [0.25, 1, 0.5, 1] } }}
+                >
                   <p>
-                    <strong>Last run:</strong> {new Date(topic.last_run_at).toLocaleString()}
+                    <strong>Cadence:</strong> {topic.cadence}
                   </p>
-                ) : null}
-                <button type="button" className="ui-btn ui-btn--ghost" onClick={startEdit}>
-                  Edit
-                </button>
-                {topic.source === "user" ? (
-                  <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger" onClick={() => void onDelete()}>
-                    Delete
+                  <p>
+                    <strong>Source:</strong> {topic.source}
+                  </p>
+                  {topic.last_run_at ? (
+                    <p>
+                      <strong>Last run:</strong> {new Date(topic.last_run_at).toLocaleString()}
+                    </p>
+                  ) : null}
+                  <button type="button" className="ui-btn ui-btn--ghost" onClick={startEdit}>
+                    Edit
                   </button>
-                ) : null}
-              </div>
-            )}
+                  {topic.source === "user" ? (
+                    <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger" onClick={() => void onDelete()}>
+                      Delete
+                    </button>
+                  ) : null}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </Panel>
           <Panel title="Source articles">
             <ArticleList articles={articles} />

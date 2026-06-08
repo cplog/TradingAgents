@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import type { DecisionSummary } from "../utils/decisionSummary";
 import { RATING_GUIDE, RATING_TIERS_ORDER, normalizeRatingTier } from "../utils/ratingGuide";
 import { ratingTone } from "../utils/historyDisplay";
@@ -243,8 +244,14 @@ export const DecisionBrief = memo(function DecisionBrief({
         </button>
       </div>
 
-      {guideOpen && (
-        <ul className="decision-brief__guide">
+      <AnimatePresence>
+        {guideOpen && (
+          <motion.ul
+            className="decision-brief__guide"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto", transition: { duration: 0.2, ease: [0.25, 1, 0.5, 1] } }}
+            exit={{ opacity: 0, height: 0, transition: { duration: 0.15, ease: [0.25, 1, 0.5, 1] } }}
+          >
           {RATING_TIERS_ORDER.map((t) => (
             <li key={t} className={tier === t ? "decision-brief__guide-item--current" : undefined}>
               <strong>{t}</strong>
@@ -252,8 +259,9 @@ export const DecisionBrief = memo(function DecisionBrief({
               <span className="decision-brief__guide-posture">{RATING_GUIDE[t].posture}</span>
             </li>
           ))}
-        </ul>
-      )}
-    </section>
+          </motion.ul>
+        )}
+      </AnimatePresence>
+      </section>
   );
 });

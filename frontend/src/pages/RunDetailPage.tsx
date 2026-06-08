@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
 import { paths, runsPath, stocksPath } from "../navigation/routes";
@@ -100,12 +101,11 @@ export function RunDetailPage() {
     error: liveContextError,
   } = useLivePlanContext(runId, livePlanEnabled);
 
-  const { handleExportHtml, handleExportPng, handlePrint, markdownHref, exportDisabled, decisionSummary } =
+  const { handleExportHtml, handleExportPng, handleExportMarkdown, handlePrint, exportDisabled, decisionSummary } =
     useReportExport({
       reportBodyRef,
       supplementaryRef,
       pngTargetRef: decisionBriefRef,
-      jobId: runId,
       ticker,
       rating: result?.rating ?? historyDetail?.rating ?? null,
       date: tradeDate,
@@ -227,7 +227,7 @@ export function RunDetailPage() {
   }
 
   return (
-    <PageFrame className="run-detail-page">
+      <PageFrame className="run-detail-page content-entrance">
       <PageHeader
         title={ticker}
         description="Run-level report: one analysis job, full agent output and dimensions."
@@ -268,29 +268,49 @@ export function RunDetailPage() {
         </div>
       ) : null}
 
-      {jobActive && <PipelineNodeProgress job={job} events={events} />}
+      {jobActive && (
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, ease: [0.25, 1, 0.5, 1] }}
+        >
+          <PipelineNodeProgress job={job} events={events} />
+        </motion.div>
+      )}
 
       {jobActive && (
         <Panel className="panel--terminal" title="Progress log">
           <button type="button" className="dashboard-log-toggle" onClick={() => setLogOpen(!logOpen)}>
             {logOpen ? "Collapse" : "Expand"} stream
           </button>
-          {logOpen && (
-            <pre className="mono dashboard-progress-log dashboard-progress-log--open">
-              <div ref={eventsLogRef}>
-                {events.map((e, i) => (
-                  <div key={`${e.ts}-${i}`} className="dashboard-progress-log__entry">
-                    <span style={{ color: "var(--color-ink-faint)" }}>[{e.stage}]</span> {e.message}
-                  </div>
-                ))}
-              </div>
-            </pre>
-          )}
+          <AnimatePresence>
+            {logOpen && (
+              <motion.pre
+                className="mono dashboard-progress-log dashboard-progress-log--open"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto", transition: { duration: 0.2, ease: [0.25, 1, 0.5, 1] } }}
+                exit={{ opacity: 0, height: 0, transition: { duration: 0.15, ease: [0.25, 1, 0.5, 1] } }}
+              >
+                <div ref={eventsLogRef}>
+                  {events.map((e, i) => (
+                    <div key={`${e.ts}-${i}`} className="dashboard-progress-log__entry">
+                      <span style={{ color: "var(--color-ink-faint)" }}>[{e.stage}]</span> {e.message}
+                    </div>
+                  ))}
+                </div>
+              </motion.pre>
+            )}
+          </AnimatePresence>
         </Panel>
       )}
 
       {job?.status === "completed" && (
-        <section className="run-detail-page__results">
+        <motion.section
+          className="run-detail-page__results"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: [0.25, 1, 0.5, 1] }}
+        >
           <header className="run-detail-page__hero">
             <div ref={decisionBriefRef}>
               <DecisionBrief
@@ -328,8 +348,8 @@ export function RunDetailPage() {
               sticky
               onExportHtml={handleExportHtml}
               onExportPng={handleExportPng}
+              onExportMarkdown={handleExportMarkdown}
               onPrint={handlePrint}
-              markdownHref={markdownHref}
               disabled={exportDisabled}
             />
           )}
@@ -363,7 +383,14 @@ export function RunDetailPage() {
             </div>
           )}
 
-          {showDimensionalStudy && (!showAnalysisTabs || analysisTab === "study") && (
+          <AnimatePresence mode="wait">
+            {showDimensionalStudy && (!showAnalysisTabs || analysisTab === "study") && (
+              <motion.div
+                key="study"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.25, 1, 0.5, 1] } }}
+                exit={{ opacity: 0, y: -4, transition: { duration: 0.12, ease: [0.25, 1, 0.5, 1] } }}
+              >
             <Panel className="panel--elevated">
               <DimensionsPanel
                 dimensions={dimensions}
@@ -377,9 +404,16 @@ export function RunDetailPage() {
                 </button>
               )}
             </Panel>
-          )}
+              </motion.div>
+            )}
 
-          {showAgentReports && (!showAnalysisTabs || analysisTab === "reports") && (
+            {showAgentReports && (!showAnalysisTabs || analysisTab === "reports") && (
+              <motion.div
+                key="reports"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.25, 1, 0.5, 1] } }}
+                exit={{ opacity: 0, y: -4, transition: { duration: 0.12, ease: [0.25, 1, 0.5, 1] } }}
+              >
             <Panel className="panel--elevated dashboard-report-panel">
               <div
                 className={
@@ -419,8 +453,10 @@ export function RunDetailPage() {
                 </div>
               </div>
             </Panel>
-          )}
-        </section>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.section>
       )}
 
       {job?.error && (

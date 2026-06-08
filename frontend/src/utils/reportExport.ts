@@ -18,6 +18,7 @@ import {
   renderProvenanceHtml,
   type ConfidenceExportBlock,
 } from "./reportExportBlocks";
+import { EXPORT_TOKENS, exportCssRoot } from "../theme/exportTokens";
 
 export type StandaloneReportInput = {
   ticker: string;
@@ -56,20 +57,7 @@ function normalizeReportBodyHtml(html: string): string {
 }
 
 const EMBEDDED_CSS = `
-  :root {
-    color-scheme: light;
-    --ink: #1a2332;
-    --muted: #5c6b7a;
-    --rule: #d8dee6;
-    --accent: #1f6feb;
-    --surface: #ffffff;
-    --soft: #f4f6f8;
-    --warn: #b45309;
-    --ok: #15803d;
-    --fail: #b91c1c;
-    --page-pad: clamp(16px, 4vw, 40px);
-    --content-max: 1180px;
-  }
+  ${exportCssRoot()}
   *, *::before, *::after { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   html, body {
@@ -78,7 +66,11 @@ const EMBEDDED_CSS = `
     background: var(--soft);
   }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background:
+      radial-gradient(circle at 18% 10%, rgba(244, 184, 136, 0.12), transparent 28rem),
+      radial-gradient(circle at 82% 4%, rgba(123, 164, 127, 0.06), transparent 24rem),
+      var(--soft);
     font-size: 16px;
     color: var(--ink);
     line-height: 1.65;
@@ -132,8 +124,8 @@ const EMBEDDED_CSS = `
   }
   .export-toc__links a:hover {
     color: var(--ink);
-    border-color: #bfd0ea;
-    background: #f8fbff;
+    border-color: ${EXPORT_TOKENS.phosphorBorder};
+    background: ${EXPORT_TOKENS.phosphorGlow};
   }
   .decision-brief,
   section.card,
@@ -174,14 +166,14 @@ const EMBEDDED_CSS = `
     background: var(--soft);
   }
   .decision-brief__rating--positive {
-    color: #15803d;
-    border-color: #86efac;
-    background: #f0fdf4;
+    color: var(--accent);
+    border-color: ${EXPORT_TOKENS.phosphorBorder};
+    background: ${EXPORT_TOKENS.phosphorGlow};
   }
   .decision-brief__rating--negative {
     color: var(--fail);
-    border-color: #fca5a5;
-    background: #fef2f2;
+    border-color: ${EXPORT_TOKENS.dangerBorder};
+    background: ${EXPORT_TOKENS.dangerSurface};
   }
   .decision-brief__rating--neutral { color: var(--ink); }
   .decision-brief__head-copy { display: grid; gap: 4px; min-width: 0; }
@@ -208,8 +200,8 @@ const EMBEDDED_CSS = `
     color: var(--muted);
   }
   .decision-brief__confidence strong { color: var(--ink); }
-  .decision-brief__confidence--strong strong { color: #16a34a; }
-  .decision-brief__confidence--balanced strong { color: #ca8a04; }
+  .decision-brief__confidence--strong strong { color: var(--ok); }
+  .decision-brief__confidence--balanced strong { color: var(--warn); }
   .decision-brief__confidence--weak strong { color: var(--fail); }
   .decision-brief__confidence-raw { opacity: 0.7; }
   .decision-brief__inputs {
@@ -248,9 +240,9 @@ const EMBEDDED_CSS = `
     border: 1px solid var(--rule);
     background: var(--surface);
   }
-  .decision-brief__input-row--good li { border-color: #86efac; color: #166534; }
-  .decision-brief__input-row--warn li { border-color: #fcd34d; color: #92400e; }
-  .decision-brief__input-row--flag li { border-color: #fca5a5; color: #991b1b; }
+  .decision-brief__input-row--good li { border-color: ${EXPORT_TOKENS.sageBorder}; color: var(--ok); }
+  .decision-brief__input-row--warn li { border-color: ${EXPORT_TOKENS.warnBorder}; color: var(--warn); }
+  .decision-brief__input-row--flag li { border-color: ${EXPORT_TOKENS.dangerBorder}; color: var(--fail); }
   .decision-brief__action {
     display: flex;
     flex-wrap: wrap;
@@ -280,8 +272,8 @@ const EMBEDDED_CSS = `
     font-size: 14px;
   }
   .decision-brief__live-note--warn {
-    border-color: #fca5a5;
-    background: #fef2f2;
+    border-color: ${EXPORT_TOKENS.dangerBorder};
+    background: ${EXPORT_TOKENS.dangerSurface};
   }
   .decision-brief__live-note-label {
     display: block;
@@ -351,16 +343,16 @@ const EMBEDDED_CSS = `
     background: var(--soft);
   }
   .live-vs-plan--invalidated {
-    border-color: #fca5a5;
-    background: #fef2f2;
+    border-color: ${EXPORT_TOKENS.dangerBorder};
+    background: ${EXPORT_TOKENS.dangerSurface};
   }
   .live-vs-plan--caution {
-    border-color: #fcd34d;
-    background: #fffbeb;
+    border-color: ${EXPORT_TOKENS.warnBorder};
+    background: ${EXPORT_TOKENS.warnSurface};
   }
   .live-vs-plan--ok {
-    border-color: #86efac;
-    background: #f0fdf4;
+    border-color: ${EXPORT_TOKENS.sageBorder};
+    background: rgba(123, 164, 127, 0.1);
   }
   .live-vs-plan--neutral { border-color: var(--rule); background: var(--soft); }
   .live-vs-plan__badge {
@@ -656,7 +648,7 @@ const EMBEDDED_CSS = `
     letter-spacing: 0.03em;
     color: var(--muted);
   }
-  .report-body tr:nth-child(even) td { background: #fafbfc; }
+  .report-body tr:nth-child(even) td { background: ${EXPORT_TOKENS.tableStripe}; }
   .report-body code {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     background: var(--soft);

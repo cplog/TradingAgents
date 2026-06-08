@@ -24,27 +24,9 @@ describe("HistoryPage", () => {
     vi.spyOn(api, "fetchJobs").mockResolvedValue([]);
   });
 
-  // Default view is table; helpers to flip view modes in tests.
+  // Default view is table.
   async function switchToTable(el: HTMLElement) {
-    const tableBtn = [...el.querySelectorAll("button")].find(
-      (b) => b.textContent === "table",
-    );
-    if (!tableBtn) return;
-    await act(async () => {
-      (tableBtn as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
-  }
-
-  async function switchToCards(el: HTMLElement) {
-    const cardsBtn = [...el.querySelectorAll("button")].find(
-      (b) => b.textContent === "cards",
-    );
-    if (!cardsBtn) return;
-    await act(async () => {
-      (cardsBtn as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
+    // no-op: table is the only view mode
   }
 
   it("lists runs and renders compare section", async () => {
@@ -159,7 +141,7 @@ describe("HistoryPage", () => {
     });
 
     expect(api.postHistoryCompare).toHaveBeenCalledWith("r1", "r2");
-    expect(el.innerHTML).toContain("Side-by-side · A left · B right");
+    expect(el.innerHTML).toContain("AAPL vs MSFT");
   });
 
   it("deletes a run from the table", async () => {
@@ -204,7 +186,7 @@ describe("HistoryPage", () => {
     });
 
     expect(api.deleteHistoryRun).toHaveBeenCalledWith("r1");
-    expect(el.innerHTML).not.toContain("r1");
+    expect(el.querySelector('a[href="/runs/r1"]')).toBeFalsy();
   });
 
   it("bulk deletes selected runs", async () => {
@@ -251,8 +233,8 @@ describe("HistoryPage", () => {
     });
 
     expect(api.bulkDeleteHistoryRuns).toHaveBeenCalledWith(["r1", "r2"]);
-    expect(el.innerHTML).not.toContain("r1");
-    expect(el.innerHTML).not.toContain("r2");
+    expect(el.querySelector('a[href="/runs/r1"]')).toBeFalsy();
+    expect(el.querySelector('a[href="/runs/r2"]')).toBeFalsy();
   });
 
   it("links table rows to the run page", async () => {
@@ -283,173 +265,6 @@ describe("HistoryPage", () => {
     expect(openLink?.textContent).toMatch(/Open/);
     const stockLink = el.querySelector('a[href="/stocks/AAPL"]');
     expect(stockLink).toBeTruthy();
-  });
-
-  it("renders ticker cards by default and submits a 1-click re-run", async () => {
-    vi.spyOn(api, "fetchHistoryRuns").mockResolvedValue([
-      {
-        run_id: "r1",
-        ticker: "AAPL",
-        date: "2026-05-01",
-        rating: "Buy",
-        completed_at: "2026-05-01T00:00:00Z",
-      },
-      {
-        run_id: "r2",
-        ticker: "MSFT",
-        date: "2026-05-02",
-        rating: "Hold",
-        completed_at: "2026-05-02T00:00:00Z",
-      },
-    ]);
-    vi.spyOn(api, "fetchHistoryRun").mockResolvedValue({
-      run_id: "r1",
-      job_id: "r1",
-      ticker: "AAPL",
-      date: "2026-05-01",
-      rating: "Buy",
-      reports: { market: "m" },
-      config_snapshot: { llm_provider: "openrouter", analysts: ["market"] },
-    });
-    const submit = vi.spyOn(api, "submitAnalyze").mockResolvedValue({
-      job_id: "new42",
-      status: "queued",
-      created_at: "2026-05-20T00:00:00Z",
-    });
-
-    const el = document.createElement("div");
-    document.body.appendChild(el);
-    await act(async () => {
-      renderHistoryPage(el);
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    await switchToCards(el);
-
-    // Two ticker cards rendered
-    const cards = el.querySelectorAll("[data-ticker]");
-    expect(cards.length).toBe(2);
-    const tickers = [...cards].map((c) => c.getAttribute("data-ticker")).sort();
-    expect(tickers).toEqual(["AAPL", "MSFT"]);
-
-    // Click ▶ Re-run on the AAPL card
-    const aaplCard = [...cards].find((c) => c.getAttribute("data-ticker") === "AAPL")!;
-    const rerunBtn = [...aaplCard.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Re-run"),
-    ) as HTMLButtonElement;
-    expect(rerunBtn).toBeTruthy();
-
-    await act(async () => {
-      rerunBtn.click();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const copyBtn = el.querySelector(".rerun-setup-dialog__link") as HTMLButtonElement | null;
-    expect(copyBtn).toBeTruthy();
-    await act(async () => {
-      copyBtn!.click();
-      await Promise.resolve();
-    });
-
-    const startBtn = el.querySelector(
-      ".rerun-setup-dialog .ui-btn--primary",
-    ) as HTMLButtonElement;
-    expect(startBtn).toBeTruthy();
-    await act(async () => {
-      startBtn.click();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(api.fetchHistoryRun).toHaveBeenCalledWith("r1");
-    expect(submit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ticker: "AAPL",
-        analysts: ["market"],
-        config_overrides: expect.objectContaining({ llm_provider: "openrouter" }),
-      }),
-    );
-  });
-
-  it("submits a bulk batch re-run for selected ticker cards", async () => {
-    vi.spyOn(api, "fetchHistoryRuns").mockResolvedValue([
-      {
-        run_id: "r1",
-        ticker: "AAPL",
-        date: "2026-05-01",
-        rating: "Buy",
-        completed_at: "2026-05-01T00:00:00Z",
-      },
-      {
-        run_id: "r2",
-        ticker: "MSFT",
-        date: "2026-05-02",
-        rating: "Hold",
-        completed_at: "2026-05-02T00:00:00Z",
-      },
-    ]);
-    const submitB = vi.spyOn(api, "submitBatch").mockResolvedValue({
-      batch_id: "batch-77",
-      job_ids: ["j1", "j2"],
-      created_at: "2026-05-20T00:00:00Z",
-    });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    const el = document.createElement("div");
-    document.body.appendChild(el);
-    await act(async () => {
-      renderHistoryPage(el);
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    await switchToCards(el);
-
-    // Tick both ticker checkboxes.
-    const checkboxes = [...el.querySelectorAll("[data-ticker] input[type=checkbox]")];
-    expect(checkboxes.length).toBe(2);
-    for (const cb of checkboxes) {
-      await act(async () => {
-        (cb as HTMLInputElement).click();
-      });
-    }
-
-    const bulkBtn = [...el.querySelectorAll("button")].find((b) =>
-      b.textContent?.startsWith("Re-run tickers ("),
-    ) as HTMLButtonElement;
-    expect(bulkBtn).toBeTruthy();
-
-    await act(async () => {
-      bulkBtn.click();
-      await Promise.resolve();
-    });
-
-    const startBatch = el.querySelector(
-      ".rerun-setup-dialog .ui-btn--primary",
-    ) as HTMLButtonElement;
-    expect(startBatch).toBeTruthy();
-    await act(async () => {
-      startBatch.click();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(submitB).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tickers: expect.arrayContaining(["AAPL", "MSFT"]),
-        config_overrides: expect.objectContaining({ llm_provider: expect.any(String) }),
-      }),
-    );
   });
 
 });
