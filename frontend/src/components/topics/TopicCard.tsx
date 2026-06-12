@@ -43,16 +43,32 @@ export function TopicCard({ topic, onPinToggle }: Props) {
           <span>Not run yet</span>
         )}
         <span>{topic.candidate_count} tickers</span>
+        {topic.regime_adjusted && topic.topic_regime_adjusted_score != null ? (
+          <span title="Regime-adjusted score" style={{ color: "var(--color-warning)" }}>
+            ★ {topic.topic_regime_adjusted_score.toFixed(2)}
+          </span>
+        ) : null}
       </div>
       {topic.top_candidates.length > 0 ? (
         <ul className="topics-card__candidates">
-          {topic.top_candidates.slice(0, 3).map((c) => (
-            <li key={c.ticker}>
-              <span className="mono">{c.ticker}</span>
-              <MarketBadge market={c.market} />
-              <span>{Math.round(c.confidence * 100)}%</span>
-            </li>
-          ))}
+          {topic.top_candidates.slice(0, 3).map((c) => {
+            const pos = c.change_pct != null && c.change_pct >= 0;
+            return (
+              <li key={c.ticker}>
+                <span className="mono">{c.ticker}</span>
+                <MarketBadge market={c.market} />
+                {c.price != null ? (
+                  <span className="topics-card__price">${c.price.toFixed(2)}</span>
+                ) : null}
+                {c.change_pct != null ? (
+                  <span className="topics-card__change" data-up={pos}>
+                    {pos ? "+" : ""}{c.change_pct.toFixed(1)}%
+                  </span>
+                ) : null}
+                <span className="topics-card__conf">{Math.round(c.confidence * 100)}%</span>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </motion.article>

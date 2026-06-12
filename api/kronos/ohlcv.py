@@ -29,7 +29,7 @@ def fetch_ohlcv(
         not expose turnover-in-currency.
     """
     end = pd.to_datetime(trade_date) + pd.Timedelta(days=1)
-    buffer_days = int(lookback * 1.6) + 30
+    buffer_days = int(lookback * 2.0) + 45
     start = end - pd.Timedelta(days=buffer_days)
 
     raw = yf.Ticker(ticker).history(
@@ -46,7 +46,20 @@ def fetch_ohlcv(
             f"need >= {lookback}"
         )
 
-    tail = raw.tail(lookback).copy()
+    # Drop any rows with NaN in core price/volume columns before taking the
+    # tail — yfinance sometimes returns an incomplete bar for the most recent
+    # trading day, especially with auto_adjust=False.
+    core_cols = ["Open", "High", "Low", "Close", "Volume"]
+    clean = raw.dropna(subset=core_cols)
+
+    if len(clean) < lookback:
+        raise InsufficientData(
+            f"yfinance returned {len(clean)} valid daily bars for {ticker} "
+            f"after dropping NaN rows (raw had {len(raw)}), need >= {lookback}"
+        )
+
+    tail = clean.tail(lookback).copy()
+
     out = pd.DataFrame(
         {
             "open": tail["Open"].astype(float).values,

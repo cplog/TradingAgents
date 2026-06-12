@@ -137,7 +137,7 @@ def rating_to_confidence(rating: str) -> float:
     tiers = {
         "buy": 0.92,
         "overweight": 0.78,
-        "hold": 0.55,
+        "hold": 0.72,
         "underweight": 0.35,
         "sell": 0.18,
     }
@@ -222,11 +222,13 @@ def calibrate_confidence(
     data_quality_penalty = min(0.20, 0.04 * len(flags))
 
     # Peer-scope penalty for thin peer comparability.
+    # Reduced from 0.10/0.05 because peer_unavailable is common for niche
+    # sectors and should not heavily punish otherwise sound analysis.
     peer_penalty = 0.0
     if peer_scope in ("unavailable", None):
-        peer_penalty = 0.10
+        peer_penalty = 0.03
     elif peer_scope == "global_fallback":
-        peer_penalty = 0.05
+        peer_penalty = 0.02
 
     score = max(0.0, base - coherence_penalty - data_quality_penalty - peer_penalty)
 

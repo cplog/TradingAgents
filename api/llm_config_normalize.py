@@ -12,6 +12,7 @@ _PROVIDER_DEFAULT_MODELS: Dict[str, Tuple[str, str]] = {
     "anthropic": ("claude-opus-4-7", "claude-sonnet-4-6"),
     "deepseek": ("deepseek-v4-pro", "deepseek-v4-flash"),
     "openrouter": ("openrouter/free", "openrouter/free"),
+    "nvidia": ("google/gemma-3-27b-it", "google/gemma-3-27b-it"),
     "moonshot": ("moonshot-v1-8k", "moonshot-v1-8k"),
     "xai": ("grok-4.20-reasoning", "grok-4.20-non-reasoning"),
     "qwen": ("qwen3.6-plus", "qwen3.6-flash"),

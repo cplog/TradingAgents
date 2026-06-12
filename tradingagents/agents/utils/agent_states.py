@@ -116,3 +116,7 @@ class AgentState(MessagesState):
     alt_data_report: NotRequired[str]
     options_recommendation: NotRequired[str]
     options_chain_snapshot: NotRequired[dict]
+
+    # Debate scorer (tie-breaker between bull and bear before Research Manager)
+    debate_score: NotRequired[dict]
+    debate_score_text: NotRequired[str]

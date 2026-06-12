@@ -81,6 +81,7 @@ from api.models import (
 from api.news import fetch_news_feed
 from api.state_store import ALLOWED_PERSISTED_SECRET_KEYS, get_state_store
 from api.topics_models import TopicSearchRequest, TopicUpdateRequest
+from api.hpm import compute_hpm_score, HPMScoreResult, should_gate_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -810,6 +811,38 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         raise HTTPException(status_code=400, detail=str(exc))
 
     analysts = request.analysts
+
+    # --- HPM regime pre-filter (Phase 1) ---
+    regime_snapshot = None
+    if config.get("regime_prefilter_enabled"):
+        regime = compute_hpm_score()
+        regime_snapshot = regime.model_dump(mode="json")
+        mode = config.get("regime_prefilter_mode", "observe")
+        if mode == "observe":
+            logger.info(
+                "HPM observe: composite=%s posture=%s for ticker=%s",
+                regime.composite_score,
+                regime.trading_posture,
+                ticker,
+            )
+        elif mode == "enforce" and should_gate_analysis(regime.composite_score, config):
+            logger.warning(
+                "HPM enforce: gating analysis for ticker=%s (composite=%s < threshold=%s)",
+                ticker,
+                regime.composite_score,
+                config.get("regime_enforce_threshold", 2.5),
+            )
+            # Tighten policy: reduce debate rounds, limit analysts to scan mode
+            config = {
+                **config,
+                "max_debate_rounds": max(0, int(config.get("max_debate_rounds", 1)) - 1),
+                "max_risk_discuss_rounds": max(0, int(config.get("max_risk_discuss_rounds", 1)) - 1),
+            }
+            if analysts is None:
+                analysts = list(SCAN_MODE_ANALYSTS)
+        # Attach snapshot to config so downstream nodes can access it
+        config["_regime_snapshot"] = regime_snapshot
+
     trigger: Optional[str] = None
     overnight_signal = request.overnight_signal
     if request.mode == "scan":
@@ -862,6 +895,36 @@ async def create_batch(request: BatchAnalyzeRequest) -> BatchAnalyzeResponse:
         validate_api_key(base_config)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # --- HPM regime pre-filter (Phase 1) ---
+    regime_snapshot = None
+    if base_config.get("regime_prefilter_enabled"):
+        regime = compute_hpm_score()
+        regime_snapshot = regime.model_dump(mode="json")
+        mode = base_config.get("regime_prefilter_mode", "observe")
+        if mode == "observe":
+            logger.info(
+                "HPM observe (batch): composite=%s posture=%s batch=%s",
+                regime.composite_score,
+                regime.trading_posture,
+                batch_id,
+            )
+        elif mode == "enforce" and should_gate_analysis(regime.composite_score, base_config):
+            logger.warning(
+                "HPM enforce (batch): gating batch=%s (composite=%s < threshold=%s)",
+                batch_id,
+                regime.composite_score,
+                base_config.get("regime_enforce_threshold", 2.5),
+            )
+            # Tighten policy for every job in the batch
+            base_config = {
+                **base_config,
+                "max_debate_rounds": max(0, int(base_config.get("max_debate_rounds", 1)) - 1),
+                "max_risk_discuss_rounds": max(0, int(base_config.get("max_risk_discuss_rounds", 1)) - 1),
+            }
+            if request.analysts is None:
+                request.analysts = list(SCAN_MODE_ANALYSTS)
+        base_config["_regime_snapshot"] = regime_snapshot
 
     for raw in request.tickers:
         try:
@@ -1000,6 +1063,18 @@ def _topics_store():
     from api.topics_store import get_topics_store
 
     return get_topics_store(get_state_store())
+
+
+@app.get("/api/hpm/score")
+async def hpm_score(
+    index: str = Query("SPY", min_length=1, description="Reference index ticker"),
+) -> Dict[str, Any]:
+    """Return current deterministic HPM regime snapshot.
+
+    Readonly endpoint independent from the job pipeline.
+    """
+    result = compute_hpm_score(index.strip().upper())
+    return result.model_dump(mode="json")
 
 
 @app.get("/api/topics")

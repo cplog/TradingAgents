@@ -160,6 +160,86 @@ def fetch_polymarket_markets(limit: int = 15) -> str:
     return "\n".join(lines)
 
 
+def fetch_polymarket_for_ticker(
+    ticker: str,
+    additional_queries: list[str] | None = None,
+    limit: int = 15,
+) -> str:
+    """Return Polymarket markets relevant to a specific ticker or company.
+
+    Fetches active markets from the Gamma API and filters by keyword
+    matching against ``ticker`` and any ``additional_queries`` (e.g.
+    company name).  No API key required.
+    """
+    keywords = [ticker.strip().upper()]
+    if additional_queries:
+        for q in additional_queries:
+            q = str(q).strip().upper()
+            if q and q not in keywords:
+                keywords.append(q)
+
+    lim = max(1, min(int(limit or 15), 100))
+    url = "https://gamma-api.polymarket.com/markets"
+    params = {"active": "true", "closed": "false", "limit": lim}
+    try:
+        resp = requests.get(url, params=params, timeout=25)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        return f"Polymarket request failed: {exc}"
+
+    if not isinstance(data, list):
+        return "Polymarket returned an unexpected payload."
+
+    matches: list[dict] = []
+    for m in data:
+        if not isinstance(m, dict):
+            continue
+        q = str(m.get("question") or m.get("title") or "").strip()
+        desc = str(m.get("description") or "").strip()
+        text = f"{q} {desc}".upper()
+        if any(kw in text for kw in keywords):
+            matches.append(m)
+        if len(matches) >= limit:
+            break
+
+    if not matches:
+        return (
+            f"<no active Polymarket markets matched keywords {keywords!r}>"
+        )
+
+    lines: List[str] = [f"### Polymarket markets related to {ticker}", ""]
+    for m in matches:
+        q = str(m.get("question") or m.get("title") or "").strip()
+        if not q:
+            continue
+        vol = m.get("volume")
+        liq = m.get("liquidity")
+        slug = str(m.get("slug") or "").strip()
+        outcomes = m.get("outcomes") or []
+        prices = m.get("outcomePrices") or []
+        extra: list[str] = []
+        if vol is not None:
+            extra.append(f"vol={vol}")
+        if liq is not None:
+            extra.append(f"liq={liq}")
+        # Show Yes/No probabilities when available
+        for o, p in zip(outcomes, prices):
+            if o and p is not None:
+                try:
+                    prob = float(p)
+                    extra.append(f"{o}={prob:.0%}")
+                except (TypeError, ValueError):
+                    extra.append(f"{o}={p}")
+        suffix = f" ({', '.join(extra)})" if extra else ""
+        if slug:
+            lines.append(f"- **{q}**{suffix} — https://polymarket.com/event/{slug}")
+        else:
+            lines.append(f"- **{q}**{suffix}")
+
+    return "\n".join(lines)
+
+
 def normalize_hot_board_rows(source_id: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Attach defaults for repository upsert."""
     rows: List[Dict[str, Any]] = []

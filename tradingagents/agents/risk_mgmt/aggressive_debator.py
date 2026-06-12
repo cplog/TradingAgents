@@ -21,6 +21,11 @@ def create_aggressive_debator(llm):
 
 {trader_decision}
 
+**Evidence Requirements:**
+- Cite at least 2 specific data points (exact prices, ratios, percentages) from the reports to support your case.
+- When countering another analyst, reference their specific argument and provide a counter-data-point.
+- State the key risk that could invalidate your aggressive stance.
+
 Your task is to create a compelling case for the trader's decision by questioning and critiquing the conservative and neutral stances to demonstrate why your high-reward perspective offers the best path forward. Incorporate insights from the following sources into your arguments:
 
 Market Research Report: {market_research_report}

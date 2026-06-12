@@ -11,6 +11,7 @@ from tradingagents.agents import (
     create_bear_researcher,
     create_bull_researcher,
     create_conservative_debator,
+    create_debate_scorer,
     create_fundamentals_analyst,
     create_hot_money_analyst,
     create_kronos_analyst,
@@ -135,6 +136,13 @@ class GraphSetup:
         bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
         bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
         research_manager_node = create_research_manager(self.deep_thinking_llm)
+
+        # Debate scorer — optional tie-breaker between bull/bear debate and RM
+        debate_scorer_node = (
+            create_debate_scorer(self.quick_thinking_llm)
+            if self.config.get("debate_scorer_enabled", True)
+            else None
+        )
         trader_node = create_trader(self.quick_thinking_llm)
 
         # Create risk analysis nodes
@@ -169,6 +177,8 @@ class GraphSetup:
         # Add other nodes
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)
+        if debate_scorer_node is not None:
+            workflow.add_node("Debate Scorer", debate_scorer_node)
         workflow.add_node("Research Manager", research_manager_node)
         workflow.add_node("Trader", trader_node)
         workflow.add_node("Aggressive Analyst", aggressive_analyst)
@@ -231,22 +241,25 @@ class GraphSetup:
         workflow.add_edge("Dimensions Snapshot", "Bull Researcher")
 
         # Add remaining edges
+        debate_targets = {
+            "Bear Researcher": "Bear Researcher",
+            "Research Manager": "Research Manager",
+        }
+        if debate_scorer_node is not None:
+            debate_targets["Debate Scorer"] = "Debate Scorer"
+
         workflow.add_conditional_edges(
             "Bull Researcher",
             self.conditional_logic.should_continue_debate,
-            {
-                "Bear Researcher": "Bear Researcher",
-                "Research Manager": "Research Manager",
-            },
+            debate_targets,
         )
         workflow.add_conditional_edges(
             "Bear Researcher",
             self.conditional_logic.should_continue_debate,
-            {
-                "Bull Researcher": "Bull Researcher",
-                "Research Manager": "Research Manager",
-            },
+            debate_targets,
         )
+        if debate_scorer_node is not None:
+            workflow.add_edge("Debate Scorer", "Research Manager")
         workflow.add_edge("Research Manager", "Trader")
         workflow.add_edge("Trader", "Aggressive Analyst")
         workflow.add_conditional_edges(

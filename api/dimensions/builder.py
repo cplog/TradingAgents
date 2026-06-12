@@ -28,7 +28,7 @@ from api.dimensions.schemas import (
     SentimentPillar,
     StockDimensions,
 )
-from api.dimensions.scoring import PillarScoringError, score_pillars
+from api.dimensions.scoring import PillarScoringError, score_pillars, score_pillars_separate
 from api.dimensions.version import DIMENSIONS_VERSION
 
 logger = logging.getLogger(__name__)
@@ -196,13 +196,19 @@ def build_dimensions(
 
     source = "full_run"
     try:
-        pillars = score_pillars(
+        pillars, pillar_flags = score_pillars_separate(
             facts=facts,
             analyst_reports=analyst_reports,
             llm=llm,
             peer_scope=peer_res.peer_scope,
             data_quality_flags=list(flags),
         )
+        if pillar_flags:
+            flags = list(flags) + pillar_flags
+            logger.warning(
+                "Partial pillar scoring for %s (%s): %s",
+                ticker, as_of_date, pillar_flags,
+            )
     except PillarScoringError as exc:
         logger.warning("Pillar scoring unavailable for %s: %s", ticker, exc)
         flags = list(flags) + [f"pillar_scoring_unavailable: {exc}"]

@@ -401,9 +401,23 @@ class TopicsStore:
             latest = self.latest_run(topic.id)
             candidates: List[TickerCandidate] = []
             count = 0
+            regime_snapshot = None
+            regime_adjusted = False
+            topic_regime_adjusted_score = None
             if latest and latest.status == TopicRunStatus.completed:
                 candidates = latest.candidates[:5]
                 count = len(latest.candidates)
+                regime_snapshot = latest.regime_snapshot
+                regime_adjusted = latest.regime_adjusted
+                # Compute backend-derived topic score for stable ranking
+                if candidates:
+                    base_score = sum(c.confidence for c in candidates) / len(candidates)
+                    if regime_adjusted and regime_snapshot:
+                        confidence = regime_snapshot.get("regime_confidence", 1.0)
+                        # Use default multiplier 1.0 for topic-level scoring
+                        topic_regime_adjusted_score = round(base_score * 1.0 * confidence, 3)
+                    else:
+                        topic_regime_adjusted_score = round(base_score, 3)
             summaries.append(
                 TopicSummary(
                     id=topic.id,
@@ -415,8 +429,19 @@ class TopicsStore:
                     last_run_at=topic.last_run_at,
                     candidate_count=count,
                     top_candidates=candidates,
+                    topic_regime_adjusted_score=topic_regime_adjusted_score,
+                    regime_snapshot=regime_snapshot,
+                    regime_adjusted=regime_adjusted,
                 )
             )
+        # Stable server-side ranking: pinned first, then by regime-adjusted score desc
+        summaries.sort(
+            key=lambda s: (
+                not s.pinned,  # False (pinned) sorts before True
+                -(s.topic_regime_adjusted_score or 0.0),
+                s.label,
+            )
+        )
         return summaries
 
 

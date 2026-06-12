@@ -83,7 +83,7 @@ class TopicsEngine:
 
     def status(self) -> dict[str, Any]:
         day = _today_utc()
-        return {
+        status = {
             "enabled": True,
             "poll_seconds": 60,
             "last_tick": self._last_tick,
@@ -92,6 +92,13 @@ class TopicsEngine:
             "tavily_daily_cap": get_tavily_daily_cap(),
             "last_errors": self._last_errors[-5:],
         }
+        # Include regime snapshot when pre-filter is enabled
+        if self.service_config.get("regime_prefilter_enabled"):
+            from api.hpm import compute_hpm_score
+            regime = compute_hpm_score()
+            status["regime_snapshot"] = regime.model_dump(mode="json")
+            status["regime_prefilter_mode"] = self.service_config.get("regime_prefilter_mode", "observe")
+        return status
 
     async def start(self) -> None:
         self.store.ensure_seed_topics()
@@ -200,6 +207,8 @@ class TopicsEngine:
             run.articles = articles
             run.candidates = extraction.candidates
             run.theme_summary = extraction.theme_summary
+            run.regime_snapshot = extraction.regime_snapshot
+            run.regime_adjusted = extraction.regime_adjusted
             run.status = TopicRunStatus.completed
             run.completed_at = _utc_now_iso()
         except (TavilyAuthError, TavilyRateLimitError, TavilyError) as exc:

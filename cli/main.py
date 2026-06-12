@@ -1345,5 +1345,54 @@ def analyze(
     run_analysis(checkpoint=checkpoint)
 
 
+@app.command()
+def warm_peer_cache(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Log what would be warmed without extracting facts.",
+    ),
+    max_tickers: int = typer.Option(
+        20,
+        "--max-tickers",
+        help="Max tickers to extract facts for per industry.",
+    ),
+    max_workers: int = typer.Option(
+        4,
+        "--max-workers",
+        help="Parallel worker threads for fact extraction.",
+    ),
+    sectors: Optional[str] = typer.Option(
+        None,
+        "--sectors",
+        help="Comma-separated sector filter (e.g. 'Technology,Healthcare').",
+    ),
+):
+    """Pre-build dimension peer universes so analysis runs hit warm caches."""
+    from api.dimensions.peer_cache_warmer import warm_peer_cache as _warm
+
+    priority = None
+    if sectors:
+        priority = tuple(s.strip() for s in sectors.split(",") if s.strip())
+
+    console.print("[bold cyan]Warming peer fact caches...[/bold cyan]")
+    try:
+        result = _warm(
+            dry_run=dry_run,
+            max_tickers_per_industry=max_tickers,
+            max_workers=max_workers,
+            priority_sectors=priority,
+        )
+        console.print(f"[green]✓ Done:[/green] {result['slugs_warmed']} slugs warmed, "
+                      f"{result['slugs_failed']} failed, "
+                      f"{result['total_facts_extracted']} facts in {result['elapsed_sec']}s")
+        if result.get("failed"):
+            for f in result["failed"]:
+                console.print(f"  [red]✗ {f['slug']} ({f['sector']} / {f['industry']}): {f['error']}[/red]")
+    except Exception as exc:
+        console.print(f"[red]Peer cache warm failed: {exc}[/red]")
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()

@@ -1341,6 +1341,25 @@ class Worker:
                     result["confidence"] = calib["score"]
                     result["confidence_breakdown"] = calib["breakdown"]
                     result["confidence_inputs"] = calib["inputs"]
+
+                    # Production gating: flag low-confidence results so downstream
+                    # trading systems can ignore them rather than act on weak signals.
+                    min_conf = float(
+                        (config_snapshot or {}).get("min_confidence_for_production", 0.60)
+                    )
+                    if result.get("confidence", 0) < min_conf:
+                        result["production_gated"] = True
+                        result["gating_reason"] = (
+                            f"Confidence {result['confidence']} below production "
+                            f"threshold {min_conf}"
+                        )
+                        logger.info(
+                            "Run %s gated: confidence %.3f < %.3f",
+                            job_id, result["confidence"], min_conf,
+                        )
+                    else:
+                        result["production_gated"] = False
+                        result["gating_reason"] = None
                 except Exception as exc:  # never let calibration fail the run
                     logger.warning("Confidence calibration skipped for %s: %s", job_id, exc)
 

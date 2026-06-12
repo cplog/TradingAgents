@@ -13,11 +13,13 @@ class ConditionalLogic:
         max_debate_rounds=1,
         max_risk_discuss_rounds=1,
         convergence_checker=None,
+        debate_scorer_enabled=False,
     ):
         """Initialize with configuration parameters."""
         self.max_debate_rounds = max_debate_rounds
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
         self.convergence_checker = convergence_checker
+        self.debate_scorer_enabled = debate_scorer_enabled
 
     def should_continue_analyst(self, analyst_key: str, state: AgentState) -> str:
         """Route tool-loop vs message-clear for any analyst id (incl. snake_case)."""
@@ -45,14 +47,14 @@ class ConditionalLogic:
         if (
             state["investment_debate_state"]["count"] >= 2 * self.max_debate_rounds
         ):  # hard ceiling
-            return "Research Manager"
+            return "Debate Scorer" if self.debate_scorer_enabled else "Research Manager"
 
         # Semantic termination: check convergence after full rounds
         if (
             self.convergence_checker
             and self.convergence_checker.check_bull_bear(state)
         ):
-            return "Research Manager"
+            return "Debate Scorer" if self.debate_scorer_enabled else "Research Manager"
 
         if state["investment_debate_state"]["current_response"].startswith("Bull"):
             return "Bear Researcher"

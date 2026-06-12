@@ -21,6 +21,11 @@ def create_neutral_debator(llm):
 
 {trader_decision}
 
+**Evidence Requirements:**
+- Cite at least 2 specific data points from the reports, one supporting the aggressive view and one supporting the conservative view.
+- Identify the single most important point of disagreement between the other two analysts.
+- State which side has stronger evidence in your view and why.
+
 Your task is to challenge both the Aggressive and Conservative Analysts, pointing out where each perspective may be overly optimistic or overly cautious. Use insights from the following data sources to support a moderate, sustainable strategy to adjust the trader's decision:
 
 Market Research Report: {market_research_report}

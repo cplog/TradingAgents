@@ -183,6 +183,17 @@ class PortfolioDecision(BaseModel):
             "Underweight / Sell, picked based on the analysts' debate."
         ),
     )
+    conviction_score: int = Field(
+        default=0,
+        description=(
+            "How confident you are in this rating on a 0-100 scale. "
+            "0-30 = very low conviction (evidence is thin or conflicting), "
+            "31-50 = low conviction, 51-70 = moderate conviction, "
+            "71-85 = high conviction, 86-100 = very high conviction. "
+            "Be honest and calibrated: most decisions should fall in the "
+            "51-85 range. Reserve 86+ for exceptionally clear setups."
+        ),
+    )
     executive_summary: str = Field(
         description=(
             "A concise action plan covering entry strategy, position sizing, "
@@ -192,7 +203,9 @@ class PortfolioDecision(BaseModel):
     investment_thesis: str = Field(
         description=(
             "Detailed reasoning anchored in specific evidence from the analysts' "
-            "debate. If prior lessons are referenced in the prompt context, "
+            "debate. Include a brief evidence tally: list the key factors supporting "
+            "your rating and the key factors against it, with their approximate weights. "
+            "If prior lessons are referenced in the prompt context, "
             "incorporate them; otherwise rely solely on the current analysis."
         ),
     )
@@ -216,11 +229,15 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     """
     parts = [
         f"**Rating**: {decision.rating.value}",
+    ]
+    if decision.conviction_score > 0:
+        parts.extend(["", f"**Conviction**: {decision.conviction_score}/100"])
+    parts.extend([
         "",
         f"**Executive Summary**: {decision.executive_summary}",
         "",
         f"**Investment Thesis**: {decision.investment_thesis}",
-    ]
+    ])
     if decision.price_target is not None:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:

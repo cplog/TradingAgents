@@ -36,6 +36,11 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_JOB_TIMEOUT_SECONDS": "job_timeout_seconds",
     "TRADINGAGENTS_JOB_STUCK_SECONDS": "job_stuck_seconds",
     "TRADINGAGENTS_OPTIONS_STRATEGIST_ENABLED": "options_strategist_enabled",
+    "TRADINGAGENTS_REGIME_PREFILTER_ENABLED": "regime_prefilter_enabled",
+    "TRADINGAGENTS_REGIME_PREFILTER_MODE": "regime_prefilter_mode",
+    "TRADINGAGENTS_REGIME_ENFORCE_THRESHOLD": "regime_enforce_threshold",
+    "TRADINGAGENTS_MIN_CONFIDENCE_FOR_PRODUCTION": "min_confidence_for_production",
+    "TRADINGAGENTS_DEBATE_SCORER_ENABLED": "debate_scorer_enabled",
 }
 
 
@@ -101,8 +106,11 @@ _CONFIG_BASE: dict = {
     # Output language for analyst reports and final decision
     "output_language": os.getenv("OUTPUT_LANGUAGE", "English"),
     # Debate and discussion settings
-    "max_debate_rounds": 1,
-    "max_risk_discuss_rounds": 1,
+    "max_debate_rounds": 2,
+    "max_risk_discuss_rounds": 2,
+    # When True, a Debate Scorer node runs after the bull/bear debate and before
+    # the Research Manager, providing structured scores that break ties.
+    "debate_scorer_enabled": True,
     "max_recur_limit": 100,
     # News / data fetching parameters
     "news_article_limit": 20,
@@ -137,6 +145,22 @@ _CONFIG_BASE: dict = {
     "tool_vendors": {},
     # Options strategist overlay (runs after Portfolio Manager)
     "options_strategist_enabled": False,
+    # Hard Penny Market (HPM) regime pre-filter (Phase 1)
+    "regime_prefilter_enabled": False,
+    "regime_prefilter_mode": "observe",  # observe | enforce
+    "regime_enforce_threshold": 2.5,
+    # Minimum confidence (0..1) required before a run is considered safe for
+    # downstream trading-system consumption. Runs below this threshold are still
+    # saved and displayed, but flagged with production_gated=True.
+    "min_confidence_for_production": 0.60,
+    "regime_topic_multipliers": {
+        "default": 1.0,
+        "momentum": 1.0,
+        "growth": 1.0,
+        "value": 1.0,
+        "defensive": 1.0,
+        "speculative": 1.0,
+    },
     # Benchmark for alpha calculation in the reflection layer.
     "benchmark_ticker": None,
     "benchmark_map": {

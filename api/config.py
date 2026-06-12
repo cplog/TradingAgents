@@ -27,6 +27,7 @@ REQUIRED_API_KEYS = {
     "minimax": "MINIMAX_API_KEY",
     "minimax-cn": "MINIMAX_CN_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
     "moonshot": "MOONSHOT_API_KEY",
     "kimi_code": "KIMI_CODE_API_KEY",
 }

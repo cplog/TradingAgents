@@ -159,20 +159,24 @@ export function useReportExport({
   const handleExportPng = useCallback(async () => {
     const node = pngTargetRef?.current;
     if (!node) return;
-    const { toPng } = await import("html-to-image");
-    const dataUrl = await toPng(node, {
-      pixelRatio: 2,
-      cacheBust: true,
-      backgroundColor: "#fffbf3",
-    });
-    const tickerSlug =
-      ticker
-        .toString()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "report";
-    const dateSlug = (date ?? new Date().toISOString().slice(0, 10)).replace(/[^0-9-]/g, "");
-    downloadPng(`agent-report-${tickerSlug}-${dateSlug}.png`, dataUrl);
+    try {
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(node, {
+        pixelRatio: 2,
+        cacheBust: true,
+        backgroundColor: "#fffbf3",
+      });
+      const tickerSlug =
+        ticker
+          .toString()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "report";
+      const dateSlug = (date ?? new Date().toISOString().slice(0, 10)).replace(/[^0-9-]/g, "");
+      downloadPng(`agent-report-${tickerSlug}-${dateSlug}.png`, dataUrl);
+    } catch (err) {
+      console.error("PNG export failed:", err);
+    }
   }, [pngTargetRef, ticker, date]);
 
   const handlePrint = useCallback(() => {

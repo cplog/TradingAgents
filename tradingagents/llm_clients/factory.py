@@ -9,6 +9,7 @@ _OPENAI_COMPATIBLE = (
     "glm", "glm-cn",
     "minimax", "minimax-cn",
     "ollama", "ollama-local", "ollama-remote", "openrouter",
+    "nvidia",
 )
 
 

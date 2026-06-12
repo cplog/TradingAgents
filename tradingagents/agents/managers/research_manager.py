@@ -39,7 +39,19 @@ def create_research_manager(llm):
 - **Underweight**: Cautious view; recommend trimming exposure
 - **Sell**: Strong conviction in the bear thesis; recommend exiting or avoiding the position
 
-Commit to a clear stance whenever the debate's strongest arguments warrant one; reserve Hold for situations where the evidence on both sides is genuinely balanced.
+**Evidence Evaluation Framework:**
+
+Before deciding, explicitly tally the evidence on both sides:
+
+1. List each distinct piece of evidence from the debate (max ~10 items).
+2. For each item, note: (a) which side it supports, (b) whether it is a quantitative data point or a qualitative argument, and (c) its approximate weight (minor / moderate / major).
+3. Count how many items and how much total weight supports each side.
+4. Let the evidence tally guide your rating naturally — do not force a directional stance if the evidence is genuinely balanced.
+
+Rating guidelines based on the evidence tally:
+- One side leads by 3+ major evidence items → directional rating (Buy/Sell)
+- One side leads by 1-2 major items → Overweight/Underweight
+- Evidence is balanced or thin → Hold (this is a valid, honest call)
 
 In **Strategic Actions**, include explicit entry/stop/target levels anchored to the live quote when provided above, and one sentence on what to do if price is already below a proposed stop or above target at decision time.
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { Link } from "react-router-dom";
 import { PageFrame, PageHeader, Panel } from "../components/PageFrame";
@@ -6,7 +6,7 @@ import { TopicCard } from "../components/topics/TopicCard";
 import { CadenceSelect } from "../components/topics/CadenceSelect";
 import { useTopics } from "../hooks/useTopics";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import type { TopicCadence } from "../api";
+import { fetchHpmScore, type HPMScoreResult, type TopicCadence } from "../api";
 import { topicPath } from "../navigation/routes";
 import { AppBreadcrumbs } from "../components/navigation/AppBreadcrumbs";
 
@@ -20,7 +20,12 @@ export function TopicsPage() {
   const initialLoad = loading && pinned.length === 0 && trending.length === 0;
   const [query, setQuery] = useState("");
   const [cadence, setCadence] = useState<TopicCadence>("daily");
+  const [hpmScore, setHpmScore] = useState<HPMScoreResult | null>(null);
   useDocumentTitle("Topics");
+
+  useEffect(() => {
+    fetchHpmScore().then(setHpmScore).catch(console.error);
+  }, []);
 
   async function onSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -37,6 +42,56 @@ export function TopicsPage() {
         description="Discover investment themes via web research. Extract tickers and send them to Batch analysis."
         meta={<AppBreadcrumbs items={[{ label: "Topics" }]} />}
       />
+
+      {hpmScore ? (
+        <div className="regime-banner">
+          <div className="regime-banner__header">
+            <strong>Market Regime: {hpmScore.trading_posture.replace(/_/g, " ")}</strong>
+            {" "}— Score: {hpmScore.composite_score.toFixed(1)}/5.0, Confidence: {Math.round(hpmScore.regime_confidence * 100)}%
+            <span className="regime-banner__timestamp">
+              Updated {new Date(hpmScore.timestamp).toLocaleTimeString()}
+            </span>
+          </div>
+
+          <div className="regime-banner__signals">
+            {Object.entries(hpmScore.signals).map(([name, sig]) => (
+              <div key={name} className="regime-banner__signal-row">
+                <span className="regime-banner__signal-name">
+                  {name.replace(/_/g, " ")}
+                </span>
+                <span className="regime-banner__signal-bar">
+                  <span
+                    className="regime-banner__signal-fill"
+                    style={{ width: `${sig.score * 100}%` }}
+                  />
+                </span>
+                <span className="regime-banner__signal-score">
+                  {sig.score.toFixed(2)}
+                </span>
+                <span
+                  className={`regime-banner__signal-direction regime-banner__signal-direction--${sig.direction}`}
+                >
+                  {sig.direction === "up" ? "↑" : sig.direction === "down" ? "↓" : "→"}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {hpmScore.dominant_transmission_chain.length > 0 && (
+            <div className="regime-banner__footnote">
+              <strong>Transmission:</strong>{" "}
+              {hpmScore.dominant_transmission_chain.join(" → ")}
+            </div>
+          )}
+
+          {hpmScore.regime_reason_codes.length > 0 && (
+            <div className="regime-banner__footnote">
+              <strong>Evidence:</strong>{" "}
+              {hpmScore.regime_reason_codes.map((c) => c.replace(/_/g, " ")).join("; ")}
+            </div>
+          )}
+        </div>
+      ) : null}
 
       <Panel title="Search a theme">
         <form className="ui-form-row ui-form-row--stretch" onSubmit={(e) => void onSearch(e)}>

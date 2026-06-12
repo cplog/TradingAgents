@@ -14,6 +14,7 @@ from api.topics_models import (
     TickerMarket,
     TopicArticle,
 )
+from api.hpm import compute_hpm_score, get_topic_style_multiplier
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,81 @@ def normalize_candidates(candidates: List[TickerCandidate]) -> List[TickerCandid
     return sorted(by_ticker.values(), key=lambda x: x.confidence, reverse=True)
 
 
+def enrich_with_market_data(candidates: List[TickerCandidate]) -> List[TickerCandidate]:
+    """Fetch current price, change %, market cap, sector, industry from yfinance.
+
+    Fills optional fields in-place and returns the list.  Non-tradeable or
+    delisted tickers keep their original values (None).
+    """
+    import yfinance as yf
+
+    for c in candidates:
+        try:
+            info = yf.Ticker(c.ticker).info or {}
+            c.price = (
+                info.get("currentPrice")
+                or info.get("regularMarketPrice")
+                or info.get("previousClose")
+            )
+            pct = info.get("regularMarketChangePercent")
+            if pct is not None:
+                c.change_pct = round(float(pct), 2)
+            elif c.price and info.get("previousClose"):
+                c.change_pct = round(
+                    (c.price - info["previousClose"]) / info["previousClose"] * 100, 2
+                )
+            cap = info.get("marketCap")
+            if cap is not None:
+                c.market_cap = cap
+            c.sector = info.get("sector")
+            c.industry = info.get("industry")
+        except Exception:
+            logger.debug("yfinance enrich failed for %s", c.ticker, exc_info=True)
+
+    return candidates
+
+
+def apply_regime_multipliers(
+    candidates: List[TickerCandidate],
+    service_config: Dict[str, Any],
+    style: str = "default",
+) -> tuple[List[TickerCandidate], Optional[Dict[str, Any]]]:
+    """Apply regime-aware confidence multipliers when enabled.
+
+    Returns:
+        (adjusted_candidates, regime_snapshot_or_None)
+    """
+    if not service_config.get("regime_prefilter_enabled"):
+        return candidates, None
+
+    regime = compute_hpm_score()
+    multiplier = get_topic_style_multiplier(style, service_config)
+    confidence = regime.regime_confidence
+
+    adjusted: List[TickerCandidate] = []
+    for c in candidates:
+        base = float(c.confidence)
+        final = base * multiplier * confidence
+        adjusted.append(
+            TickerCandidate(
+                ticker=c.ticker,
+                company_name=c.company_name,
+                confidence=round(min(final, 1.0), 3),
+                rationale=c.rationale,
+                market=c.market,
+                base_confidence=round(base, 3),
+                style_multiplier=round(multiplier, 3),
+                regime_confidence=round(confidence, 3),
+                final_confidence=round(min(final, 1.0), 3),
+            )
+        )
+
+    # Re-sort by final confidence
+    adjusted.sort(key=lambda x: x.confidence, reverse=True)
+    snapshot = regime.model_dump(mode="json")
+    return adjusted, snapshot
+
+
 def extract_from_articles(
     articles: List[TopicArticle],
     query: str,
@@ -136,13 +212,27 @@ def extract_from_articles(
 
     if isinstance(result, ExtractionResult):
         candidates = normalize_candidates(result.candidates)
-        return ExtractionResult(theme_summary=result.theme_summary.strip(), candidates=candidates)
+        candidates, snapshot = apply_regime_multipliers(candidates, service_config)
+        enrich_with_market_data(candidates)
+        return ExtractionResult(
+            theme_summary=result.theme_summary.strip(),
+            candidates=candidates,
+            regime_snapshot=snapshot,
+            regime_adjusted=snapshot is not None,
+        )
 
     if isinstance(result, dict):
         try:
             parsed = ExtractionResult.model_validate(result)
             candidates = normalize_candidates(parsed.candidates)
-            return ExtractionResult(theme_summary=parsed.theme_summary.strip(), candidates=candidates)
+            candidates, snapshot = apply_regime_multipliers(candidates, service_config)
+            enrich_with_market_data(candidates)
+            return ExtractionResult(
+                theme_summary=parsed.theme_summary.strip(),
+                candidates=candidates,
+                regime_snapshot=snapshot,
+                regime_adjusted=snapshot is not None,
+            )
         except Exception:
             pass
 
@@ -154,7 +244,14 @@ def extract_from_articles(
             text = str(text)
         parsed = ExtractionResult.model_validate(_first_json_object(text))
         candidates = normalize_candidates(parsed.candidates)
-        return ExtractionResult(theme_summary=parsed.theme_summary.strip(), candidates=candidates)
+        candidates, snapshot = apply_regime_multipliers(candidates, service_config)
+        enrich_with_market_data(candidates)
+        return ExtractionResult(
+            theme_summary=parsed.theme_summary.strip(),
+            candidates=candidates,
+            regime_snapshot=snapshot,
+            regime_adjusted=snapshot is not None,
+        )
     except Exception as exc:
         logger.warning("Topics extraction fallback failed: %s", exc)
         return ExtractionResult(

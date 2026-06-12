@@ -136,6 +136,7 @@ class TradingAgentsGraph:
             max_debate_rounds=self.config["max_debate_rounds"],
             max_risk_discuss_rounds=self.config["max_risk_discuss_rounds"],
             convergence_checker=self.convergence_checker,
+            debate_scorer_enabled=self.config.get("debate_scorer_enabled", True),
         )
         self.graph_setup = GraphSetup(
             self.quick_thinking_llm,

@@ -21,6 +21,7 @@ from .risk_mgmt.aggressive_debator import create_aggressive_debator
 from .risk_mgmt.conservative_debator import create_conservative_debator
 from .risk_mgmt.neutral_debator import create_neutral_debator
 
+from .managers.debate_scorer import create_debate_scorer
 from .managers.research_manager import create_research_manager
 from .managers.portfolio_manager import create_portfolio_manager
 
@@ -45,6 +46,7 @@ __all__ = [
     "create_policy_analyst",
     "create_aggressive_debator",
     "create_alt_data_analyst",
+    "create_debate_scorer",
     "create_portfolio_manager",
     "create_conservative_debator",
     "create_sentiment_analyst",

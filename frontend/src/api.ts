@@ -705,6 +705,21 @@ export async function triggerMonitorTick(): Promise<Record<string, unknown>> {
   return apiJson("/api/monitor/tick", { method: "POST" });
 }
 
+export type HPMScoreResult = {
+  index: string;
+  composite_score: number;
+  signals: Record<string, any>;
+  trading_posture: string;
+  regime_confidence: number;
+  regime_reason_codes: string[];
+  dominant_transmission_chain: string[];
+  timestamp: string;
+};
+
+export async function fetchHpmScore(index = "SPY"): Promise<HPMScoreResult> {
+  return apiJson(`/api/hpm/score?index=${encodeURIComponent(index)}`);
+}
+
 // --- Topics (Hot Ideas) ---
 
 export type TopicCadence = "daily" | "weekly" | "manual";
@@ -717,6 +732,15 @@ export type TickerCandidate = {
   confidence: number;
   rationale?: string | null;
   market: TickerMarket;
+  base_confidence?: number | null;
+  style_multiplier?: number | null;
+  regime_confidence?: number | null;
+  final_confidence?: number | null;
+  price?: number | null;
+  change_pct?: number | null;
+  market_cap?: number | null;
+  sector?: string | null;
+  industry?: string | null;
 };
 
 export type TopicArticle = {
@@ -737,6 +761,8 @@ export type TopicRun = {
   candidates: TickerCandidate[];
   theme_summary?: string | null;
   error?: string | null;
+  regime_snapshot?: Record<string, unknown> | null;
+  regime_adjusted?: boolean;
 };
 
 export type TopicSummary = {
@@ -749,6 +775,9 @@ export type TopicSummary = {
   last_run_at?: string | null;
   candidate_count: number;
   top_candidates: TickerCandidate[];
+  topic_regime_adjusted_score?: number | null;
+  regime_snapshot?: Record<string, unknown> | null;
+  regime_adjusted?: boolean;
 };
 
 export type Topic = {

@@ -17,6 +17,8 @@ export function SystemPage() {
   const [provider, setProvider] = useState("openai");
   const [deep, setDeep] = useState("gpt-5.4");
   const [quick, setQuick] = useState("gpt-5.4-mini");
+  const [regimeEnabled, setRegimeEnabled] = useState(false);
+  const [regimeMode, setRegimeMode] = useState("observe");
   const [openaiKey, setOpenaiKey] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   useDocumentTitle("System");
@@ -26,7 +28,17 @@ export function SystemPage() {
       .then(setHealth)
       .catch(() => setHealth(null));
     void fetchConfig()
-      .then(setConfig)
+      .then((cfg) => {
+        setConfig(cfg);
+        if (cfg) {
+          if (typeof cfg.regime_prefilter_enabled === "boolean") {
+            setRegimeEnabled(cfg.regime_prefilter_enabled);
+          }
+          if (typeof cfg.regime_prefilter_mode === "string") {
+            setRegimeMode(cfg.regime_prefilter_mode);
+          }
+        }
+      })
       .catch(() => setConfig(null));
   }, []);
 
@@ -159,6 +171,30 @@ export function SystemPage() {
             onChange={(e) => setQuick(e.target.value)}
           />
         </label>
+        <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem" }}>
+          <label className="ui-field" style={{ flex: 1 }}>
+            <span className="ui-field__label">HPM Regime Pre-filter</span>
+            <select
+              className="ui-input"
+              value={regimeEnabled ? "true" : "false"}
+              onChange={(e) => setRegimeEnabled(e.target.value === "true")}
+            >
+              <option value="false">Disabled</option>
+              <option value="true">Enabled</option>
+            </select>
+          </label>
+          <label className="ui-field" style={{ flex: 1 }}>
+            <span className="ui-field__label">Regime Mode</span>
+            <select
+              className="ui-input"
+              value={regimeMode}
+              onChange={(e) => setRegimeMode(e.target.value)}
+            >
+              <option value="observe">Observe (Score only)</option>
+              <option value="enforce">Enforce (Gate analysis)</option>
+            </select>
+          </label>
+        </div>
         <label className="ui-field">
           <span className="ui-field__label">OPENAI_API_KEY (optional, stored if admin enabled)</span>
           <input
@@ -180,6 +216,8 @@ export function SystemPage() {
                     llm_provider: provider,
                     deep_think_llm: deep,
                     quick_think_llm: quick,
+                    regime_prefilter_enabled: regimeEnabled,
+                    regime_prefilter_mode: regimeMode,
                   },
                   secrets: openaiKey.trim() ? { OPENAI_API_KEY: openaiKey.trim() } : undefined,
                 },

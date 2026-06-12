@@ -75,7 +75,12 @@ export function useTopics() {
     () =>
       topics
         .filter((t) => !t.pinned)
-        .sort((a, b) => (b.candidate_count ?? 0) - (a.candidate_count ?? 0)),
+        .sort((a, b) => {
+          if (a.topic_regime_adjusted_score != null && b.topic_regime_adjusted_score != null) {
+            return b.topic_regime_adjusted_score - a.topic_regime_adjusted_score;
+          }
+          return (b.candidate_count ?? 0) - (a.candidate_count ?? 0);
+        }),
     [topics],
   );
 

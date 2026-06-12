@@ -15,6 +15,7 @@ export const PROVIDERS = [
   "anthropic",
   "deepseek",
   "openrouter",
+  "nvidia",
   "moonshot",
   "xai",
   "qwen",
@@ -32,6 +33,7 @@ export const MODEL_PRESETS: Record<string, { deep: string; quick: string }> = {
   anthropic: { deep: "claude-opus-4-7", quick: "claude-sonnet-4-6" },
   deepseek: { deep: "deepseek-v4-pro", quick: "deepseek-v4-flash" },
   openrouter: { deep: "openrouter/free", quick: "openrouter/free" },
+  nvidia: { deep: "google/gemma-3-27b-it", quick: "google/gemma-3-27b-it" },
   moonshot: { deep: "moonshot-v1-8k", quick: "moonshot-v1-8k" },
   xai: { deep: "grok-4.20-reasoning", quick: "grok-4.20-non-reasoning" },
   qwen: { deep: "qwen3.6-plus", quick: "qwen3.6-flash" },
@@ -41,6 +43,63 @@ export const MODEL_PRESETS: Record<string, { deep: string; quick: string }> = {
   "ollama-local": { deep: "glm-4.7-flash:latest", quick: "qwen3:latest" },
   "ollama-remote": { deep: "glm-4.7-flash:latest", quick: "qwen3:latest" },
 };
+
+export type ServerLlmDefaults = {
+  provider: string;
+  deepModel: string;
+  quickModel: string;
+  backendUrl: string;
+};
+
+function serverCfgToDefaults(serverCfg: Record<string, unknown>): ServerLlmDefaults | null {
+  if (typeof serverCfg.llm_provider !== "string") return null;
+  return {
+    provider: serverCfg.llm_provider === "ollama" ? "ollama-local" : serverCfg.llm_provider,
+    deepModel: typeof serverCfg.deep_think_llm === "string" ? serverCfg.deep_think_llm : "",
+    quickModel: typeof serverCfg.quick_think_llm === "string" ? serverCfg.quick_think_llm : "",
+    backendUrl: typeof serverCfg.backend_url === "string" ? serverCfg.backend_url : "",
+  };
+}
+
+/** Models/backend to apply when the user picks a provider in the dropdown. */
+export function defaultsForProviderSwitch(
+  nextProvider: string,
+  serverDefaults: ServerLlmDefaults | null,
+): Partial<LlmConfig> {
+  const preset = MODEL_PRESETS[nextProvider] ?? MODEL_PRESETS.openai;
+  const openrouterPatch = nextProvider !== "openrouter" ? { openrouterFreeOnly: false } : {};
+  if (
+    serverDefaults &&
+    serverDefaults.provider === nextProvider &&
+    serverDefaults.deepModel &&
+    serverDefaults.quickModel
+  ) {
+    return {
+      provider: nextProvider,
+      deepModel: serverDefaults.deepModel,
+      quickModel: serverDefaults.quickModel,
+      ...(serverDefaults.backendUrl ? { backendUrl: serverDefaults.backendUrl } : {}),
+      ...openrouterPatch,
+    };
+  }
+  return {
+    provider: nextProvider,
+    deepModel: preset.deep,
+    quickModel: preset.quick,
+    ...openrouterPatch,
+  };
+}
+
+function configFromServerDefaults(serverDefaults: ServerLlmDefaults): LlmConfig {
+  const preset = MODEL_PRESETS[serverDefaults.provider] ?? MODEL_PRESETS.openai;
+  return {
+    provider: serverDefaults.provider,
+    deepModel: serverDefaults.deepModel || preset.deep,
+    quickModel: serverDefaults.quickModel || preset.quick,
+    backendUrl: serverDefaults.backendUrl,
+    openrouterFreeOnly: false,
+  };
+}
 
 const DEFAULT_CONFIG: LlmConfig = {
   provider: "openai",
@@ -104,6 +163,7 @@ export function useLlmConfig() {
   const initial = useMemo(loadFromStorage, []);
   const [config, setConfigState] = useState<LlmConfig>(initial.config);
   const [userKeys, setUserKeys] = useState<Set<keyof LlmConfig>>(initial.userKeys);
+  const [serverDefaults, setServerDefaults] = useState<ServerLlmDefaults | null>(null);
 
   const setConfig = useCallback((partial: Partial<LlmConfig>) => {
     setConfigState((prev) => ({ ...prev, ...partial }));
@@ -116,6 +176,7 @@ export function useLlmConfig() {
   }, []);
 
   const hydrateFromServer = useCallback((serverCfg: Record<string, unknown>) => {
+    setServerDefaults(serverCfgToDefaults(serverCfg));
     setConfigState((prev) => {
       const next: LlmConfig = { ...prev };
       const apply = (k: keyof LlmConfig, value: unknown) => {
@@ -147,10 +208,10 @@ export function useLlmConfig() {
       (Object.keys(LS_KEYS) as (keyof LlmConfig)[]).forEach((k) => store.removeItem(LS_KEYS[k]));
     }
     setUserKeys(new Set());
-    setConfigState(DEFAULT_CONFIG);
-  }, []);
+    setConfigState(serverDefaults ? configFromServerDefaults(serverDefaults) : DEFAULT_CONFIG);
+  }, [serverDefaults]);
 
-  return { config, setConfig, hydrateFromServer, reset };
+  return { config, setConfig, hydrateFromServer, reset, serverDefaults };
 }
 
 /** Build the `config_overrides` payload for /analyze and /batches. */
@@ -175,12 +236,20 @@ type LlmPickerProps = {
   value: LlmConfig;
   onChange: (next: Partial<LlmConfig>) => void;
   onReset?: () => void;
+  serverDefaults?: ServerLlmDefaults | null;
   disabled?: boolean;
   /** Compact layout collapses Advanced into a single details block. */
   variant?: "full" | "compact";
 };
 
-export function LlmPicker({ value, onChange, onReset, disabled, variant = "full" }: LlmPickerProps) {
+export function LlmPicker({
+  value,
+  onChange,
+  onReset,
+  serverDefaults = null,
+  disabled,
+  variant = "full",
+}: LlmPickerProps) {
   const [providerModels, setProviderModels] = useState<ProviderModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
@@ -257,15 +326,9 @@ export function LlmPicker({ value, onChange, onReset, disabled, variant = "full"
   }, [visibleModels, deepCustomMode, quickCustomMode, deepInOptions, quickInOptions]);
 
   function onProviderChange(next: string) {
-    const p = MODEL_PRESETS[next];
     setDeepCustomMode(false);
     setQuickCustomMode(false);
-    onChange({
-      provider: next,
-      deepModel: p ? p.deep : value.deepModel,
-      quickModel: p ? p.quick : value.quickModel,
-      ...(next !== "openrouter" ? { openrouterFreeOnly: false } : {}),
-    });
+    onChange(defaultsForProviderSwitch(next, serverDefaults));
   }
 
   const rowGap = variant === "compact" ? 8 : 12;

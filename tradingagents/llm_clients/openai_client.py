@@ -1,5 +1,15 @@
+import logging
 import os
+import re
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# Error patterns from OpenAI Responses API when it auto-detects image-like
+# strings in text content and the model does not support vision.
+_RESPONSES_IMAGE_ERROR_RE = re.compile(
+    r"does not support image|image\.png|image_url"
+)
 
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
@@ -30,7 +40,22 @@ class NormalizedChatOpenAI(ChatOpenAI):
     """
 
     def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+        if not self.use_responses_api:
+            return normalize_content(super().invoke(input, config, **kwargs))
+        try:
+            return normalize_content(super().invoke(input, config, **kwargs))
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if _RESPONSES_IMAGE_ERROR_RE.search(err_str):
+                logger.warning(
+                    "Responses API rejected content as image input (%s); "
+                    "retrying with Chat Completions on this call "
+                    "and disabling Responses API for subsequent requests",
+                    exc,
+                )
+                self.use_responses_api = False
+                return normalize_content(super().invoke(input, config, **kwargs))
+            raise
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
         caps = get_capabilities(self.model_name)
@@ -158,6 +183,35 @@ class OpenRouterChatOpenAI(NormalizedChatOpenAI):
         return ChatOpenAI.with_structured_output(self, schema, method=method, **kwargs)
 
 
+class NvidiaChatOpenAI(NormalizedChatOpenAI):
+    """NVIDIA NIM-compatible structured output without relying on tool routing.
+
+    NVIDIA's OpenAI-compatible API (integrate.api.nvidia.com) returns HTTP 404
+    from Cloudflare when LangChain uses ``method=function_calling`` because the
+    gateway cannot locate the auto-generated function binding. Preferring
+    ``json_schema`` (then ``json_mode``) uses ``response_format`` instead of
+    binding the schema as an API tool, which NIM handles correctly.
+    """
+
+    def with_structured_output(self, schema, *, method=None, **kwargs):
+        caps = get_capabilities(self.model_name)
+        if caps.preferred_structured_method == "none":
+            raise NotImplementedError(
+                f"{self.model_name} has no structured-output method available; "
+                f"agent factories will fall back to free-text generation."
+            )
+        if method is None:
+            if caps.supports_json_schema:
+                method = "json_schema"
+            elif caps.supports_json_mode:
+                method = "json_mode"
+            else:
+                method = caps.preferred_structured_method
+        if method == "function_calling" and not caps.supports_tool_choice:
+            kwargs.setdefault("tool_choice", None)
+        return ChatOpenAI.with_structured_output(self, schema, method=method, **kwargs)
+
+
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "reasoning_effort", "temperature",
@@ -179,6 +233,7 @@ _PROVIDER_BASE_URL = {
     "minimax":    "https://api.minimax.io/v1",
     "minimax-cn": "https://api.minimaxi.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
+    "nvidia":     "https://integrate.api.nvidia.com/v1",
     "ollama":     "http://localhost:11434/v1",
     "ollama-local": "http://localhost:11434/v1",
     "ollama-remote": "http://localhost:11434/v1",
@@ -253,10 +308,12 @@ def _resolve_ollama_headers(provider: str) -> dict[str, str]:
 class OpenAIClient(BaseLLMClient):
     """Client for OpenAI, Ollama, OpenRouter, and xAI providers.
 
-    For native OpenAI models, uses the Responses API (/v1/responses) which
-    supports reasoning_effort with function tools across all model families
-    (GPT-4.1, GPT-5). Third-party compatible providers (xAI, OpenRouter,
-    Ollama) use standard Chat Completions.
+    Uses standard Chat Completions for all providers.  The Responses API
+    (/v1/responses) is deliberately not enabled because its auto-detection
+    of .png strings in tool outputs as image input breaks on non-vision
+    models.  Chat Completions supports ``reasoning_effort`` with function
+    tools across all current OpenAI model families (GPT-4.1, GPT-5, o-series),
+    so there is no capability gap from using Chat Completions.
     """
 
     def __init__(
@@ -312,10 +369,12 @@ class OpenAIClient(BaseLLMClient):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 
-        # Native OpenAI: use Responses API for consistent behavior across
-        # all model families. Third-party providers use Chat Completions.
-        if self.provider == "openai":
-            llm_kwargs["use_responses_api"] = True
+        # Native OpenAI: leave use_responses_api as None (default) so
+        # Chat Completions is used. The Responses API is not required:
+        # Chat Completions supports reasoning_effort with function tools
+        # across all current model families (GPT-4.1, GPT-5, o-series),
+        # and avoids the Responses API's auto-detection of .png strings
+        # as image input (which breaks on non-vision models).
 
         # Provider-specific quirks live in their own subclasses so the
         # base NormalizedChatOpenAI stays free of provider branches.
@@ -325,6 +384,8 @@ class OpenAIClient(BaseLLMClient):
             chat_cls = MinimaxChatOpenAI
         elif self.provider == "openrouter":
             chat_cls = OpenRouterChatOpenAI
+        elif self.provider == "nvidia":
+            chat_cls = NvidiaChatOpenAI
         else:
             chat_cls = NormalizedChatOpenAI
         return chat_cls(**llm_kwargs)

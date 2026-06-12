@@ -2,7 +2,7 @@ import { act, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../api";
-import { LlmPicker, llmConfigToOverrides, useLlmConfig, type LlmConfig } from "./LlmPicker";
+import { LlmPicker, defaultsForProviderSwitch, llmConfigToOverrides, useLlmConfig, type LlmConfig } from "./LlmPicker";
 
 describe("llmConfigToOverrides", () => {
   const base: LlmConfig = {
@@ -39,6 +39,37 @@ describe("llmConfigToOverrides", () => {
   it("passes through a custom backend for non-ollama providers", () => {
     const out = llmConfigToOverrides({ ...base, backendUrl: "https://custom.example/v1" });
     expect(out.backend_url).toBe("https://custom.example/v1");
+  });
+});
+
+describe("defaultsForProviderSwitch", () => {
+  it("uses server .env models when switching to the server-configured provider", () => {
+    const patch = defaultsForProviderSwitch("nvidia", {
+      provider: "nvidia",
+      deepModel: "google/diffusiongemma-26b-a4b-it",
+      quickModel: "google/diffusiongemma-26b-a4b-it",
+      backendUrl: "https://integrate.api.nvidia.com/v1",
+    });
+    expect(patch).toMatchObject({
+      provider: "nvidia",
+      deepModel: "google/diffusiongemma-26b-a4b-it",
+      quickModel: "google/diffusiongemma-26b-a4b-it",
+      backendUrl: "https://integrate.api.nvidia.com/v1",
+    });
+  });
+
+  it("falls back to frontend presets for other providers", () => {
+    const patch = defaultsForProviderSwitch("nvidia", {
+      provider: "deepseek",
+      deepModel: "deepseek-v4-pro",
+      quickModel: "deepseek-v4-flash",
+      backendUrl: "",
+    });
+    expect(patch).toMatchObject({
+      provider: "nvidia",
+      deepModel: "google/gemma-3-27b-it",
+      quickModel: "google/gemma-3-27b-it",
+    });
   });
 });
 

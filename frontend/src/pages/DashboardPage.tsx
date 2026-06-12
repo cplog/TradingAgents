@@ -67,7 +67,7 @@ export function DashboardPage() {
   const jobFromQs = searchParams.get("job")?.trim() ?? "";
   const [ticker, setTicker] = useState(() => tickerFromQs || "AAPL");
   const [date, setDate] = useState("");
-  const { config: llmConfig, setConfig: setLlmConfig, hydrateFromServer: hydrateLlmFromServer, reset: resetLlm } =
+  const { config: llmConfig, setConfig: setLlmConfig, hydrateFromServer: hydrateLlmFromServer, reset: resetLlm, serverDefaults } =
     useLlmConfig();
   const [outputLanguage, setOutputLanguage] = useState("English");
   const [temperature, setTemperature] = useState(0.7);
@@ -293,6 +293,7 @@ export function DashboardPage() {
               value={llmConfig}
               onChange={setLlmConfig}
               onReset={resetLlm}
+              serverDefaults={serverDefaults}
               disabled={jobActive}
             />
             <label className="ui-field">

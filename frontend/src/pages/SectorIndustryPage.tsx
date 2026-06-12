@@ -37,6 +37,7 @@ function formatCatalogAge(epochSeconds: number | null | undefined): {
 type SectorGroup = { sector: string; rows: HistoryCoverageRow[]; run_count: number };
 type MarketFilter = "ALL" | "US" | "HK";
 type ConstituentFilter = "ALL" | "ANALYZED" | "UNANALYZED";
+type IndustryViewMode = "grouped" | "flat";
 
 function sortGroups(coverage: HistoryCoverageRow[]): SectorGroup[] {
   const m = new Map<string, HistoryCoverageRow[]>();
@@ -178,6 +179,7 @@ export function SectorIndustryPage() {
   const [onlyWithRuns, setOnlyWithRuns] = useState(false);
   const [selectedSector, setSelectedSector] = useState<string | null>(null);
   const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null);
+  const [industryViewMode, setIndustryViewMode] = useState<IndustryViewMode>("grouped");
 
   const [marketFilter, setMarketFilter] = useState<MarketFilter>("ALL");
   const [constFilter, setConstFilter] = useState<ConstituentFilter>("ALL");
@@ -251,6 +253,21 @@ export function SectorIndustryPage() {
     const rows = grouped.find((g) => g.sector === selectedSector)?.rows ?? [];
     return onlyWithRuns ? rows.filter((r) => (r.run_count || 0) > 0) : rows;
   }, [grouped, selectedSector, onlyWithRuns]);
+
+  const flatIndustries = useMemo(() => {
+    let rows: HistoryCoverageRow[] = [];
+    for (const g of grouped) {
+      rows = rows.concat(g.rows);
+    }
+    if (onlyWithRuns) rows = rows.filter((r) => (r.run_count || 0) > 0);
+    const q = sectorSearch.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        r.industry.toLowerCase().includes(q) ||
+        (r.sector || "").toLowerCase().includes(q),
+    );
+  }, [grouped, onlyWithRuns, sectorSearch]);
 
   // Auto-select first sector AND industry that have runs; fall back to alphabetical.
   useEffect(() => {
@@ -536,7 +553,7 @@ export function SectorIndustryPage() {
             </div>
             <input
               type="search"
-              placeholder="Filter…"
+              placeholder={industryViewMode === "flat" ? "Filter sectors & industries…" : "Filter sectors…"}
               value={sectorSearch}
               onChange={(e) => setSectorSearch(e.target.value)}
               style={{
@@ -583,15 +600,41 @@ export function SectorIndustryPage() {
           </section>
 
           <section style={panelStyle}>
-            <h2 style={{ margin: "0 0 8px", fontSize: "var(--text-heading-sm)" }}>Industries</h2>
-            {!selectedSector && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 6,
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: "var(--text-heading-sm)" }}>
+                {industryViewMode === "flat" ? "All Industries" : "Industries"}
+              </h2>
+              <div style={{ display: "flex", gap: 4 }}>
+                {([
+                  ["grouped", "By sector"],
+                  ["flat", "All"],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setIndustryViewMode(key)}
+                    style={segBtn(industryViewMode === key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {industryViewMode === "grouped" && !selectedSector && (
               <p style={{ color: "var(--color-ash-gray)", fontSize: "var(--text-body-sm)" }}>
                 Select a sector.
               </p>
             )}
             <div style={{ overflowY: "auto", flex: 1 }}>
               <AnimatePresence mode="wait">
-                {selectedSector && (
+                {industryViewMode === "grouped" && selectedSector && (
                   <motion.div
                     key={selectedSector}
                     initial={{ opacity: 0, y: 4 }}
@@ -599,37 +642,79 @@ export function SectorIndustryPage() {
                     exit={{ opacity: 0, y: -4 }}
                     transition={{ duration: 0.18, ease: [0.25, 1, 0.5, 1] }}
                   >
-                {industriesForSector.length === 0 && (
-                  <p style={{ color: "var(--color-ash-gray)", fontSize: "var(--text-body-sm)" }}>
-                    No matching industries{onlyWithRuns ? " with runs" : ""}.
-                  </p>
+                    {industriesForSector.length === 0 && (
+                      <p style={{ color: "var(--color-ash-gray)", fontSize: "var(--text-body-sm)" }}>
+                        No matching industries{onlyWithRuns ? " with runs" : ""}.
+                      </p>
+                    )}
+                    {industriesForSector.map((r) => {
+                      const active =
+                        selectedSector === r.sector && selectedIndustry === r.industry;
+                      return (
+                        <button
+                          key={`${r.sector}|${r.industry}`}
+                          type="button"
+                          onClick={() => selectIndustry(r.sector, r.industry)}
+                          style={listBtn(active, (r.run_count || 0) > 0)}
+                        >
+                          <div
+                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+                          >
+                            <span>{r.industry}</span>
+                            <RunsPill count={r.run_count || 0} />
+                          </div>
+                          <div
+                            style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}
+                          >
+                            {r.run_count > 0
+                              ? `dims ${r.with_dimensions_count} · notes ${r.with_commentary_count}`
+                              : "no runs yet"}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </motion.div>
                 )}
-                {industriesForSector.map((r) => {
-                  const active =
-                    selectedSector === r.sector && selectedIndustry === r.industry;
-                  return (
-                    <button
-                      key={`${r.sector}|${r.industry}`}
-                      type="button"
-                      onClick={() => selectIndustry(r.sector, r.industry)}
-                      style={listBtn(active, (r.run_count || 0) > 0)}
-                    >
-                      <div
-                        style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
-                      >
-                        <span>{r.industry}</span>
-                        <RunsPill count={r.run_count || 0} />
-                      </div>
-                      <div
-                        style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}
-                      >
-                        {r.run_count > 0
-                          ? `dims ${r.with_dimensions_count} · notes ${r.with_commentary_count}`
-                          : "no runs yet"}
-                      </div>
-                    </button>
-                  );
-                })}
+                {industryViewMode === "flat" && (
+                  <motion.div
+                    key="flat-industries"
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.18, ease: [0.25, 1, 0.5, 1] }}
+                  >
+                    {flatIndustries.length === 0 && (
+                      <p style={{ color: "var(--color-ash-gray)", fontSize: "var(--text-body-sm)" }}>
+                        No matching industries{onlyWithRuns ? " with runs" : ""}.
+                      </p>
+                    )}
+                    {flatIndustries.map((r) => {
+                      const active =
+                        selectedSector === r.sector && selectedIndustry === r.industry;
+                      return (
+                        <button
+                          key={`${r.sector}|${r.industry}`}
+                          type="button"
+                          onClick={() => selectIndustry(r.sector, r.industry)}
+                          style={listBtn(active, (r.run_count || 0) > 0)}
+                        >
+                          <div
+                            style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+                          >
+                            <span>{r.industry}</span>
+                            <RunsPill count={r.run_count || 0} />
+                          </div>
+                          <div
+                            style={{ fontSize: "var(--text-caption)", color: "var(--color-ash-gray)" }}
+                          >
+                            {r.sector}
+                            {r.run_count > 0
+                              ? ` · dims ${r.with_dimensions_count} · notes ${r.with_commentary_count}`
+                              : ""}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -868,23 +953,23 @@ export function SectorIndustryPage() {
                           fontSize: "var(--text-body-lg)",
                           fontWeight: 700,
                           color:
-                            analytics.bloom.bloom_label === "Hot"
+                            analytics.bloom?.bloom_label === "Hot"
                               ? "var(--color-strawberry)"
-                              : analytics.bloom.bloom_label === "Accelerating"
+                              : analytics.bloom?.bloom_label === "Accelerating"
                                 ? "var(--color-amber-readout)"
-                                : analytics.bloom.bloom_label === "Emerging"
+                                : analytics.bloom?.bloom_label === "Emerging"
                                   ? "var(--color-chartwell-blue)"
                                   : "var(--color-ash-gray)",
                         }}
                       >
-                        {analytics.bloom.bloom_label}
-                        {analytics.bloom.bloom_score > 0 && (
+                        {analytics.bloom?.bloom_label ?? "—"}
+                        {(analytics.bloom?.bloom_score ?? 0) > 0 && (
                           <span style={{ fontSize: "var(--text-caption)", fontWeight: 400, color: "var(--color-ash-gray)", marginLeft: 6 }}>
-                            ({Math.round(analytics.bloom.bloom_score)})
+                            ({Math.round(analytics.bloom!.bloom_score)})
                           </span>
                         )}
                       </div>
-                      {analytics.bloom.reasons.length > 0 && (
+                      {analytics.bloom && analytics.bloom.reasons.length > 0 && (
                         <div
                           style={{
                             display: "flex",

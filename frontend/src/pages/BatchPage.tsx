@@ -86,7 +86,7 @@ export function BatchPage() {
   const [sortKey, setSortKey] = useState<keyof FactorScores | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [searchParams, setSearchParams] = useSearchParams();
-  const { config: llmConfig, setConfig: setLlmConfig, hydrateFromServer: hydrateLlmFromServer, reset: resetLlm } =
+  const { config: llmConfig, setConfig: setLlmConfig, hydrateFromServer: hydrateLlmFromServer, reset: resetLlm, serverDefaults } =
     useLlmConfig();
 
   useEffect(() => {
@@ -305,7 +305,7 @@ export function BatchPage() {
       <details open className="batch-details">
         <summary className="batch-details__summary">LLM routing</summary>
         <div className="batch-details__body">
-          <LlmPicker value={llmConfig} onChange={setLlmConfig} onReset={resetLlm} variant="compact" />
+          <LlmPicker value={llmConfig} onChange={setLlmConfig} onReset={resetLlm} serverDefaults={serverDefaults} variant="compact" />
         </div>
       </details>
       <div className="section-gap-sm">

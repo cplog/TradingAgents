@@ -23,23 +23,16 @@ logger = logging.getLogger(__name__)
 
 
 _OLLAMA_PROVIDERS = ("ollama", "ollama-local", "ollama-remote")
+_NVIDIA_PROVIDERS = ("nvidia",)
 
 
-class _OllamaStructuredAdapter:
-    """Forward everything to the inner LLM except `with_structured_output`.
-
-    For Ollama we want json_schema first (server-side schema enforcement on
-    Ollama ≥0.5), then json_mode (universal OpenAI-compat baseline). Bind-time
-    failures are rare — LangChain validates the method literal but does not
-    talk to the provider — so this try/except is mostly defense-in-depth.
-    """
+class _JsonSchemaStructuredAdapter:
+    """Prefer response_format structured output over tool binding."""
 
     def __init__(self, llm: Any) -> None:
         self._llm = llm
 
     def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
-        # Strip caller-supplied method; the whole point of this wrapper is to
-        # override the function_calling default.
         kwargs.pop("method", None)
         try:
             return self._llm.with_structured_output(
@@ -47,25 +40,28 @@ class _OllamaStructuredAdapter:
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.info(
-                "Ollama json_schema bind rejected (%s); retrying json_mode",
+                "json_schema bind rejected (%s); retrying json_mode",
                 exc,
             )
             return self._llm.with_structured_output(
                 schema, method="json_mode", **kwargs
             )
 
-    # Transparent proxy for everything else (invoke, model_name, kwargs, …).
     def __getattr__(self, name: str) -> Any:
         return getattr(self._llm, name)
 
 
-def adapt_for_structured_output(llm: Any, provider: str) -> Any:
-    """Return `llm` wrapped if `provider` is Ollama-style; else unchanged.
+class _OllamaStructuredAdapter(_JsonSchemaStructuredAdapter):
+    """Backward-compatible alias for Ollama structured-output routing."""
 
-    Wrapping is cheap and transparent — non-dimensions code paths that use
-    `llm.invoke(...)` or `llm.bind_tools(...)` see the same object behavior.
-    Only `with_structured_output` is intercepted.
+
+def adapt_for_structured_output(llm: Any, provider: str) -> Any:
+    """Return `llm` wrapped when tool-based structured output is unreliable.
+
+    Ollama and NVIDIA NIM both reject LangChain's default function-calling
+    binding; json_schema/json_mode via response_format is more reliable.
     """
-    if (provider or "").lower() in _OLLAMA_PROVIDERS:
-        return _OllamaStructuredAdapter(llm)
+    p = (provider or "").lower()
+    if p in _OLLAMA_PROVIDERS or p in _NVIDIA_PROVIDERS:
+        return _JsonSchemaStructuredAdapter(llm)
     return llm

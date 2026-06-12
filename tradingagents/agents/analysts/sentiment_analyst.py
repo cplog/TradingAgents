@@ -32,6 +32,8 @@ from tradingagents.agents.utils.agent_utils import (
     get_news,
     sanitize_messages_for_tool_api,
 )
+from tradingagents.dataflows.hackernews import fetch_hackernews_stories
+from tradingagents.dataflows.hot_board import fetch_polymarket_for_ticker
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
 
@@ -74,12 +76,18 @@ def create_sentiment_analyst(llm):
         start_date = _seven_days_back(end_date)
         instrument_context = get_instrument_context_from_state(state)
 
-        # Pre-fetch all three sources. Each fetcher degrades gracefully and
+        # Pre-fetch all sources. Each fetcher degrades gracefully and
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
         stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
         reddit_block = fetch_reddit_posts(
+            ticker, additional_queries=_reddit_extra_queries(ticker)
+        )
+        hn_block = fetch_hackernews_stories(
+            ticker, additional_queries=_reddit_extra_queries(ticker)
+        )
+        polymarket_block = fetch_polymarket_for_ticker(
             ticker, additional_queries=_reddit_extra_queries(ticker)
         )
 
@@ -90,6 +98,8 @@ def create_sentiment_analyst(llm):
             news_block=news_block,
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
+            hn_block=hn_block,
+            polymarket_block=polymarket_block,
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -131,9 +141,11 @@ def _build_system_message(
     news_block: str,
     stocktwits_block: str,
     reddit_block: str,
+    hn_block: str,
+    polymarket_block: str,
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
-    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
+    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on five complementary data sources that have already been collected for you.
 
 ## Data sources (pre-fetched, in this prompt)
 
@@ -144,7 +156,13 @@ Headlines from routed news tools (typically Yahoo Finance first; **Finnhub** oft
 Fast-moving retail tone. **Coverage is strongest for US-listed symbols**; many Hong Kong and other non-US suffixes have no reliable stream—if the block says skipped or empty, do not infer “no interest” beyond “this venue had no data.”
 
 ### Reddit posts — r/wallstreetbets, r/stocks, r/investing (past 7 days)
-Community discussion. Search uses the exact ticker **plus** yfinance ``shortName`` / ``longName`` when available, so HK names may match threads that never typed ``6060.HK``. Engagement (upvotes/comments) still matters.
+Community discussion. Search uses the exact ticker **plus** yfinance ``shortName`` / ``longName`` when available, so HK names may match threads that never typed the ticker symbol. Engagement (upvotes/comments) still matters.
+
+### Hacker News — developer community sentiment (past 7 days)
+Tech / SaaS / semiconductor signal. HN discussion is a leading indicator for developer-adjacent tickers (NVDA, AMD, cloud names, etc.). Points and comment counts reflect engineer attention. For non-tech tickers this block may show a skip message — that is expected.
+
+### Polymarket — prediction market odds (real money, no key needed)
+Active markets filtered by ticker/company keywords. These are **harder to manipulate** than social sentiment because they are backed by real-money bets. Look for earnings, price-target, or event markets. Odds are expressed as probabilities (e.g., Yes=72%). Volume and liquidity indicate market confidence.
 
 <start_of_news>
 {news_block}
@@ -158,6 +176,14 @@ Community discussion. Search uses the exact ticker **plus** yfinance ``shortName
 {reddit_block}
 <end_of_reddit>
 
+<start_of_hackernews>
+{hn_block}
+<end_of_hackernews>
+
+<start_of_polymarket>
+{polymarket_block}
+<end_of_polymarket>
+
 ## How to analyze this data (best practices)
 
 1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone.
@@ -166,22 +192,26 @@ Community discussion. Search uses the exact ticker **plus** yfinance ``shortName
 
 3. **Weight Reddit posts by engagement.** A 400-upvote / 200-comment thread reflects community attention; a 3-upvote post is noise. Read the body excerpts for context — the title alone often misleads.
 
-4. **Distinguish opinion from event.** A news headline ("Nvidia announces $500M Corning deal") is an event; a StockTwits post ("buying NVDA, this is going to moon") is opinion. Both are inputs but should be weighted differently in your conclusions.
+4. **Weight HN stories by points and comments.** A 200-point / 100-comment story reflects serious developer interest; a 3-point story is noise. For tech tickers, HN often surfaces technical risks or product signals before mainstream media.
 
-5. **Identify recurring narrative themes.** What topic keeps coming up across sources? That's the dominant narrative driving current sentiment.
+5. **Read Polymarket odds as conviction-weighted forecasts.** High volume + high probability = strong consensus. Low volume means the market is thin and the odds are less reliable. Compare Polymarket odds to analyst consensus — divergences are alpha.
 
-6. **Be honest about data limits.** If StockTwits returned only a handful of messages, or one or more sources returned an "<unavailable>" placeholder, the sentiment read is less robust — flag this caveat explicitly. If the sources are silent on a given subreddit, say so.
+6. **Distinguish opinion from event.** A news headline ("Nvidia announces $500M Corning deal") is an event; a StockTwits post ("buying NVDA, this is going to moon") is opinion. Both are inputs but should be weighted differently in your conclusions.
 
-7. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
+7. **Identify recurring narrative themes.** What topic keeps coming up across sources? That's the dominant narrative driving current sentiment.
 
-8. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call.
+8. **Be honest about data limits.** If one or more sources returned a "<skipped>" or "<unavailable>" placeholder, the sentiment read is less robust — flag this caveat explicitly. If a source is silent, say so.
+
+9. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
+
+10. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call.
 
 ## Output
 
 Produce a sentiment report covering, in order:
 
 1. **Overall sentiment direction** — Bullish / Bearish / Neutral / Mixed — with a brief confidence note based on data quality and sample size.
-2. **Source-by-source breakdown** — what each of news / StockTwits / Reddit is telling you, with specific evidence (cite message counts, ratios, notable posts).
+2. **Source-by-source breakdown** — what each of news / StockTwits / Reddit / HN / Polymarket is telling you, with specific evidence (cite message counts, ratios, notable posts, odds).
 3. **Divergences, alignments, and key narratives** across sources.
 4. **Catalysts and risks** surfaced by the data.
 5. **Markdown table** at the end summarizing key sentiment signals, their direction, source, and supporting evidence.

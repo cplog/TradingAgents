@@ -70,6 +70,25 @@ def create_portfolio_manager(llm):
 - **Underweight**: Reduce exposure, take partial profits
 - **Sell**: Exit position or avoid entry
 
+**Conviction Score** (0-100, required):
+Rate your conviction honestly alongside the rating:
+- 0-30: Very low — evidence is thin or highly conflicting
+- 31-50: Low — one side has a slight edge but uncertainty is high
+- 51-70: Moderate — reasonable evidence for the call
+- 71-85: High — multiple consistent signals point the same way
+- 86-100: Very high — exceptionally clear setup (use sparingly)
+
+Calibrate your score against the evidence you actually have. Most decisions should fall 51-85.
+
+**Evidence Weighting Rules:**
+Rank evidence sources by reliability (highest to lowest):
+1. Quantitative data from tools (price levels, ratios, peer percentiles, dimensions pillar scores)
+2. Dimensions snapshot structured scores (directly comparable cross-sector)
+3. Analyst reports grounded in specific tool outputs
+4. Analyst opinions without supporting data (lowest weight)
+
+When sources conflict, explicitly note the contradiction and explain which source you trust more and why.
+
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**

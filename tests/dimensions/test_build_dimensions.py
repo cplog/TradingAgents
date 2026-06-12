@@ -149,7 +149,7 @@ def test_build_dimensions_falls_back_to_neutral_when_scoring_unavailable(monkeyp
     def _boom(**_kwargs):
         raise PillarScoringError("Unexpected scoring result type: NoneType")
 
-    monkeypatch.setattr("api.dimensions.builder.score_pillars", _boom)
+    monkeypatch.setattr("api.dimensions.builder.score_pillars_separate", _boom)
 
     out = build_dimensions(
         ticker="BABA", as_of_date="2026-05-14",

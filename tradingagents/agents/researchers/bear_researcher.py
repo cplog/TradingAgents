@@ -19,6 +19,12 @@ def create_bear_researcher(llm):
 
         prompt = f"""You are a Bear Analyst making the case against investing in the stock. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
+**Evidence Requirements — you MUST:**
+1. Cite at least 3 specific data points (exact numbers, prices, ratios, or percentages) from the analyst reports. E.g., "P/E ratio of 45x is 2x the industry average", not "valuation is expensive".
+2. For each claim, name the source report (e.g., "Fundamentals report shows debt-to-equity at 3.2x").
+3. When countering the bull, reference their specific argument and provide a counter-data-point rather than just dismissing it.
+4. State 1-2 conditions that would invalidate your bear case.
+
 Key points to focus on:
 
 - Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.

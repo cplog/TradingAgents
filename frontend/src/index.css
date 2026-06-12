@@ -4560,9 +4560,9 @@ code,
 .topics-candidate-row {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-8);
+  gap: var(--spacing-6);
   align-items: flex-start;
-  padding-bottom: var(--spacing-12);
+  padding-bottom: var(--spacing-10);
   border-bottom: 1px solid var(--color-stone-border);
 }
 .topics-candidate-row__main {
@@ -4570,6 +4570,28 @@ code,
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-8);
+  flex: 0 0 auto;
+}
+.topics-candidate-row__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-8);
+  flex: 1 1 auto;
+  font-size: var(--text-caption);
+}
+.topics-candidate-row__metric {
+  font-weight: 600;
+}
+.topics-candidate-row__metric[data-change="up"] {
+  color: var(--color-sage);
+}
+.topics-candidate-row__metric[data-change="down"] {
+  color: var(--color-danger);
+}
+.topics-candidate-row__metric--muted {
+  font-weight: 400;
+  color: var(--color-ash-gray);
 }
 .topics-candidate-row__meta {
   display: flex;
@@ -4589,12 +4611,32 @@ code,
 .topics-candidate-row__confidence {
   font-weight: 600;
   color: var(--color-phosphor);
+  font-size: var(--text-caption);
 }
 .topics-candidate-row__rationale {
   flex: 1 1 100%;
   margin: 4px 0 0;
   font-size: var(--text-caption);
   color: var(--color-ash-gray);
+}
+.topics-card__price {
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+.topics-card__change {
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+.topics-card__change[data-up="true"] {
+  color: var(--color-sage);
+}
+.topics-card__change[data-up="false"] {
+  color: var(--color-danger);
+}
+.topics-card__conf {
+  font-size: var(--text-caption);
+  color: var(--color-phosphor);
+  font-weight: 600;
 }
 .topics-market-badge {
   font-size: 10px;
@@ -4882,5 +4924,112 @@ code,
   .app-shell__grain {
     animation: none !important;
   }
+}
+
+/* ===================================================================
+   Regime Banner — HPM regime breakdown on Topics page
+   =================================================================== */
+
+.regime-banner {
+  background: #0d1b2a;
+  border: 1px solid #1b3a5c;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: #c8d6e5;
+}
+
+.regime-banner__header {
+  margin-bottom: 0.75rem;
+  font-size: 0.95rem;
+}
+
+.regime-banner__header strong {
+  text-transform: capitalize;
+  color: #e8eff5;
+}
+
+.regime-banner__timestamp {
+  margin-left: 1rem;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.regime-banner__signals {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
+}
+
+.regime-banner__signal-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.regime-banner__signal-name {
+  width: 7rem;
+  flex-shrink: 0;
+  text-transform: capitalize;
+  font-size: 0.8rem;
+  color: #a0b4c8;
+}
+
+.regime-banner__signal-bar {
+  flex: 1;
+  height: 0.5rem;
+  background: #1a2d44;
+  border-radius: 4px;
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.regime-banner__signal-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #3a7bd5, #5eb0f0);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.regime-banner__signal-score {
+  width: 2.4rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: #c8d6e5;
+}
+
+.regime-banner__signal-direction {
+  width: 1rem;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.regime-banner__signal-direction--up {
+  color: #4ade80;
+}
+
+.regime-banner__signal-direction--down {
+  color: #f87171;
+}
+
+.regime-banner__signal-direction--flat {
+  color: #94a3b8;
+}
+
+.regime-banner__footnote {
+  font-size: 0.8rem;
+  color: #8899b0;
+  margin-top: 0.25rem;
+  line-height: 1.6;
+}
+
+.regime-banner__footnote strong {
+  color: #a0b4c8;
 }
 

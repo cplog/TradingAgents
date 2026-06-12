@@ -431,12 +431,25 @@ def create_msg_delete():
     return delete_messages
 
 
-def invoke_tool_chain_with_openrouter_fallback(chain, llm, messages):
-    """Invoke a tool-bound chain, with OpenRouter fallback when no tool route exists.
+def _tool_routing_rejected(exc: Exception) -> bool:
+    """True when the provider/model rejected LangChain tool binding."""
+    err = str(exc).lower()
+    if "no endpoints found that support tool use" in err:
+        return True
+    # NVIDIA NIM (integrate.api.nvidia.com): Function '<uuid>': Not found for account '...'
+    if "function '" in err and "not found" in err:
+        return True
+    if "does not support tool" in err:
+        return True
+    return False
 
-    Some OpenRouter routes return:
-    ``No endpoints found that support tool use``.
-    In that case we retry once without tool binding so the run completes
+
+def invoke_tool_chain_with_openrouter_fallback(chain, llm, messages):
+    """Invoke a tool-bound chain, falling back when the route rejects tool use.
+
+    OpenRouter may return ``No endpoints found that support tool use``.
+    NVIDIA NIM returns HTTP 404 with ``Function '<uuid>': Not found for account``.
+    In those cases we retry once without tool binding so the run completes
     (with reduced grounding) instead of crashing the whole graph.
     """
     messages = sanitize_messages_for_tool_api(list(messages))
@@ -446,13 +459,12 @@ def invoke_tool_chain_with_openrouter_fallback(chain, llm, messages):
         from tradingagents.dataflows.config import get_config
 
         provider = str(get_config().get("llm_provider", "")).strip().lower()
-        if provider != "openrouter":
-            raise
-        err = str(exc)
-        if "No endpoints found that support tool use" not in err:
+        if provider not in ("openrouter", "nvidia") or not _tool_routing_rejected(exc):
             raise
         logger.warning(
-            "OpenRouter route rejected tool use; retrying analyst step without tools"
+            "%s route rejected tool use (%s); retrying analyst step without tools",
+            provider,
+            exc,
         )
         fallback_instruction = HumanMessage(
             content=(
