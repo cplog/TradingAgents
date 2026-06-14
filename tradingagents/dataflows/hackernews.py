@@ -30,10 +30,25 @@ _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
 _HN_RELEVANT_KEYWORDS = frozenset({
     "AI", "GPU", "CHIP", "SEMICONDUCTOR", "SOFTWARE", "SAAS", "CLOUD",
     "DATACENTER", "SERVER", "CRYPTO", "BLOCKCHAIN", "FINTECH",
-    "TESLA", "NVIDIA", "APPLE", "GOOGLE", "AMAZON", "META", "MICROSOFT",
-    "NETFLIX", "SPOTIFY", "UBER", "AIRBNB", "SNOWFLAKE", "PALANTIR",
-    "AMD", "INTEL", "QUALCOMM", "BROADCOM", "MICRON", "MARVELL",
+    "TESLA", "NVIDIA", "NVDA", "APPLE", "AAPL", "GOOGLE", "GOOGL", "ALPHABET",
+    "AMAZON", "AMZN", "META", "MICROSOFT", "MSFT",
+    "NETFLIX", "NFLX", "SPOTIFY", "SPOT", "UBER", "AIRBNB", "ABNB",
+    "SNOWFLAKE", "SNOW", "PALANTIR", "PLTR",
+    "AMD", "INTEL", "INTC", "QUALCOMM", "QCOM", "BROADCOM", "AVGO",
+    "MICRON", "MU", "MARVELL", "MRVL",
     "CRDO", "VST", "OKLO", "COREWEAVE", "DATABRICKS",
+    "SALESFORCE", "CRM", "ORACLE", "ORCL", "SHOPIFY", "SHOP",
+    "BLOCK", "SQ", "PAYPAL", "PYPL", "COINBASE", "COIN",
+    "DATADOG", "DDOG", "CROWDSTRIKE", "CRWD", "CLOUDFLARE", "NET",
+    "FASTLY", "FSLY", "OKTA", "ZOOM", "ZM", "DOCUSIGN", "DOCU",
+    "UNITY", "U", "ROBLOX", "RBLX",
+    "LYFT", "DOORDASH", "DASH", "ROBINHOOD", "HOOD",
+    "SOFI", "AFFIRM", "AFRM", "RIVIAN", "RIVN", "LUCID", "LCID",
+    "NIO", "XPENG", "XPEV", "LI", "BIDU", "BAIDU",
+    "ALIBABA", "BABA", "JD", "PDD", "TENCENT", "TCEHY",
+    "NETEASE", "NTES", "SEA", "SE", "GRAB", "GRAB",
+    "GITLAB", "GTLB", "SENTINELONE", "S", "MONGODB", "MDB",
+    "CONFLUENT", "CFLT", "CEG",
 })
 
 

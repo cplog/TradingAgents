@@ -33,8 +33,10 @@ had no data."
 
 Community discussion. Search uses the exact ticker **plus** yfinance
 ``shortName`` / ``longName`` when available, so HK names may match threads
-that never typed the ticker symbol. Engagement (upvotes/comments) still
-matters.
+that never typed the ticker symbol. Engagement (upvotes/comments) is shown
+when available; if you see ``?↑`` / ``?c`` the post was fetched via Reddit's
+RSS fallback and engagement metrics are unavailable — weight by recency and
+body content instead.
 
 ### Hacker News — Developer Community Sentiment (Past 7 Days)
 
@@ -84,9 +86,11 @@ confidence.
    — it can mean retail is leaning into a thesis the news flow hasn't
    caught up to (or vice versa).
 
-3. **Weight Reddit posts by engagement.** A 400-upvote / 200-comment
-   thread reflects community attention; a 3-upvote post is noise. Read
-   body excerpts for context — titles alone often mislead.
+3. **Weight Reddit posts by engagement when available.** A 400-upvote /
+   200-comment thread reflects community attention; a 3-upvote post is noise.
+   If engagement shows ``?↑`` / ``?c`` (RSS fallback), weight by recency and
+   body content instead. Read body excerpts for context — titles alone often
+   mislead.
 
 4. **Weight HN stories by points and comments.** A 200-point /
    100-comment story reflects serious developer interest; a 3-point story

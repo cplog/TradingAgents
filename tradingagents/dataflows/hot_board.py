@@ -160,6 +160,70 @@ def fetch_polymarket_markets(limit: int = 15) -> str:
     return "\n".join(lines)
 
 
+def _is_active_polymarket_market(m: dict) -> bool:
+    """Return True if a market dict looks open and tradable."""
+    if not isinstance(m, dict):
+        return False
+    # ``closed`` and ``archived`` are more reliable than ``active`` alone.
+    if m.get("closed") is True or m.get("archived") is True:
+        return False
+    return True
+
+
+def _market_matches_keywords(market: dict, event: dict, keywords: list[str]) -> bool:
+    """Check whether a market or its parent event mentions any keyword."""
+    text_parts = [
+        str(market.get("question") or ""),
+        str(market.get("title") or ""),
+        str(market.get("description") or ""),
+        str(event.get("title") or ""),
+        str(event.get("description") or ""),
+        str(event.get("ticker") or ""),
+        str(event.get("slug") or ""),
+    ]
+    text = " ".join(text_parts).upper()
+    return any(kw in text for kw in keywords)
+
+
+def _parse_json_field(value: Any) -> Any:
+    """Parse a JSON-encoded string (common in Polymarket search responses)."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            pass
+    return value
+
+
+def _format_polymarket_market(m: dict) -> str | None:
+    """Format a single Polymarket market as a markdown bullet."""
+    q = str(m.get("question") or m.get("title") or "").strip()
+    if not q:
+        return None
+    vol = m.get("volume")
+    liq = m.get("liquidity")
+    slug = str(m.get("slug") or "").strip()
+    outcomes = _parse_json_field(m.get("outcomes")) or []
+    prices = _parse_json_field(m.get("outcomePrices")) or []
+    extra: list[str] = []
+    if vol is not None:
+        extra.append(f"vol={vol}")
+    if liq is not None:
+        extra.append(f"liq={liq}")
+    # Show outcome probabilities when available
+    for o, p in zip(outcomes, prices):
+        if o and p is not None:
+            try:
+                prob = float(p)
+                extra.append(f"{o}={prob:.0%}")
+            except (TypeError, ValueError):
+                extra.append(f"{o}={p}")
+    suffix = f" ({', '.join(extra)})" if extra else ""
+    if slug:
+        return f"- **{q}**{suffix} — https://polymarket.com/event/{slug}"
+    return f"- **{q}**{suffix}"
+
+
 def fetch_polymarket_for_ticker(
     ticker: str,
     additional_queries: list[str] | None = None,
@@ -167,9 +231,9 @@ def fetch_polymarket_for_ticker(
 ) -> str:
     """Return Polymarket markets relevant to a specific ticker or company.
 
-    Fetches active markets from the Gamma API and filters by keyword
-    matching against ``ticker`` and any ``additional_queries`` (e.g.
-    company name).  No API key required.
+    Uses Polymarket's full-text ``/public-search`` endpoint (no API key),
+    which is far more precise than fetching a small snapshot of all markets
+    and filtering client-side.
     """
     keywords = [ticker.strip().upper()]
     if additional_queries:
@@ -179,29 +243,42 @@ def fetch_polymarket_for_ticker(
                 keywords.append(q)
 
     lim = max(1, min(int(limit or 15), 100))
-    url = "https://gamma-api.polymarket.com/markets"
-    params = {"active": "true", "closed": "false", "limit": lim}
-    try:
-        resp = requests.get(url, params=params, timeout=25)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        return f"Polymarket request failed: {exc}"
+    url = "https://gamma-api.polymarket.com/public-search"
 
-    if not isinstance(data, list):
-        return "Polymarket returned an unexpected payload."
-
+    seen: set[str] = set()
     matches: list[dict] = []
-    for m in data:
-        if not isinstance(m, dict):
-            continue
-        q = str(m.get("question") or m.get("title") or "").strip()
-        desc = str(m.get("description") or "").strip()
-        text = f"{q} {desc}".upper()
-        if any(kw in text for kw in keywords):
-            matches.append(m)
+    for kw in keywords:
         if len(matches) >= limit:
             break
+        params = {"q": kw, "limit": lim}
+        try:
+            resp = requests.get(url, params=params, timeout=25)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            return f"Polymarket request failed: {exc}"
+
+        if not isinstance(data, dict):
+            return "Polymarket returned an unexpected payload."
+
+        events = data.get("events") or []
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            for m in ev.get("markets") or []:
+                if not _is_active_polymarket_market(m):
+                    continue
+                mid = str(m.get("id") or m.get("slug") or "")
+                if not mid or mid in seen:
+                    continue
+                if not _market_matches_keywords(m, ev, keywords):
+                    continue
+                seen.add(mid)
+                matches.append(m)
+                if len(matches) >= limit:
+                    break
+            if len(matches) >= limit:
+                break
 
     if not matches:
         return (
@@ -210,32 +287,9 @@ def fetch_polymarket_for_ticker(
 
     lines: List[str] = [f"### Polymarket markets related to {ticker}", ""]
     for m in matches:
-        q = str(m.get("question") or m.get("title") or "").strip()
-        if not q:
-            continue
-        vol = m.get("volume")
-        liq = m.get("liquidity")
-        slug = str(m.get("slug") or "").strip()
-        outcomes = m.get("outcomes") or []
-        prices = m.get("outcomePrices") or []
-        extra: list[str] = []
-        if vol is not None:
-            extra.append(f"vol={vol}")
-        if liq is not None:
-            extra.append(f"liq={liq}")
-        # Show Yes/No probabilities when available
-        for o, p in zip(outcomes, prices):
-            if o and p is not None:
-                try:
-                    prob = float(p)
-                    extra.append(f"{o}={prob:.0%}")
-                except (TypeError, ValueError):
-                    extra.append(f"{o}={p}")
-        suffix = f" ({', '.join(extra)})" if extra else ""
-        if slug:
-            lines.append(f"- **{q}**{suffix} — https://polymarket.com/event/{slug}")
-        else:
-            lines.append(f"- **{q}**{suffix}")
+        formatted = _format_polymarket_market(m)
+        if formatted:
+            lines.append(formatted)
 
     return "\n".join(lines)
 

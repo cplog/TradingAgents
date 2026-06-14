@@ -156,7 +156,7 @@ Headlines from routed news tools (typically Yahoo Finance first; **Finnhub** oft
 Fast-moving retail tone. **Coverage is strongest for US-listed symbols**; many Hong Kong and other non-US suffixes have no reliable stream—if the block says skipped or empty, do not infer “no interest” beyond “this venue had no data.”
 
 ### Reddit posts — r/wallstreetbets, r/stocks, r/investing (past 7 days)
-Community discussion. Search uses the exact ticker **plus** yfinance ``shortName`` / ``longName`` when available, so HK names may match threads that never typed the ticker symbol. Engagement (upvotes/comments) still matters.
+Community discussion. Search uses the exact ticker **plus** yfinance ``shortName`` / ``longName`` when available, so HK names may match threads that never typed the ticker symbol. Engagement (upvotes/comments) is shown when available; if you see ``?↑`` / ``?c`` the post was fetched via Reddit's RSS fallback and engagement metrics are unavailable — weight by recency and body content instead.
 
 ### Hacker News — developer community sentiment (past 7 days)
 Tech / SaaS / semiconductor signal. HN discussion is a leading indicator for developer-adjacent tickers (NVDA, AMD, cloud names, etc.). Points and comment counts reflect engineer attention. For non-tech tickers this block may show a skip message — that is expected.
@@ -190,7 +190,7 @@ Active markets filtered by ticker/company keywords. These are **harder to manipu
 
 2. **Look for cross-source divergences.** If news framing is bearish but StockTwits is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa, that retail is chasing while institutions are cautious).
 
-3. **Weight Reddit posts by engagement.** A 400-upvote / 200-comment thread reflects community attention; a 3-upvote post is noise. Read the body excerpts for context — the title alone often misleads.
+3. **Weight Reddit posts by engagement when available.** A 400-upvote / 200-comment thread reflects community attention; a 3-upvote post is noise. If engagement shows ``?↑`` / ``?c`` (RSS fallback), weight by recency and body content instead. Read the body excerpts for context — the title alone often misleads.
 
 4. **Weight HN stories by points and comments.** A 200-point / 100-comment story reflects serious developer interest; a 3-point story is noise. For tech tickers, HN often surfaces technical risks or product signals before mainstream media.
 
