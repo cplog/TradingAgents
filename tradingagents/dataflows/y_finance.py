@@ -1,10 +1,18 @@
-from typing import Annotated
 from datetime import datetime
-from dateutil.relativedelta import relativedelta
+from typing import Annotated
+
 import pandas as pd
 import yfinance as yf
-import os
-from .stockstats_utils import StockstatsUtils, _clean_dataframe, yf_retry, load_ohlcv, filter_financials_by_date
+from dateutil.relativedelta import relativedelta
+
+from .stockstats_utils import (
+    StockstatsUtils,
+    _assert_ohlcv_not_stale,
+    filter_financials_by_date,
+    load_ohlcv,
+    yf_retry,
+)
+from .symbol_utils import NoMarketDataError, normalize_symbol
 
 def get_YFin_data_online(
     symbol: Annotated[str, "ticker symbol of the company"],
@@ -13,23 +21,34 @@ def get_YFin_data_online(
 ):
 
     datetime.strptime(start_date, "%Y-%m-%d")
-    datetime.strptime(end_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-    # Create ticker object
-    ticker = yf.Ticker(symbol.upper())
+    # Resolve broker/forex symbols to Yahoo's convention (XAUUSD+ -> GC=F).
+    canonical = normalize_symbol(symbol)
+    ticker = yf.Ticker(canonical)
 
-    # Fetch historical data for the specified date range
-    data = yf_retry(lambda: ticker.history(start=start_date, end=end_date))
+    # yfinance treats ``end`` as EXCLUSIVE, so it would drop the requested
+    # end_date row (and the current day when end_date is today). Request one day
+    # past end_date so the requested range is actually inclusive (#986/#987).
+    end_inclusive = (end_dt + relativedelta(days=1)).strftime("%Y-%m-%d")
+    data = yf_retry(lambda: ticker.history(start=start_date, end=end_inclusive))
 
-    # Check if data is empty
+    # Empty result means the symbol is unknown/delisted. Raise a typed error
+    # instead of returning prose: the routing layer turns it into a single
+    # unambiguous "no data" signal so the agent never fabricates a price.
     if data.empty:
-        return (
-            f"No data found for symbol '{symbol}' between {start_date} and {end_date}"
+        raise NoMarketDataError(
+            symbol, canonical, f"no rows between {start_date} and {end_date}"
         )
 
     # Remove timezone info from index for cleaner output
     if data.index.tz is not None:
         data.index = data.index.tz_localize(None)
+
+    # Reject a stale frame (e.g. a year-old partial response) before it is
+    # formatted into the report. Raises NoMarketDataError, which the router
+    # turns into one clear unavailable signal (#1021).
+    _assert_ohlcv_not_stale(data, end_date, symbol, canonical)
 
     # Round numerical values to 2 decimal places for cleaner display
     numeric_columns = ["Open", "High", "Low", "Close", "Adj Close"]
@@ -40,8 +59,10 @@ def get_YFin_data_online(
     # Convert DataFrame to CSV string
     csv_string = data.to_csv()
 
-    # Add header information
-    header = f"# Stock data for {symbol.upper()} from {start_date} to {end_date}\n"
+    # Add header information; note the resolved symbol when it differs so the
+    # agent (and user) can see which instrument was actually priced.
+    display_symbol = canonical if canonical != symbol.upper() else symbol.upper()
+    header = f"# Stock data for {display_symbol} from {start_date} to {end_date}\n"
     header += f"# Total records: {len(data)}\n"
     header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 

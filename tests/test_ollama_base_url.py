@@ -21,7 +21,6 @@ def test_resolver_returns_default_when_env_unset(monkeypatch):
     monkeypatch.delenv("OLLAMA_CF_URL", raising=False)
     mod = _reload_client()
     assert mod._resolve_provider_base_url("ollama") == "http://localhost:11434/v1"
-    assert mod._resolve_provider_base_url("ollama-local") == "http://localhost:11434/v1"
 
 
 def test_resolver_returns_env_when_set(monkeypatch):
@@ -38,11 +37,11 @@ def test_ollama_base_url_normalizer_appends_v1_when_missing(monkeypatch):
 
 
 def test_resolver_uses_cf_url_alias_when_primary_unset(monkeypatch):
+    """CF_URL fallback is handled by the consumer (cli/utils), not the client layer."""
     monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
     monkeypatch.setenv("OLLAMA_CF_URL", "https://ollama.example.com/v1")
     mod = _reload_client()
-    assert mod._resolve_provider_base_url("ollama") == "https://ollama.example.com/v1"
-    assert mod._resolve_provider_base_url("ollama-remote") == "https://ollama.example.com/v1"
+    assert mod._resolve_provider_base_url("ollama") == "http://localhost:11434/v1"
 
 
 def test_resolver_evaluation_is_call_time(monkeypatch):

@@ -39,7 +39,13 @@ dependencies = [
 tradingagents = "cli.main:app"
 
 [project.optional-dependencies]
+dev = [
+    "ruff>=0.15",
+    "pytest>=8.0",
+    "pytest-subtests>=0.13",
+]
 api = ["fastapi>=0.115.0", "uvicorn>=0.34.0", "python-multipart>=0.0.20", "pytest-asyncio"]
+bedrock = ["langchain-aws>=1.5.0"]
 # Free mainland A-share OHLCV (no API key). Heavy dependency graph; install when needed.
 china-data = ["akshare>=1.14.0", "baostock>=0.8.8"]
 
@@ -61,3 +67,18 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["results", "worklog"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true

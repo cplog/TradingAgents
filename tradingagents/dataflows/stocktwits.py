@@ -14,6 +14,7 @@ network call succeeded.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 from datetime import datetime, timezone
@@ -78,6 +79,9 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
     except (URLError, json.JSONDecodeError, TimeoutError) as exc:
         logger.warning("StockTwits fetch failed for %s: %s", ticker, exc)
         return f"<stocktwits unavailable: {type(exc).__name__}>"
+    except http.client.HTTPException as exc:
+        logger.warning("StockTwits transport error for %s: %s", ticker, exc)
+        return f"<stocktwits unavailable: transport error>"
 
     messages = data.get("messages", []) if isinstance(data, dict) else []
     if not messages:

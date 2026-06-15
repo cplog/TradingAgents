@@ -1,15 +1,7 @@
-import logging
 import os
-import re
-from typing import Any, Optional
-
-logger = logging.getLogger(__name__)
-
-# Error patterns from OpenAI Responses API when it auto-detects image-like
-# strings in text content and the model does not support vision.
-_RESPONSES_IMAGE_ERROR_RE = re.compile(
-    r"does not support image|image\.png|image_url"
-)
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import urlparse
 
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
@@ -40,22 +32,7 @@ class NormalizedChatOpenAI(ChatOpenAI):
     """
 
     def invoke(self, input, config=None, **kwargs):
-        if not self.use_responses_api:
-            return normalize_content(super().invoke(input, config, **kwargs))
-        try:
-            return normalize_content(super().invoke(input, config, **kwargs))
-        except Exception as exc:
-            err_str = str(exc).lower()
-            if _RESPONSES_IMAGE_ERROR_RE.search(err_str):
-                logger.warning(
-                    "Responses API rejected content as image input (%s); "
-                    "retrying with Chat Completions on this call "
-                    "and disabling Responses API for subsequent requests",
-                    exc,
-                )
-                self.use_responses_api = False
-                return normalize_content(super().invoke(input, config, **kwargs))
-            raise
+        return normalize_content(super().invoke(input, config, **kwargs))
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
         caps = get_capabilities(self.model_name)
@@ -108,7 +85,7 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         outgoing = payload.get("messages", [])
-        for message_dict, message in zip(outgoing, _input_to_messages(input_)):
+        for message_dict, message in zip(outgoing, _input_to_messages(input_), strict=False):
             if not isinstance(message, AIMessage):
                 continue
             reasoning = message.additional_kwargs.get("reasoning_content")
@@ -126,7 +103,7 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
             )
         )
         for generation, choice in zip(
-            chat_result.generations, response_dict.get("choices", [])
+            chat_result.generations, response_dict.get("choices", []), strict=False
         ):
             reasoning = choice.get("message", {}).get("reasoning_content")
             if reasoning is not None:
@@ -139,9 +116,15 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
 
     M2.x reasoning models embed ``<think>...</think>`` blocks directly in
     ``message.content`` by default, which would pollute saved reports.
-    Per platform.minimax.io/docs/api-reference/text-openai-api, setting
-    ``reasoning_split=True`` in the request body redirects the thinking
-    block into ``reasoning_details`` so ``content`` stays clean.
+    Per platform.minimax.io/docs/api-reference/text-openai-api,
+    ``reasoning_split=True`` redirects the thinking block into
+    ``reasoning_details`` so ``content`` stays clean. It is sent via
+    ``extra_body`` (not a top-level kwarg) because the openai SDK validates
+    top-level params and rejects unknown ones like reasoning_split (#826).
+
+    The flag is gated by ``ModelCapabilities.requires_reasoning_split`` so
+    only M2.x reasoning models receive it; non-reasoning MiniMax endpoints
+    (Coding Plan, MiniMax-Text-01) never see it.
 
     Tool-choice handling for M2.x — those models accept only the string
     enum ``{"none", "auto"}`` and reject langchain's function-spec dict —
@@ -151,65 +134,62 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
-        payload.setdefault("reasoning_split", True)
+        if get_capabilities(self.model_name).requires_reasoning_split:
+            extra_body = payload.setdefault("extra_body", {})
+            extra_body.setdefault("reasoning_split", True)
         return payload
 
 
-class OpenRouterChatOpenAI(NormalizedChatOpenAI):
-    """OpenRouter-compatible structured output without relying on tool routing.
+# ---------------------------------------------------------------------------
+# Backward-compat helpers: base-url and key resolution (public for tests)
+# ---------------------------------------------------------------------------
 
-    Many OpenRouter model routes return HTTP 404 with *No endpoints found that
-    support tool use* when LangChain uses ``method=function_calling``. Preferring
-    ``json_schema`` (then ``json_mode``) maps to OpenAI-style ``response_format``
-    instead of binding the schema as an API tool.
+def _resolve_provider_base_url(provider: str) -> str:
+    """Resolve the base URL for an OpenAI-compatible provider.
+
+    Order of preference: env var > spec default > SDK default.
+    Mirrors the logic in ``OpenAIClient.get_llm``.
     """
-
-    def with_structured_output(self, schema, *, method=None, **kwargs):
-        caps = get_capabilities(self.model_name)
-        if caps.preferred_structured_method == "none":
-            raise NotImplementedError(
-                f"{self.model_name} has no structured-output method available; "
-                f"agent factories will fall back to free-text generation."
-            )
-        if method is None:
-            if caps.supports_json_schema:
-                method = "json_schema"
-            elif caps.supports_json_mode:
-                method = "json_mode"
-            else:
-                method = caps.preferred_structured_method
-        if method == "function_calling" and not caps.supports_tool_choice:
-            kwargs.setdefault("tool_choice", None)
-        return ChatOpenAI.with_structured_output(self, schema, method=method, **kwargs)
+    spec = OPENAI_COMPATIBLE_PROVIDERS.get(provider)
+    if spec is None:
+        return ""
+    if spec.base_url_env:
+        return os.environ.get(spec.base_url_env) or spec.base_url or ""
+    return spec.base_url or ""
 
 
-class NvidiaChatOpenAI(NormalizedChatOpenAI):
-    """NVIDIA NIM-compatible structured output without relying on tool routing.
+def _normalize_ollama_openai_base_url(url: str) -> str:
+    """Append ``/v1`` to an Ollama base URL if missing."""
+    url = url.rstrip("/")
+    if not url.endswith("/v1"):
+        url = f"{url}/v1"
+    return url
 
-    NVIDIA's OpenAI-compatible API (integrate.api.nvidia.com) returns HTTP 404
-    from Cloudflare when LangChain uses ``method=function_calling`` because the
-    gateway cannot locate the auto-generated function binding. Preferring
-    ``json_schema`` (then ``json_mode``) uses ``response_format`` instead of
-    binding the schema as an API tool, which NIM handles correctly.
-    """
 
-    def with_structured_output(self, schema, *, method=None, **kwargs):
-        caps = get_capabilities(self.model_name)
-        if caps.preferred_structured_method == "none":
-            raise NotImplementedError(
-                f"{self.model_name} has no structured-output method available; "
-                f"agent factories will fall back to free-text generation."
-            )
-        if method is None:
-            if caps.supports_json_schema:
-                method = "json_schema"
-            elif caps.supports_json_mode:
-                method = "json_mode"
-            else:
-                method = caps.preferred_structured_method
-        if method == "function_calling" and not caps.supports_tool_choice:
-            kwargs.setdefault("tool_choice", None)
-        return ChatOpenAI.with_structured_output(self, schema, method=method, **kwargs)
+def _resolve_ollama_api_key(provider: str) -> str:
+    """Resolve the API key for an Ollama provider."""
+    env_keys = {"OLLAMA_CF_TOKEN", "OLLAMA_API_KEY"}
+    for key in ("OLLAMA_CF_TOKEN", "OLLAMA_API_KEY"):
+        val = os.environ.get(key)
+        if val:
+            return val
+    return "ollama"
+
+
+def _resolve_ollama_headers(provider: str) -> dict[str, str]:
+    """Resolve Cloudflare Access headers for remote Ollama."""
+    headers = {}
+    if "remote" not in provider:
+        return headers
+    token = os.environ.get("OLLAMA_CF_TOKEN")
+    if token:
+        headers["CF-Access-Token"] = token
+    for hdr, env in [("CF-Access-Client-Id", "OLLAMA_CF_CLIENT_ID"),
+                     ("CF-Access-Client-Secret", "OLLAMA_CF_CLIENT_SECRET")]:
+        val = os.environ.get(env)
+        if val:
+            headers[hdr] = val
+    return headers
 
 
 # Kwargs forwarded from user config to ChatOpenAI
@@ -218,108 +198,142 @@ _PASSTHROUGH_KWARGS = (
     "api_key", "callbacks", "http_client", "http_async_client",
 )
 
-# Provider base URLs. API-key env vars live in api_key_env.PROVIDER_API_KEY_ENV
-# (one canonical mapping consulted by both this client and the CLI's
-# interactive key-prompt). Dual-region providers (qwen/glm/minimax) keep
-# separate endpoints because international and China accounts cannot share
-# credentials (#758).
-_PROVIDER_BASE_URL = {
-    "xai":        "https://api.x.ai/v1",
-    "deepseek":   "https://api.deepseek.com",
-    "qwen":       "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    "qwen-cn":    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "glm":        "https://api.z.ai/api/paas/v4/",
-    "glm-cn":     "https://open.bigmodel.cn/api/paas/v4/",
-    "minimax":    "https://api.minimax.io/v1",
-    "minimax-cn": "https://api.minimaxi.com/v1",
-    "openrouter": "https://openrouter.ai/api/v1",
-    "nvidia":     "https://integrate.api.nvidia.com/v1",
-    "ollama":     "http://localhost:11434/v1",
-    "ollama-local": "http://localhost:11434/v1",
-    "ollama-remote": "http://localhost:11434/v1",
+
+class _PreferJsonSchemaMixin:
+    """Mixin for providers whose structured output 404s under function_calling.
+
+    OpenRouter and NVIDIA NIM both prefer ``json_schema`` (or ``json_mode``)
+    over ``function_calling`` because their API gateways 404 on the
+    auto-generated function binding.
+    """
+
+    def with_structured_output(self, schema, *, method=None, **kwargs):
+        caps = get_capabilities(self.model_name)
+        if caps.preferred_structured_method == "none":
+            raise NotImplementedError(
+                f"{self.model_name} has no structured-output method available; "
+                f"agent factories will fall back to free-text generation."
+            )
+        if method is None:
+            if caps.supports_json_schema:
+                method = "json_schema"
+            elif caps.supports_json_mode:
+                method = "json_mode"
+            else:
+                method = caps.preferred_structured_method
+        if method == "function_calling" and not caps.supports_tool_choice:
+            kwargs.setdefault("tool_choice", None)
+        return ChatOpenAI.with_structured_output(self, schema, method=method, **kwargs)
+
+
+class NvidiaChatOpenAI(_PreferJsonSchemaMixin, NormalizedChatOpenAI):
+    """NVIDIA NIM — prefers JSON-schema structured output over tool calling."""
+
+
+class OpenRouterChatOpenAI(_PreferJsonSchemaMixin, NormalizedChatOpenAI):
+    """OpenRouter — prefers JSON-schema structured output over tool calling."""
+    """NVIDIA NIM — prefers JSON-schema structured output over tool calling.
+
+    NVIDIA's OpenAI-compatible API (integrate.api.nvidia.com) returns HTTP 404
+    from Cloudflare when LangChain uses ``method=function_calling`` because the
+    gateway cannot locate the auto-generated function binding. Preferring
+    ``json_schema`` overrides ``function_calling``.
+    """
+
+    def with_structured_output(self, schema, *, method=None, **kwargs):
+        caps = get_capabilities(self.model_name)
+        if caps.preferred_structured_method == "none":
+            raise NotImplementedError(
+                f"{self.model_name} has no structured-output method available; "
+                f"agent factories will fall back to free-text generation."
+            )
+        if method is None:
+            if caps.supports_json_schema:
+                method = "json_schema"
+            elif caps.supports_json_mode:
+                method = "json_mode"
+            else:
+                method = caps.preferred_structured_method
+        if method == "function_calling" and not caps.supports_tool_choice:
+            kwargs.setdefault("tool_choice", None)
+        return ChatOpenAI.with_structured_output(self, schema, method=method, **kwargs)
+
+
+@dataclass(frozen=True)
+class ProviderSpec:
+    """Declarative config for one OpenAI-compatible provider.
+
+    The OpenAI-compatible family (OpenAI, xAI, DeepSeek, Qwen, GLM, MiniMax,
+    OpenRouter, Ollama, and any user endpoint) all speak the same Chat
+    Completions API and differ only by these fields — so one row here replaces
+    the former per-provider base-URL dict, auth handling, and client-class
+    branches. Native Anthropic / Google use their own clients (genuinely
+    different APIs) and are intentionally NOT in this registry.
+
+    The API-key env var stays in ``api_key_env.PROVIDER_API_KEY_ENV`` (the single
+    source consulted by both this client and the CLI prompt); only behavior that
+    is provider-specific (base URL, key optionality, wire-format quirks via
+    ``chat_class``) lives here.
+    """
+
+    chat_class: type = NormalizedChatOpenAI   # provider quirks live in the subclass
+    base_url: str | None = None            # default endpoint (None -> SDK default)
+    base_url_env: str | None = None        # env var that overrides base_url (e.g. OLLAMA_BASE_URL)
+    key_optional: bool = False             # don't require/prompt; send a placeholder if unset
+    placeholder_key: str = "EMPTY"         # sent when no key is available (keyless local servers)
+    require_base_url: bool = False         # error if no base_url is resolved (generic endpoint)
+    use_responses_api: bool = False        # native OpenAI Responses API
+
+
+# Single source of truth for the OpenAI-compatible provider family. Dual-region
+# providers (qwen/glm/minimax) keep separate endpoints because international and
+# China accounts cannot share credentials (#758).
+OPENAI_COMPATIBLE_PROVIDERS: dict[str, ProviderSpec] = {
+    "openai":     ProviderSpec(use_responses_api=True),
+    "xai":        ProviderSpec(base_url="https://api.x.ai/v1"),
+    "deepseek":   ProviderSpec(base_url="https://api.deepseek.com", chat_class=DeepSeekChatOpenAI),
+    "qwen":       ProviderSpec(base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+    "qwen-cn":    ProviderSpec(base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    "glm":        ProviderSpec(base_url="https://api.z.ai/api/paas/v4/"),
+    "glm-cn":     ProviderSpec(base_url="https://open.bigmodel.cn/api/paas/v4/"),
+    "minimax":    ProviderSpec(base_url="https://api.minimax.io/v1", chat_class=MinimaxChatOpenAI),
+    "minimax-cn": ProviderSpec(base_url="https://api.minimaxi.com/v1", chat_class=MinimaxChatOpenAI),
+    "openrouter": ProviderSpec(base_url="https://openrouter.ai/api/v1", chat_class=OpenRouterChatOpenAI),
+    "mistral":    ProviderSpec(base_url="https://api.mistral.ai/v1"),
+    "kimi":       ProviderSpec(base_url="https://api.moonshot.ai/v1"),
+    "groq":       ProviderSpec(base_url="https://api.groq.com/openai/v1"),
+    "nvidia":     ProviderSpec(base_url="https://integrate.api.nvidia.com/v1", chat_class=NvidiaChatOpenAI),
+    "ollama":     ProviderSpec(base_url="http://localhost:11434/v1", base_url_env="OLLAMA_BASE_URL",
+                               key_optional=True, placeholder_key="ollama"),
+    # Generic endpoint: user supplies base_url; key optional (keyless local).
+    "openai_compatible": ProviderSpec(require_base_url=True, key_optional=True),
 }
 
 
-def _resolve_provider_base_url(provider: str) -> Optional[str]:
-    """Default base URL for ``provider``, with env-var overrides where defined.
+def is_openai_compatible(provider: str) -> bool:
+    """True if ``provider`` is registered in the OpenAI-compatible family.
 
-    Currently only Ollama supports env-var overrides. Resolution order:
-    1) ``OLLAMA_BASE_URL`` (existing convention)
-    2) ``OLLAMA_CF_URL`` (Cloudflare tunnel/front-door alias)
-
-    This keeps backward compatibility while allowing users to keep Cloudflare
-    endpoint vars grouped as ``OLLAMA_CF_*``. The check is call-time, not
-    import-time, so tests that monkeypatch env after import behave correctly.
+    Native Anthropic / Google use their own clients; everything else in the
+    registry speaks Chat Completions. This is the single source of truth
+    consumed by the factory and any downstream code that needs to know
+    whether a provider is OpenAI-compatible.
     """
-    if provider == "ollama-local":
-        env_url = os.environ.get("OLLAMA_BASE_URL")
-        if env_url:
-            return env_url
-    elif provider == "ollama-remote":
-        env_url = os.environ.get("OLLAMA_CF_URL") or os.environ.get("OLLAMA_BASE_URL")
-        if env_url:
-            return env_url
-    elif provider == "ollama":
-        env_url = os.environ.get("OLLAMA_BASE_URL") or os.environ.get("OLLAMA_CF_URL")
-        if env_url:
-            return env_url
-    return _PROVIDER_BASE_URL.get(provider)
+    return provider.lower() in OPENAI_COMPATIBLE_PROVIDERS
 
 
-def _normalize_ollama_openai_base_url(raw: Optional[str]) -> Optional[str]:
-    """Ensure Ollama OpenAI-compatible base URL ends with /v1."""
-    if not raw:
-        return raw
-    base = raw.rstrip("/")
-    if base.endswith("/v1"):
-        return base
-    return f"{base}/v1"
-
-
-def _resolve_ollama_api_key(provider: str) -> str:
-    """Resolve auth token for Ollama-compatible endpoints.
-
-    Local ``ollama-serve`` does not require auth, so ``"ollama"`` remains the
-    fallback sentinel token. For remote front-doors (Cloudflare Tunnel, API
-    gateway), allow users to supply:
-    - ``OLLAMA_CF_TOKEN`` (preferred for Cloudflare naming consistency)
-    - ``OLLAMA_API_KEY`` (generic alias)
-    """
-    if provider == "ollama-local":
-        return os.environ.get("OLLAMA_API_KEY") or "ollama"
-    return os.environ.get("OLLAMA_CF_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "ollama"
-
-
-def _resolve_ollama_headers(provider: str) -> dict[str, str]:
-    """Return optional extra headers for Ollama front-doors."""
-    if provider != "ollama-remote":
-        return {}
-
-    headers: dict[str, str] = {}
-    access_token = os.environ.get("OLLAMA_CF_TOKEN", "").strip()
-    client_id = os.environ.get("OLLAMA_CF_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("OLLAMA_CF_CLIENT_SECRET", "").strip()
-    if access_token:
-        headers["CF-Access-Token"] = access_token
-    if client_id and client_secret:
-        headers["CF-Access-Client-Id"] = client_id
-        headers["CF-Access-Client-Secret"] = client_secret
-    return headers
 class OpenAIClient(BaseLLMClient):
-    """Client for OpenAI, Ollama, OpenRouter, and xAI providers.
+    """Client for OpenAI, Ollama, OpenRouter, and all OpenAI-compatible providers.
 
-    Uses standard Chat Completions for all providers.  The Responses API
-    (/v1/responses) is deliberately not enabled because its auto-detection
-    of .png strings in tool outputs as image input breaks on non-vision
-    models.  Chat Completions supports ``reasoning_effort`` with function
-    tools across all current OpenAI model families (GPT-4.1, GPT-5, o-series),
-    so there is no capability gap from using Chat Completions.
+    Uses the ``OPENAI_COMPATIBLE_PROVIDERS`` registry as the single source of
+    truth for base URLs, auth rules, and provider-specific wire-format
+    subclasses. A new provider is added with one row in the registry — no
+    branch in this class required.
     """
 
     def __init__(
         self,
         model: str,
-        base_url: Optional[str] = None,
+        base_url: str | None = None,
         provider: str = "openai",
         **kwargs,
     ):
@@ -329,67 +343,52 @@ class OpenAIClient(BaseLLMClient):
     def get_llm(self) -> Any:
         """Return configured ChatOpenAI instance."""
         self.warn_if_unknown_model()
-        llm_kwargs = {"model": self.model}
+        spec = OPENAI_COMPATIBLE_PROVIDERS.get(self.provider)
+        if spec is None:
+            raise ValueError(f"Unknown OpenAI-compatible provider: {self.provider}")
 
-        # Provider-specific base URL and auth. An explicit base_url on the
-        # client (e.g. a corporate proxy) takes precedence over the
-        # provider default so users can route through their own gateway.
-        if self.provider in _PROVIDER_BASE_URL:
-            llm_kwargs["base_url"] = self.base_url or _resolve_provider_base_url(self.provider)
-            if self.provider in ("ollama", "ollama-local", "ollama-remote"):
-                llm_kwargs["base_url"] = _normalize_ollama_openai_base_url(llm_kwargs["base_url"])
-            api_key_env = get_api_key_env(self.provider)
-            if api_key_env:
-                api_key = os.environ.get(api_key_env)
-                if api_key:
-                    llm_kwargs["api_key"] = api_key
-                else:
-                    raise ValueError(
-                        f"API key for provider '{self.provider}' is not set. "
-                        f"Please set the {api_key_env} environment variable "
-                        f"(e.g. add {api_key_env}=your_key to your .env file)."
-                    )
-            else:
-                llm_kwargs["api_key"] = _resolve_ollama_api_key(self.provider)
-                extra_headers = _resolve_ollama_headers(self.provider)
-                if extra_headers:
-                    llm_kwargs["default_headers"] = extra_headers
-        elif self.base_url:
+        llm_kwargs: dict[str, Any] = {"model": self.model}
+
+        # Resolve base URL: explicit URL > env-var override > provider default.
+        if self.base_url:
             llm_kwargs["base_url"] = self.base_url
+        elif spec.base_url_env:
+            llm_kwargs["base_url"] = (
+                os.environ.get(spec.base_url_env) or spec.base_url
+            )
+        elif spec.base_url:
+            llm_kwargs["base_url"] = spec.base_url
+        elif spec.require_base_url:
+            raise ValueError(
+                f"Provider '{self.provider}' requires a base_url; set "
+                f"``backend_url`` in config or the "
+                f"``TRADINGAGENTS_LLM_BACKEND_URL`` env var."
+            )
 
-        # Ollama (especially behind Cloudflare) needs a client-side timeout
-        # that stays under the proxy's hard ceiling (Cloudflare = 120 s).
-        # 90 s gives headroom for network jitter while still triggering
-        # LangChain retries before the connection is dropped.
-        if self.provider in ("ollama", "ollama-local", "ollama-remote"):
-            llm_kwargs.setdefault("timeout", 90)
+        # Resolve API key or placeholder.
+        if spec.key_optional:
+            api_key_env = get_api_key_env(self.provider)
+            llm_kwargs["api_key"] = (
+                os.environ.get(api_key_env) if api_key_env else None
+            ) or spec.placeholder_key
+        else:
+            api_key_env = get_api_key_env(self.provider)
+            api_key = os.environ.get(api_key_env) if api_key_env else None
+            if api_key:
+                llm_kwargs["api_key"] = api_key
+            else:
+                raise ValueError(
+                    f"API key for provider '{self.provider}' is not set. "
+                    f"Please set the {api_key_env} environment variable "
+                    f"(e.g. add {api_key_env}=your_key to your .env file)."
+                )
 
         # Forward user-provided kwargs
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 
-        # Native OpenAI: leave use_responses_api as None (default) so
-        # Chat Completions is used. The Responses API is not required:
-        # Chat Completions supports reasoning_effort with function tools
-        # across all current model families (GPT-4.1, GPT-5, o-series),
-        # and avoids the Responses API's auto-detection of .png strings
-        # as image input (which breaks on non-vision models).
-
-        # Provider-specific quirks live in their own subclasses so the
-        # base NormalizedChatOpenAI stays free of provider branches.
-        if self.provider == "deepseek":
-            chat_cls = DeepSeekChatOpenAI
-        elif self.provider in ("minimax", "minimax-cn"):
-            chat_cls = MinimaxChatOpenAI
-        elif self.provider == "openrouter":
-            chat_cls = OpenRouterChatOpenAI
-        elif self.provider == "nvidia":
-            chat_cls = NvidiaChatOpenAI
-        else:
-            chat_cls = NormalizedChatOpenAI
-        return chat_cls(**llm_kwargs)
+        return spec.chat_class(**llm_kwargs)
 
     def validate_model(self) -> bool:
-        """Validate model for the provider."""
         return validate_model(self.provider, self.model)

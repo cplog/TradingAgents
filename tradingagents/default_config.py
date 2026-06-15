@@ -3,44 +3,28 @@ import os
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
 
-# Single source of truth for env-var -> config-key overrides. To expose
-# a new config key for environment-based override, add a row here.
+# Single source of truth for env-var → config-key overrides. To expose
+# a new config key for environment-based override, add a row here — no
+# entry-point script changes required. Coercion is driven by the type
+# of the existing default, so users can keep writing plain strings in
+# their .env file.
 _ENV_OVERRIDES = {
-    "TRADINGAGENTS_LLM_PROVIDER": "llm_provider",
-    "TRADINGAGENTS_DEEP_THINK_LLM": "deep_think_llm",
-    "TRADINGAGENTS_QUICK_THINK_LLM": "quick_think_llm",
-    "TRADINGAGENTS_LLM_BACKEND_URL": "backend_url",
-    "TRADINGAGENTS_OUTPUT_LANGUAGE": "output_language",
-    "TRADINGAGENTS_MAX_DEBATE_ROUNDS": "max_debate_rounds",
-    "TRADINGAGENTS_MAX_RISK_ROUNDS": "max_risk_discuss_rounds",
-    "TRADINGAGENTS_MAX_RECUR_LIMIT": "max_recur_limit",
-    "TRADINGAGENTS_CHECKPOINT_ENABLED": "checkpoint_enabled",
-    "TRADINGAGENTS_BENCHMARK_TICKER": "benchmark_ticker",
-    "TRADINGAGENTS_OPENROUTER_FREE_ONLY": "openrouter_free_only",
-    "TRADINGAGENTS_MAX_CONCURRENCY": "max_concurrency",
-    "TRADINGAGENTS_JOB_TTL_HOURS": "job_ttl_hours",
-    "TRADINGAGENTS_TEMPERATURE": "temperature",
-    "TRADINGAGENTS_DIMENSIONS_ENABLED": "dimensions_enabled",
-    "TRADINGAGENTS_DIMENSIONS_IN_GRAPH": "dimensions_in_graph",
-    "TRADINGAGENTS_PREFER_FREE_DATA_VENDORS": "prefer_free_data_vendors",
-    "TRADINGAGENTS_DATA_CACHE_BACKEND": "data_cache_backend",
-    "TRADINGAGENTS_DATA_CACHE_AUTO_STOCK_BARS": "data_cache_auto_stock_bars",
-    "TRADINGAGENTS_MONITOR_ENABLED": "monitor_enabled",
-    "TRADINGAGENTS_MONITOR_POLL_SECONDS": "monitor_poll_seconds",
-    "TRADINGAGENTS_MONITOR_SIGNAL_THRESHOLD": "monitor_signal_threshold",
-    "TRADINGAGENTS_MONITOR_SPREAD_MAX_PCT": "monitor_spread_max_pct",
-    "TRADINGAGENTS_MONITOR_COOLDOWN_MINUTES": "monitor_cooldown_minutes",
-    "TRADINGAGENTS_PARALLEL_ANALYSTS": "parallel_analysts",
-    "TRADINGAGENTS_SEMANTIC_DEBATE_TERMINATION": "semantic_debate_termination",
-    "TRADINGAGENTS_LLM_TIMEOUT_SECONDS": "llm_timeout_seconds",
-    "TRADINGAGENTS_JOB_TIMEOUT_SECONDS": "job_timeout_seconds",
-    "TRADINGAGENTS_JOB_STUCK_SECONDS": "job_stuck_seconds",
+    "TRADINGAGENTS_LLM_PROVIDER":         "llm_provider",
+    "TRADINGAGENTS_DEEP_THINK_LLM":       "deep_think_llm",
+    "TRADINGAGENTS_QUICK_THINK_LLM":      "quick_think_llm",
+    "TRADINGAGENTS_LLM_BACKEND_URL":      "backend_url",
+    "TRADINGAGENTS_OUTPUT_LANGUAGE":      "output_language",
+    "TRADINGAGENTS_MAX_DEBATE_ROUNDS":    "max_debate_rounds",
+    "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
+    "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
+    "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
+    "TRADINGAGENTS_TEMPERATURE":          "temperature",
+    "TRADINGAGENTS_DIMENSIONS_ENABLED":   "dimensions_enabled",
+    "TRADINGAGENTS_DIMENSIONS_IN_GRAPH":  "dimensions_in_graph",
+    "TRADINGAGENTS_PARALLEL_ANALYSTS":    "parallel_analysts",
+    "TRADINGAGENTS_LLM_TIMEOUT_SECONDS":  "llm_timeout_seconds",
+    "TRADINGAGENTS_MONITOR_ENABLED":      "monitor_enabled",
     "TRADINGAGENTS_OPTIONS_STRATEGIST_ENABLED": "options_strategist_enabled",
-    "TRADINGAGENTS_REGIME_PREFILTER_ENABLED": "regime_prefilter_enabled",
-    "TRADINGAGENTS_REGIME_PREFILTER_MODE": "regime_prefilter_mode",
-    "TRADINGAGENTS_REGIME_ENFORCE_THRESHOLD": "regime_enforce_threshold",
-    "TRADINGAGENTS_MIN_CONFIDENCE_FOR_PRODUCTION": "min_confidence_for_production",
-    "TRADINGAGENTS_DEBATE_SCORER_ENABLED": "debate_scorer_enabled",
 }
 
 
@@ -135,11 +119,12 @@ _CONFIG_BASE: dict = {
     # Data vendor configuration (comma-separated primaries; see prefer_free_data_vendors).
     "prefer_free_data_vendors": True,
     "data_vendors": {
-        "core_stock_apis": "yfinance,finnhub,alpha_vantage",
-        "technical_indicators": "yfinance,alpha_vantage",
-        "fundamental_data": "yfinance,alpha_vantage",
-        "news_data": "yfinance,finnhub,google_rss,akshare,alpha_vantage",
-        "macro_data": "akshare",
+        "core_stock_apis": "yfinance",
+        "technical_indicators": "yfinance",
+        "fundamental_data": "yfinance",
+        "news_data": "yfinance",
+        "macro_data": "fred",
+        "prediction_markets": "polymarket",
         "options_data": "yfinance",
     },
     "tool_vendors": {},
@@ -164,14 +149,16 @@ _CONFIG_BASE: dict = {
     # Benchmark for alpha calculation in the reflection layer.
     "benchmark_ticker": None,
     "benchmark_map": {
-        ".NS": "^NSEI",
-        ".BO": "^BSESN",
-        ".T": "^N225",
-        ".HK": "^HSI",
-        ".L": "^FTSE",
-        ".TO": "^GSPTSE",
-        ".AX": "^AXJO",
-        "": "SPY",
+        ".NS":  "^NSEI",       # NSE India (Nifty 50)
+        ".BO":  "^BSESN",      # BSE India (Sensex)
+        ".T":   "^N225",       # Tokyo (Nikkei 225)
+        ".HK":  "^HSI",        # Hong Kong (Hang Seng)
+        ".L":   "^FTSE",       # London (FTSE 100)
+        ".TO":  "^GSPTSE",     # Toronto (TSX Composite)
+        ".AX":  "^AXJO",       # Australia (ASX 200)
+        ".SS":  "000001.SS",   # Shanghai (SSE Composite)
+        ".SZ":  "399001.SZ",   # Shenzhen (SZSE Component)
+        "":     "SPY",         # default for US-listed tickers (no suffix)
     },
     # Standardized stock dimensions (API UX / peer-aware factors)
     "dimensions_enabled": True,

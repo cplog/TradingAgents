@@ -52,10 +52,15 @@ TOOLS_CATEGORIES: dict[str, _CategoryInfo] = {
         ],
     },
     "macro_data": {
-        "description": "Macro and market datasets (AKShare dynamic bridge)",
+        "description": "Macroeconomic indicators (rates, inflation, labor, growth)",
         "tools": [
-            "list_akshare_endpoints",
             "get_macro_data",
+        ],
+    },
+    "prediction_markets": {
+        "description": "Market-implied probabilities for forward-looking events",
+        "tools": [
+            "get_prediction_markets",
         ],
     },
     "options_data": {
@@ -71,6 +76,8 @@ TOOLS_CATEGORIES: dict[str, _CategoryInfo] = {
 # in VENDOR_METHODS that are missing for a tool are skipped when building the chain.
 VENDOR_TRY_ORDER: tuple[str, ...] = (
     "yfinance",
+    "fred",
+    "polymarket",
     "finnhub",
     "google_rss",
     "akshare",

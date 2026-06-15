@@ -44,7 +44,7 @@ class TestRenderTraderProposal:
             action=TraderAction.BUY,
             reasoning="Strong technicals + fundamentals.",
             entry_price=189.5,
-            stop_loss_price=178.0,
+            stop_loss=178.0,
             position_sizing="6% of portfolio",
         )
         md = render_trader_proposal(p)
@@ -61,25 +61,6 @@ class TestRenderTraderProposal:
         assert "Stop Loss" not in md
         assert "Position Sizing" not in md
         assert "FINAL TRANSACTION PROPOSAL: **SELL**" in md
-
-    def test_stop_loss_percent_renders_when_present(self):
-        p = TraderProposal(
-            action=TraderAction.HOLD,
-            reasoning="Directional edge exists, but volatility is elevated.",
-            stop_loss_percent=12.5,
-        )
-        md = render_trader_proposal(p)
-        assert "**Stop Loss**: 12.5% from entry" in md
-
-    def test_legacy_stop_loss_string_is_coerced_to_percent(self):
-        p = TraderProposal(
-            action=TraderAction.BUY,
-            reasoning="Breakout with support from volume.",
-            stop_loss="20% below entry",
-        )
-        assert p.stop_loss_percent == 20.0
-        assert p.stop_loss_price is None
-
 
 @pytest.mark.unit
 class TestRenderResearchPlan:
@@ -143,7 +124,7 @@ class TestTraderAgent:
             action=TraderAction.BUY,
             reasoning="AI capex cycle intact; institutional flows constructive.",
             entry_price=189.5,
-            stop_loss_price=178.0,
+            stop_loss=178.0,
             position_sizing="6% of portfolio",
         )
         llm = _structured_trader_llm(captured, proposal)

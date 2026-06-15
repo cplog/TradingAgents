@@ -1,7 +1,14 @@
-"""Exceptions that tell ``route_to_vendor`` to try the next data vendor."""
+"""Backward-compat re-exports from the vendor-error taxonomy.
 
+Previous code imported ``DataVendorUnavailable`` from this module.
+It is now ``VendorRateLimitError`` in ``errors.py``.
+"""
 
-class DataVendorUnavailable(Exception):
-    """Raised when the current vendor cannot serve the request (no key, wrong market, empty series)."""
+from .errors import (
+    NoMarketDataError,
+    VendorError,
+    VendorNotConfiguredError,
+    VendorRateLimitError,
+)
 
-    pass
+DataVendorUnavailable = VendorRateLimitError
