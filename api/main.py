@@ -616,7 +616,13 @@ async def lifespan(app: FastAPI):
     global _service_config, _worker
 
     _load_persisted_into_process()
-    validate_api_key(_service_config)
+    try:
+        validate_api_key(_service_config)
+    except RuntimeError:
+        logger.warning(
+            "API key for provider '%s' is not set — configure via admin or set the env var before submitting jobs.",
+            _service_config.get("llm_provider", "unknown"),
+        )
 
     max_concurrency = int(_service_config.get("max_concurrency", 3))
     ttl_hours = int(_service_config.get("job_ttl_hours", 24))

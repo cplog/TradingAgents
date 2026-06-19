@@ -9,11 +9,86 @@ BACKEND_PORT="${BACKEND_PORT:-8808}"
 FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
 FRONTEND_PORT="${FRONTEND_PORT:-53173}"
 
-BACKEND_CMD="${BACKEND_CMD:-uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT} --reload}"
+# Resolve the Python interpreter to use for the backend and Kronos.
+# Priority:
+#   1) KRONOS_PYTHON env var
+#   2) project-local Linux venv (.venv-linux)
+#   3) tradingagents conda env
+#   4) active venv/conda
+#   5) python3
+resolve_backend_python() {
+  if [[ -n "${KRONOS_PYTHON:-}" ]]; then
+    echo "${KRONOS_PYTHON}"
+    return 0
+  fi
+  # Prefer a project-local Linux venv if it exists and has uvicorn
+  if [[ -f "${ROOT_DIR}/.venv-linux/bin/python" ]]; then
+    if "${ROOT_DIR}/.venv-linux/bin/python" -m uvicorn --version >/dev/null 2>&1; then
+      echo "${ROOT_DIR}/.venv-linux/bin/python"
+      return 0
+    fi
+  fi
+  # Fall back to the tradingagents conda env
+  if [[ -f "/opt/app/anaconda3/envs/tradingagents/bin/python" ]]; then
+    echo "/opt/app/anaconda3/envs/tradingagents/bin/python"
+    return 0
+  fi
+  local candidate
+  for candidate in python python3; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      if "${candidate}" -m pip --version >/dev/null 2>&1; then
+        "${candidate}" -c "import sys; print(sys.executable)"
+        return 0
+      fi
+    fi
+  done
+  echo "python3"
+}
+
+# Kill any stale uvicorn processes that may be using the wrong Python environment.
+# Excludes the current script's own PID tree to avoid self-termination.
+kill_stale_uvicorn() {
+  local pids pid my_pid
+  my_pid="$$"
+  pids=""
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    # Skip the dev_up.sh process itself and any child it spawned.
+    if [[ "${pid}" == "${my_pid}" ]]; then
+      continue
+    fi
+    if [[ -n "${pids}" ]]; then
+      pids="${pids}
+${pid}"
+    else
+      pids="${pid}"
+    fi
+  done < <(pgrep -f "uvicorn api.main" 2>/dev/null || true)
+
+  if [[ -n "${pids}" ]]; then
+    echo "[dev_up] killing stale uvicorn processes: ${pids//$'\n'/ }"
+    while IFS= read -r pid; do
+      [[ -n "${pid}" ]] || continue
+      kill -TERM "${pid}" 2>/dev/null || true
+    done <<< "${pids}"
+    sleep 1
+    while IFS= read -r pid; do
+      [[ -n "${pid}" ]] || continue
+      kill -KILL "${pid}" 2>/dev/null || true
+    done <<< "${pids}"
+  fi
+}
+
+BACKEND_PYTHON="$(resolve_backend_python)"
+BACKEND_CMD="${BACKEND_CMD:-${BACKEND_PYTHON} -m uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT} --reload}"
 FRONTEND_CMD="${FRONTEND_CMD:-npm run dev -- --host ${FRONTEND_HOST} --port ${FRONTEND_PORT}}"
 # Default 0: an old uvicorn on :8808 causes POST /analyze 422 on hot_money/policy/lockup/kronos.
 # Opt in to reuse: REUSE_BACKEND_IF_BUSY=1 ./scripts/dev_up.sh
 REUSE_BACKEND_IF_BUSY="${REUSE_BACKEND_IF_BUSY:-0}"
+
+# Make sure no stale uvicorn from a different Python env is still running.
+echo "[dev_up] using backend Python: ${BACKEND_PYTHON}"
+kill_stale_uvicorn
 
 backend_pid=""
 frontend_pid=""
@@ -83,23 +158,9 @@ free_port() {
   fi
 }
 
-# Prefer `python` from an activated venv/conda env. On macOS, bare `python3` is often
-# Homebrew's PEP-668 "externally managed" interpreter even when conda is active.
+# Kept for backward compatibility — delegates to resolve_backend_python
 resolve_kronos_python() {
-  if [[ -n "${KRONOS_PYTHON:-}" ]]; then
-    echo "${KRONOS_PYTHON}"
-    return 0
-  fi
-  local candidate
-  for candidate in python python3; do
-    if command -v "${candidate}" >/dev/null 2>&1; then
-      if "${candidate}" -m pip --version >/dev/null 2>&1; then
-        "${candidate}" -c "import sys; print(sys.executable)"
-        return 0
-      fi
-    fi
-  done
-  echo "python3"
+  resolve_backend_python
 }
 
 # Uvicorn can take 10–30s to import api.main before binding; Vite proxies fail until then.
@@ -128,9 +189,9 @@ wait_for_backend_ready() {
   return 1
 }
 
-if ! command -v uvicorn >/dev/null 2>&1; then
+if ! "${BACKEND_PYTHON}" -m uvicorn --version >/dev/null 2>&1; then
   if [[ "${REUSE_BACKEND_IF_BUSY}" != "1" ]]; then
-    echo "Error: 'uvicorn' is not in PATH. Activate your Python environment first." >&2
+    echo "Error: 'uvicorn' is not available for ${BACKEND_PYTHON}. Activate your Python environment first." >&2
     exit 1
   fi
 fi
@@ -174,17 +235,22 @@ if [[ "${SKIP_KRONOS_INSTALL:-0}" != "1" ]]; then
 
   # Install inference deps only — vendor requirements.txt pins pandas 2.2.2 which
   # conflicts with tradingagents (pandas>=2.3.0). matplotlib is not needed at runtime.
-  echo "[dev_up] installing Kronos inference deps via ${KRONOS_PYTHON} -m pip"
-  if ! "${KRONOS_PYTHON}" -m pip install \
-    "torch>=2.0.0" \
-    "einops==0.8.1" \
-    "huggingface_hub==0.33.1" \
-    "safetensors==0.6.2"; then
-    echo "Error: Kronos dependency install failed for ${KRONOS_PYTHON}." >&2
-    echo "Activate your project venv/conda env first, or set KRONOS_PYTHON to that interpreter." >&2
-    echo "Example: conda activate llm_base && ./scripts/dev_up.sh" >&2
-    echo "Or skip: SKIP_KRONOS_INSTALL=1 ./scripts/dev_up.sh" >&2
-    exit 1
+  # Skip the pip install if all deps are already importable.
+  if "${KRONOS_PYTHON}" -c "import torch, einops, huggingface_hub, safetensors" >/dev/null 2>&1; then
+    echo "[dev_up] Kronos inference deps already present for ${KRONOS_PYTHON}"
+  else
+    echo "[dev_up] installing Kronos inference deps via ${KRONOS_PYTHON} -m pip"
+    if ! "${KRONOS_PYTHON}" -m pip install \
+      "torch>=2.0.0" \
+      "einops==0.8.1" \
+      "huggingface_hub==0.33.1" \
+      "safetensors==0.6.2"; then
+      echo "Error: Kronos dependency install failed for ${KRONOS_PYTHON}." >&2
+      echo "Activate your project venv/conda env first, or set KRONOS_PYTHON to that interpreter." >&2
+      echo "Example: conda activate tradingagents && ./scripts/dev_up.sh" >&2
+      echo "Or skip: SKIP_KRONOS_INSTALL=1 ./scripts/dev_up.sh" >&2
+      exit 1
+    fi
   fi
 else
   echo "[dev_up] SKIP_KRONOS_INSTALL=1 — not cloning or installing Kronos deps"
@@ -205,7 +271,7 @@ if is_port_busy "${BACKEND_PORT}"; then
     echo
     echo "WARNING: An old uvicorn on :${BACKEND_PORT} often causes POST /analyze 422 on hot_money, policy, lockup, kronos"
     echo "         (literal_error for analysts). Stop that process, then from repo root:"
-    echo "           pip install -e '.[api]' && PYTHONPATH=\$(pwd) uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}"
+    echo "           pip install -e '.[api]' && PYTHONPATH=\$(pwd) ${BACKEND_PYTHON} -m uvicorn api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}"
     echo "         Verify GET /config includes analyze_analyst_body_schema=registered_string_list on the running API."
     if ! wait_for_backend_ready "${BACKEND_PORT}"; then
       exit 1
@@ -216,8 +282,8 @@ if is_port_busy "${BACKEND_PORT}"; then
 fi
 
 if [[ "${start_backend}" == "1" ]]; then
-  if ! command -v uvicorn >/dev/null 2>&1; then
-    echo "Error: 'uvicorn' is not in PATH. Activate your Python environment first." >&2
+  if ! "${BACKEND_PYTHON}" -m uvicorn --version >/dev/null 2>&1; then
+    echo "Error: 'uvicorn' is not available for ${BACKEND_PYTHON}. Activate your Python environment first." >&2
     exit 1
   fi
   echo "Starting backend: ${BACKEND_CMD}"

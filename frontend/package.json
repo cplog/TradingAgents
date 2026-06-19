@@ -18,6 +18,7 @@
     "motion": "^12.38.0",
     "react": "^19.3.0-canary-43bcbf80-20260603",
     "react-dom": "^19.3.0-canary-43bcbf80-20260603",
+    "react-is": "^19.2.7",
     "react-markdown": "^10.0.0",
     "react-router-dom": "^7.3.0",
     "recharts": "^3.8.1",
