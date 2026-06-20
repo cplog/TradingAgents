@@ -24,6 +24,7 @@ export const paths = {
   watchlists: "/watchlists",
   monitor: "/monitor",
   system: "/system",
+  settingsNotifications: "/settings/notifications",
 } as const;
 
 export function topicPath(id: string): string {

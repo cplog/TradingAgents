@@ -15,6 +15,10 @@ const HistoryPage = lazyPage(() => import("./pages/HistoryPage"), "HistoryPage")
 const HistoryStatsPage = lazyPage(() => import("./pages/HistoryStatsPage"), "HistoryStatsPage");
 const MonitorPage = lazyPage(() => import("./pages/MonitorPage"), "MonitorPage");
 const NewsPage = lazyPage(() => import("./pages/NewsPage"), "NewsPage");
+const NotificationSettingsPage = lazyPage(
+  () => import("./pages/NotificationSettingsPage"),
+  "NotificationSettingsPage",
+);
 const RunDetailPage = lazyPage(() => import("./pages/RunDetailPage"), "RunDetailPage");
 const RunJobResultsPage = lazyPage(() => import("./pages/RunJobResultsPage"), "RunJobResultsPage");
 const SectorIndustryPage = lazyPage(() => import("./pages/SectorIndustryPage"), "SectorIndustryPage");
@@ -40,6 +44,7 @@ export default function App() {
         <Route path="/watchlists" element={<WatchlistPage />} />
         <Route path="/monitor" element={<MonitorPage />} />
         <Route path="/system" element={<SystemPage />} />
+        <Route path="/settings/notifications" element={<NotificationSettingsPage />} />
         <Route path="/settings" element={<Navigate to="/system" replace />} />
         <Route path="/configure" element={<Navigate to="/dashboard" replace />} />
         <Route path="/runs/:jobId" element={<RunDetailPage />} />

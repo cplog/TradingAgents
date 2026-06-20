@@ -73,12 +73,16 @@ from api.models import (
     JobStatusResponse,
     MonitorTickerRequest,
     MonitorWatchlistSetRequest,
+    NotificationConfig,
+    NotificationStatus,
+    NotificationTestRequest,
     ResumeJobResponse,
     RuntimeConfigUpdateRequest,
     SCAN_MODE_ANALYSTS,
     SectorAnalyticsResponse,
 )
 from api.news import fetch_news_feed
+from api.notifications import get_manager, reset_manager_for_tests
 from api.state_store import ALLOWED_PERSISTED_SECRET_KEYS, get_state_store
 from api.topics_models import TopicSearchRequest, TopicUpdateRequest
 from api.hpm import compute_hpm_score, HPMScoreResult, should_gate_analysis
@@ -633,6 +637,9 @@ async def lifespan(app: FastAPI):
     )
     restarted = await _worker.restart_queued_jobs()
 
+    # Prime notification manager so /api/health reports accurate status.
+    get_manager()
+
     from api.history import warmup_history_storage
 
     loop = asyncio.get_running_loop()
@@ -789,7 +796,29 @@ async def api_health() -> HealthResponse:
         yfinance_reachable=yf_ok,
         data_source_checks=source_checks,
         supported_analyst_ids=list(DEFAULT_ANALYST_ORDER),
+        notifications=get_manager().status().model_dump(mode="json"),
     )
+
+
+@app.get("/api/notifications", response_model=NotificationConfig)
+async def get_notifications_config() -> NotificationConfig:
+    return get_manager().get_config()
+
+
+@app.put("/api/notifications", response_model=NotificationConfig)
+async def put_notifications_config(config: NotificationConfig) -> NotificationConfig:
+    get_manager().put_config(config)
+    return get_manager().get_config()
+
+
+@app.post("/api/notifications/test")
+async def test_notification_channel(req: NotificationTestRequest) -> dict:
+    return await get_manager().test_channel(req.channel_id, req.message)
+
+
+@app.get("/api/notifications/status", response_model=NotificationStatus)
+async def get_notifications_status() -> NotificationStatus:
+    return get_manager().status()
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)

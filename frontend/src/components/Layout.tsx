@@ -59,6 +59,12 @@ const navGroups: { label: string; items: NavItem[] }[] = [
     label: "System",
     items: [
       { to: paths.system, label: "System", hint: "API, health, external consoles", end: true },
+      {
+        to: paths.settingsNotifications,
+        label: "Notifications",
+        hint: "Alerts for monitor and topics",
+        end: true,
+      },
     ],
   },
 ];

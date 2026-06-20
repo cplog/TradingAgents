@@ -23,13 +23,15 @@
     "react-router-dom": "^7.3.0",
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.0",
-    "three": "^0.184.0"
+    "three": "^0.184.0",
+    "uuid": "^14.0.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
+    "@types/uuid": "^11.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "jsdom": "^26.0.0",
     "typescript": "~5.7.3",

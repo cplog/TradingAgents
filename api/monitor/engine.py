@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 _engine: Optional["MonitorEngine"] = None
 
 
+def get_monitor_engine(worker=None, service_config=None, state_store=None) -> Optional[MonitorEngine]:
+    global _engine
+    if worker is not None and service_config is not None:
+        _engine = MonitorEngine(worker, service_config, state_store)
+    return _engine
+
+
 class MonitorEngine:
     def __init__(self, worker, service_config: dict, state_store=None):
         self.worker = worker
@@ -90,6 +97,8 @@ class MonitorEngine:
             await asyncio.sleep(interval)
 
     async def _run_scan(self) -> dict[str, Any]:
+        from api.notifications import get_manager
+
         self._last_tick = datetime.now(timezone.utc).isoformat()
         self._last_errors = []
         triggered: List[str] = []
@@ -148,6 +157,15 @@ class MonitorEngine:
                 "change_pct": signal.change_pct,
             }
             self.watchlist.append_signal(record)
+            await get_manager().send(
+                title=f"Monitor alert: {ticker}",
+                body=(
+                    f"Overnight panic signal detected for {ticker}.\n"
+                    f"Score: {signal.score}, change: {signal.change_pct:.2f}%\n"
+                    f"Job: {job_id}"
+                ),
+                tags=["monitor", ticker],
+            )
             triggered.append(ticker)
 
         return {"triggered": triggered, "candidates": self._last_candidates}
@@ -157,10 +175,3 @@ class MonitorEngine:
         if last is None:
             return False
         return datetime.now(timezone.utc) - last < timedelta(minutes=minutes)
-
-
-def get_monitor_engine(worker=None, service_config=None, state_store=None) -> Optional[MonitorEngine]:
-    global _engine
-    if worker is not None and service_config is not None:
-        _engine = MonitorEngine(worker, service_config, state_store)
-    return _engine

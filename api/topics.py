@@ -25,6 +25,7 @@ from api.topics_models import (
     TopicSource,
 )
 from api.topics_store import TopicsStore, get_topics_store, _utc_now_iso
+from api.notifications import get_manager
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +137,20 @@ class TopicsEngine:
                 await self.refresh_topic(topic.id, skip_cooldown=True, scheduled=True)
             except TopicsBudgetExceeded:
                 logger.info("Topics scheduler stopped: daily Tavily budget exhausted")
+                await get_manager().send(
+                    title="Topics scheduler paused",
+                    body="Daily Tavily budget exhausted. Scheduled topic refreshes are paused until tomorrow.",
+                    tags=["topics", "budget"],
+                )
                 return
             except Exception as exc:
                 self._last_errors.append(f"{topic.id}: {exc}")
+                logger.exception("Topics refresh failed for %s", topic.id)
+                await get_manager().send(
+                    title=f"Topics refresh failed: {topic.id}",
+                    body=f"Scheduled refresh failed with: {exc}",
+                    tags=["topics", topic.id],
+                )
 
     def _check_budget(self) -> None:
         day = _today_utc()

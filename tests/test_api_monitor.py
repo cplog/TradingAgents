@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.state_store import reset_state_store_for_tests
+from api.notifications import get_manager, reset_manager_for_tests
 
 
 class _FakeGraph:
@@ -74,6 +75,42 @@ def test_monitor_tick_empty_watchlist(api_client: TestClient, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body.get("message") == "empty watchlist" or "triggered" in body
+
+
+@pytest.mark.unit
+def test_monitor_tick_sends_notification(api_client: TestClient, monkeypatch):
+    reset_manager_for_tests()
+    monkeypatch.setattr(
+        "api.monitor.engine.scan_us_panic_candidates",
+        lambda **kwargs: [{"ticker": "AAPL", "change_pct": -12.5}],
+    )
+
+    class _FakeSignal:
+        score = 85
+        change_pct = -12.5
+
+        def to_dict(self):
+            return {"score": self.score, "change_pct": self.change_pct}
+
+    monkeypatch.setattr(
+        "api.monitor.engine.compute_overnight_signal",
+        lambda *args, **kwargs: _FakeSignal(),
+    )
+    monkeypatch.setattr(
+        "tradingagents.dataflows.config.set_config",
+        lambda *args, **kwargs: None,
+    )
+    sent = []
+
+    async def fake_send(title, body, tags=None, force=False):
+        sent.append({"title": title, "body": body, "tags": tags})
+        return {"sent": True}
+
+    monkeypatch.setattr(get_manager(), "send", fake_send)
+    api_client.put("/api/monitor/watchlist", json={"tickers": ["AAPL"]})
+    r = api_client.post("/api/monitor/tick")
+    assert r.status_code == 200
+    assert any("AAPL" in s["title"] for s in sent)
 
 
 @pytest.mark.unit

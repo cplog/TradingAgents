@@ -905,3 +905,54 @@ export async function fetchSectorAnalytics(params: {
   });
   return apiJson(`/api/sectors/analytics?${qs}`);
 }
+
+export type NotificationChannelType = "webhook" | "telegram" | "slack" | "email" | "discord";
+
+export type NotificationChannel = {
+  id: string;
+  type: NotificationChannelType;
+  name: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+};
+
+export type NotificationConfig = {
+  enabled: boolean;
+  quiet_hours_start?: string | null;
+  quiet_hours_end?: string | null;
+  channels: NotificationChannel[];
+  dedupe_minutes: number;
+};
+
+export type NotificationStatus = {
+  enabled: boolean;
+  channel_count: number;
+  channel_types: string[];
+  quiet_hours?: string | null;
+  dedupe_minutes: number;
+};
+
+export async function fetchNotificationConfig(): Promise<NotificationConfig> {
+  return apiJson<NotificationConfig>("/api/notifications");
+}
+
+export async function putNotificationConfig(config: NotificationConfig): Promise<NotificationConfig> {
+  return apiJson<NotificationConfig>("/api/notifications", {
+    method: "PUT",
+    body: JSON.stringify(config),
+  });
+}
+
+export async function testNotificationChannel(
+  channelId: string,
+  message = "Test notification from TradingAgents",
+): Promise<{ ok: boolean; error?: string }> {
+  return apiJson<{ ok: boolean; error?: string }>("/api/notifications/test", {
+    method: "POST",
+    body: JSON.stringify({ channel_id: channelId, message }),
+  });
+}
+
+export async function fetchNotificationStatus(): Promise<NotificationStatus> {
+  return apiJson<NotificationStatus>("/api/notifications/status");
+}

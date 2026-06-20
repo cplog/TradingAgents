@@ -425,6 +425,10 @@ class HealthResponse(BaseModel):
         default_factory=lambda: list(DEFAULT_ANALYST_ORDER),
         description="Analyst keys accepted by POST /analyze and POST /batches.",
     )
+    notifications: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Notification layer status snapshot.",
+    )
 
 
 class RunProvenance(BaseModel):
@@ -654,6 +658,14 @@ class HistoryBulkDeleteResponse(BaseModel):
     scope: str = "selected"
 
 
+from api.notifications_models import (
+    NotificationChannel,
+    NotificationConfig,
+    NotificationSendRequest,
+    NotificationStatus,
+    NotificationTestRequest,
+)
+
 __all__ = [
     *globals().get("__all__", []),
     "DimensionsCommentary",
@@ -669,5 +681,10 @@ __all__ = [
     "FactorAggregate",
     "CoverageQualitySummary",
     "SectorAnalyticsResponse",
+    "NotificationChannel",
+    "NotificationConfig",
+    "NotificationSendRequest",
+    "NotificationStatus",
+    "NotificationTestRequest",
 ]
 
