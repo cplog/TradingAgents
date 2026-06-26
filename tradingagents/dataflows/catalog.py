@@ -55,6 +55,7 @@ TOOLS_CATEGORIES: dict[str, _CategoryInfo] = {
         "description": "Macroeconomic indicators (rates, inflation, labor, growth)",
         "tools": [
             "get_macro_data",
+            "list_akshare_endpoints",
         ],
     },
     "prediction_markets": {
@@ -74,15 +75,18 @@ TOOLS_CATEGORIES: dict[str, _CategoryInfo] = {
 
 # Order used when merging configured primaries with fallbacks. Per-method entries
 # in VENDOR_METHODS that are missing for a tool are skipped when building the chain.
+# Free / no-API-key vendors are tried first (prefer_free_data_vendors=True).
+# Within each tier, market coverage breadth determines order:
+#   yfinance (global)  →  akshare (A/HK/US)  →  google_rss (free news, global)
+#   →  finnhub (US/HK, API key)  →  alpha_vantage (US, rate-limited free)
 VENDOR_TRY_ORDER: tuple[str, ...] = (
     "yfinance",
+    "akshare",
+    "google_rss",
+    "finnhub",
+    "alpha_vantage",
     "fred",
     "polymarket",
-    "finnhub",
-    "google_rss",
-    "akshare",
-    "alpha_vantage",
-    "baostock",
 )
 
 VENDOR_LIST: list[str] = list(VENDOR_TRY_ORDER)

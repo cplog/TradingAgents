@@ -24,7 +24,9 @@ def test_every_select_llm_provider_choice_has_an_entry():
         "qwen", "qwen-cn",
         "glm", "glm-cn",
         "minimax", "minimax-cn",
-        "openrouter", "nvidia", "azure", "ollama", "ollama-local", "ollama-remote",
+        "openrouter", "nvidia", "azure",
+        "kimi", "moonshot",
+        "ollama", "ollama-local", "ollama-remote",
     }
     assert expected.issubset(PROVIDER_API_KEY_ENV.keys())
 
@@ -46,6 +48,8 @@ def test_every_select_llm_provider_choice_has_an_entry():
         ("minimax-cn", "MINIMAX_CN_API_KEY"),
         ("openrouter", "OPENROUTER_API_KEY"),
         ("nvidia",     "NVIDIA_API_KEY"),
+        ("kimi",       "MOONSHOT_API_KEY"),
+        ("moonshot",   "MOONSHOT_API_KEY"),
     ],
 )
 def test_known_providers_resolve(provider, env_var):

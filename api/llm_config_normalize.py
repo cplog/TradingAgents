@@ -48,12 +48,22 @@ def model_matches_provider(provider: Optional[str], model: Optional[str]) -> boo
         return not _looks_like_openai_catalog_model(m)
     if p == "openai":
         return not _looks_like_ollama_tag_model(m)
+    if p in ("moonshot", "kimi"):
+        return "kimi" in m.lower() or "moonshot" in m.lower()
     if p == "google":
         return "gemini" in m.lower()
     if p == "anthropic":
         return "claude" in m.lower()
     if p == "deepseek":
         return "deepseek" in m.lower()
+    if p == "xai":
+        return "grok" in m.lower()
+    if p == "qwen":
+        return "qwen" in m.lower()
+    if p == "glm":
+        return "glm" in m.lower()
+    if p == "minimax":
+        return "minimax" in m.lower()
     return True
 
 

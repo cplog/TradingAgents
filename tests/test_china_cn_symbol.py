@@ -4,7 +4,6 @@ import pytest
 
 from tradingagents.dataflows.china_cn_symbol import (
     akshare_symbol,
-    baostock_code,
     is_cn_a_share_symbol,
 )
 
@@ -23,15 +22,6 @@ def test_is_cn_a_share_recognized():
 def test_akshare_symbol():
     assert akshare_symbol("600000.SH") == "600000"
     assert akshare_symbol("600000") == "600000"
-
-
-@pytest.mark.unit
-def test_baostock_code():
-    assert baostock_code("600000.SH") == "sh.600000"
-    assert baostock_code("000001.SZ") == "sz.000001"
-    assert baostock_code("430047.BJ") == "bj.430047"
-    assert baostock_code("600000") == "sh.600000"
-    assert baostock_code("000001") == "sz.000001"
 
 
 @pytest.mark.unit

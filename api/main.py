@@ -83,6 +83,7 @@ from api.models import (
 )
 from api.news import fetch_news_feed
 from api.notifications import get_manager, reset_manager_for_tests
+from api.price_alerts.routes import router as price_alerts_router
 from api.state_store import ALLOWED_PERSISTED_SECRET_KEYS, get_state_store
 from api.topics_models import TopicSearchRequest, TopicUpdateRequest
 from api.hpm import compute_hpm_score, HPMScoreResult, should_gate_analysis
@@ -366,37 +367,6 @@ def _check_akshare() -> DataSourceCheck:
         )
 
 
-def _check_baostock() -> DataSourceCheck:
-    now = _utc_iso_now()
-    try:
-        import baostock as bs  # type: ignore[import-untyped]
-
-        lg = bs.login()
-        if lg.error_code != "0":
-            return DataSourceCheck(
-                ok=False,
-                configured=True,
-                checked_at=now,
-                detail=f"login failed: {lg.error_msg}",
-            )
-        bs.logout()
-        return DataSourceCheck(ok=True, configured=True, checked_at=now)
-    except ImportError:
-        return DataSourceCheck(
-            ok=False,
-            configured=False,
-            checked_at=now,
-            detail="baostock package not installed",
-        )
-    except Exception as exc:
-        return DataSourceCheck(
-            ok=False,
-            configured=True,
-            checked_at=now,
-            detail=str(exc),
-        )
-
-
 def _check_kronos() -> DataSourceCheck:
     """Lightweight Kronos readiness (no HF weight download on health)."""
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -467,7 +437,6 @@ def _build_data_source_checks() -> Dict[str, DataSourceCheck]:
         "alpha_vantage": _check_alpha_vantage(),
         "google_rss": _check_google_rss(),
         "akshare": _check_akshare(),
-        "baostock": _check_baostock(),
         "kronos": _check_kronos(),
     }
 
@@ -679,7 +648,16 @@ async def lifespan(app: FastAPI):
         await topics.start()
         logger.info("Topics background scheduler started (60s loop)")
 
+    from api.price_alerts.engine import get_engine as get_price_alert_engine
+
+    pa = get_price_alert_engine()
+    poll_seconds = max(60, int(_service_config.get("price_alert_poll_seconds", 300)))
+    await pa.start(poll_seconds)
+    logger.info("Price alert engine started (%ds poll)", poll_seconds)
+
     yield
+
+    await pa.stop()
 
     if topics is not None:
         await topics.stop()
@@ -711,6 +689,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(price_alerts_router)
 
 @app.get("/health", response_class=PlainTextResponse)
 async def health() -> str:

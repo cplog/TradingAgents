@@ -172,35 +172,65 @@ def _format_post(post: dict) -> str:
     return block
 
 
+def _merge_queries(ticker: str, additional_queries: Iterable[str] | None) -> list[str]:
+    """Ticker first, then optional company-name aliases (deduped, case-insensitive)."""
+    queries = [ticker.strip()]
+    if additional_queries:
+        seen = {queries[0].upper()}
+        for raw in additional_queries:
+            q = str(raw).strip()
+            if q and q.upper() not in seen:
+                seen.add(q.upper())
+                queries.append(q)
+    return queries
+
+
+def _collect_posts_for_query(
+    query: str,
+    subs: tuple[str, ...],
+    limit: int,
+) -> list[dict]:
+    posts: list[dict] = []
+    for sub in subs:
+        batch = _fetch_subreddit_rss(sub, query, limit)
+        if not batch:
+            try:
+                batch = _fetch_subreddit_json(sub, query, limit)
+            except Exception:
+                pass
+        posts.extend(batch)
+    return posts
+
+
 def search_reddit(
     ticker: str,
     subreddits: Iterable[str] | None = None,
     limit: int = 5,
+    additional_queries: Iterable[str] | None = None,
+    inter_request_delay: float = 0.3,
 ) -> str:
     """Search Reddit for posts about a ticker, returning a formatted summary.
 
     Uses the RSS feed by default, falling back to JSON only if RSS errors.
+    ``additional_queries`` adds alternate search strings (e.g. company name)
+    so threads without the bare ticker symbol are also captured.
+
     Returns a placeholder when Reddit communication fails rather than raising,
     so callers never need to special-case missing data.
     """
     subs = tuple(subreddits) if subreddits is not None else DEFAULT_SUBREDDITS
+    queries = _merge_queries(ticker, additional_queries)
     all_posts: list[dict] = []
     seen_ids: set[str] = set()
 
-    for sub in subs:
-        posts = _fetch_subreddit_rss(sub, ticker, limit)
-        # If RSS returns empty for a fairly active sub, try JSON as a fallback
-        # (it may have content that RSS doesn't serve).
-        if not posts:
-            try:
-                posts = _fetch_subreddit_json(sub, ticker, limit)
-            except Exception:
-                pass
-        for p in posts:
-            pid = str(p.get("id", ""))
+    for qi, query in enumerate(queries):
+        if qi > 0:
+            time.sleep(inter_request_delay)
+        for post in _collect_posts_for_query(query, subs, limit):
+            pid = str(post.get("id", ""))
             if pid and pid not in seen_ids:
                 seen_ids.add(pid)
-                all_posts.append(p)
+                all_posts.append(post)
 
     if not all_posts:
         return f"No Reddit discussions found for {ticker}."
@@ -215,18 +245,30 @@ def search_reddit(
 
 # Backward-compatible wrappers ------------------------------------------------
 
-def fetch_reddit_posts(ticker: str, subreddits: Iterable[str] | None = None, limit: int = 5) -> str:
+def fetch_reddit_posts(
+    ticker: str,
+    subreddits: Iterable[str] | None = None,
+    limit: int = 5,
+    additional_queries: Iterable[str] | None = None,
+) -> str:
     """Backward-compat alias for ``search_reddit`` (returns formatted string).
 
     Old callers: ``fetch_reddit_posts(ticker, subreddits=["wsb"], limit=5)``.
     """
-    return search_reddit(ticker, subreddits, limit)
+    return search_reddit(
+        ticker,
+        subreddits,
+        limit,
+        additional_queries=additional_queries,
+    )
 
 
 def fetch_reddit_feed_items(
     ticker: str,
     subreddits: Iterable[str] | None = None,
     limit: int = 5,
+    additional_queries: Iterable[str] | None = None,
+    inter_request_delay: float = 0.3,
 ) -> list[dict]:
     """Backward-compat: return Reddit posts as structured dicts (API usage).
 
@@ -235,21 +277,18 @@ def fetch_reddit_feed_items(
     num_comments, author, subreddit.
     """
     subs = tuple(subreddits) if subreddits is not None else DEFAULT_SUBREDDITS
+    queries = _merge_queries(ticker, additional_queries)
     all_posts: list[dict] = []
     seen_ids: set[str] = set()
 
-    for sub in subs:
-        posts = _fetch_subreddit_rss(sub, ticker, limit)
-        if not posts:
-            try:
-                posts = _fetch_subreddit_json(sub, ticker, limit)
-            except Exception:
-                pass
-        for p in posts:
-            pid = str(p.get("id", ""))
+    for qi, query in enumerate(queries):
+        if qi > 0:
+            time.sleep(inter_request_delay)
+        for post in _collect_posts_for_query(query, subs, limit):
+            pid = str(post.get("id", ""))
             if pid and pid not in seen_ids:
                 seen_ids.add(pid)
-                all_posts.append(p)
+                all_posts.append(post)
 
     all_posts.sort(key=lambda p: p.get("created_utc", 0), reverse=True)
     return all_posts[:limit * len(subs)]

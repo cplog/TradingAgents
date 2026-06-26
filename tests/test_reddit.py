@@ -68,6 +68,34 @@ class TestSearchReddit:
 
     @patch("tradingagents.dataflows.reddit._fetch_subreddit_rss")
     @patch("tradingagents.dataflows.reddit._fetch_subreddit_json")
+    def test_additional_queries_search_company_name(self, mock_json, mock_rss):
+        def rss_side_effect(sub: str, query: str, limit: int):
+            if query == "Apple Inc.":
+                return [
+                    {
+                        "id": "apple",
+                        "title": "Apple earnings thread",
+                        "score": 0,
+                        "num_comments": 0,
+                        "created_utc": 1749682800,
+                        "permalink": "/r/stocks/comments/apple/",
+                        "author": "u1",
+                        "subreddit": sub,
+                        "_source": "rss",
+                    }
+                ]
+            return []
+
+        mock_rss.side_effect = rss_side_effect
+        result = search_reddit(
+            "AAPL",
+            subreddits=["stocks"],
+            additional_queries=["Apple Inc."],
+        )
+        assert "Apple earnings thread" in result
+
+    @patch("tradingagents.dataflows.reddit._fetch_subreddit_rss")
+    @patch("tradingagents.dataflows.reddit._fetch_subreddit_json")
     def test_no_posts_returns_placeholder(self, mock_json, mock_rss):
         mock_rss.return_value = []
         mock_json.return_value = []

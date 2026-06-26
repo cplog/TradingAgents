@@ -46,7 +46,6 @@ def test_route_stock_tries_next_on_yfinance_empty_string():
                 RuntimeError("should not reach av in this test")
             ),
             "akshare": lambda *a, **k: (_ for _ in ()).throw(DataVendorUnavailable("skip")),
-            "baostock": lambda *a, **k: (_ for _ in ()).throw(DataVendorUnavailable("skip")),
         }
         old = iface.VENDOR_METHODS["get_stock_data"]
         try:
@@ -159,6 +158,51 @@ def test_alpha_vantage_missing_key_skips_instead_of_value_error(monkeypatch):
     monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
     with pytest.raises(DataVendorUnavailable, match="ALPHA_VANTAGE_API_KEY"):
         alpha_vantage_common.get_api_key()
+
+
+@pytest.mark.unit
+def test_route_stock_data_skips_akshare_auto_fallback_for_us_ticker():
+    """US tickers should not hit AKShare unless akshare is explicitly configured."""
+    cfg = {
+        "prefer_free_data_vendors": True,
+        "data_vendors": {"core_stock_apis": "yfinance"},
+        "tool_vendors": {},
+    }
+    calls: list[str] = []
+
+    def fake_yfinance(symbol, start_date, end_date):
+        calls.append("yf")
+        raise DataVendorUnavailable("yfinance rate limited")
+
+    def fake_akshare(symbol, start_date, end_date):
+        calls.append("ak")
+        return "should not reach akshare for AAPL"
+
+    def fake_finnhub(symbol, start_date, end_date):
+        calls.append("fh")
+        return "OK,CSV"
+
+    with patch.object(iface, "get_config", return_value=cfg):
+        patched = {
+            "yfinance": fake_yfinance,
+            "akshare": fake_akshare,
+            "finnhub": fake_finnhub,
+            "alpha_vantage": lambda *a, **k: (_ for _ in ()).throw(
+                DataVendorUnavailable("skip av")
+            ),
+        }
+        old = iface.VENDOR_METHODS["get_stock_data"]
+        try:
+            iface.VENDOR_METHODS["get_stock_data"] = patched
+            out = iface.route_to_vendor(
+                "get_stock_data", "AAPL", "2024-01-01", "2024-01-10"
+            )
+        finally:
+            iface.VENDOR_METHODS["get_stock_data"] = old
+
+    assert out == "OK,CSV"
+    assert calls == ["yf", "fh"]
+    assert "ak" not in calls
 
 
 @pytest.mark.unit

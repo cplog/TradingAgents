@@ -67,8 +67,14 @@ export function DashboardPage() {
   const jobFromQs = searchParams.get("job")?.trim() ?? "";
   const [ticker, setTicker] = useState(() => tickerFromQs || "AAPL");
   const [date, setDate] = useState("");
-  const { config: llmConfig, setConfig: setLlmConfig, hydrateFromServer: hydrateLlmFromServer, reset: resetLlm, serverDefaults } =
-    useLlmConfig();
+  const {
+    config: llmConfig,
+    setConfig: setLlmConfig,
+    hydrateFromServer: hydrateLlmFromServer,
+    reset: resetLlm,
+    serverDefaults,
+    hasStoredPreferences: hasStoredLlmPreferences,
+  } = useLlmConfig();
   const [outputLanguage, setOutputLanguage] = useState("English");
   const [temperature, setTemperature] = useState(0.7);
   const [applyTemperature, setApplyTemperature] = useState(false);
@@ -128,7 +134,11 @@ export function DashboardPage() {
           setApplyTemperature,
         });
         hydrateLlmFromServer(cfg);
-        setConfigHint("Form filled from server config (TRADINGAGENTS_* / .env via GET /config).");
+        setConfigHint(
+          hasStoredLlmPreferences
+            ? "LLM provider and models come from your saved browser preferences (Advanced → LLM)."
+            : "Debate and language filled from server defaults. Pick your LLM in Advanced → LLM — choices are saved in this browser."
+        );
       })
       .catch(() => {
         if (!cancelled) {

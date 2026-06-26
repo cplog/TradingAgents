@@ -1,12 +1,18 @@
-"""Notification layer: multi-channel delivery via Apprise."""
+"""Notification layer: multi-channel delivery via Apprise + custom HTTP.
+
+Extended from PanWatch (MIT) to add DingTalk, Feishu/Lark, Pushover,
+Bark, WeChat Work, ServerChan, and PushPlus channels.
+"""
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, time, timezone
 from typing import Any, Optional
 
 import apprise
+import httpx
 
 from api.models import (
     NotificationChannel,
@@ -105,6 +111,8 @@ class NotificationManager:
     ) -> dict[str, Any]:
         async with self._sem:
             try:
+                if channel.type in _CUSTOM_TYPES:
+                    return await _send_custom(channel, title, body)
                 return await asyncio.to_thread(_deliver_sync, channel, title, body)
             except Exception as exc:
                 logger.exception("Failed to send notification to %s", channel.id)
@@ -181,6 +189,10 @@ def _is_dup(key: str, dedupe: dict[str, datetime], minutes: int) -> bool:
 
 # ------------------------------------------------------------------ Apprise delivery
 
+_APPRISE_TYPES = {"telegram", "bark", "dingtalk", "lark", "discord", "pushover"}
+_CUSTOM_TYPES = {"wecom", "serverchan", "pushplus"}
+
+
 def _deliver_sync(channel: NotificationChannel, title: str, body: str) -> dict[str, Any]:
     apobj = apprise.Apprise()
     uri = _build_apprise_uri(channel)
@@ -231,4 +243,118 @@ def _build_apprise_uri(channel: NotificationChannel) -> Optional[str]:
         if not webhook:
             return None
         return webhook
+    if t == "dingtalk":
+        token = (cfg.get("token") or "").strip()
+        secret = (cfg.get("secret") or "").strip()
+        if not token:
+            return None
+        if secret:
+            return f"dingtalk://{secret}@{token}/"
+        return f"dingtalk://{token}/"
+    if t == "lark":
+        webhook_token = (cfg.get("webhook_token") or "").strip()
+        if not webhook_token:
+            return None
+        return f"lark://{webhook_token}/"
+    if t == "pushover":
+        user_key = cfg.get("user_key")
+        app_token = cfg.get("app_token")
+        if not user_key or not app_token:
+            return None
+        return f"pover://{user_key}@{app_token}/"
+    if t == "bark":
+        device_key = cfg.get("device_key")
+        server_url = cfg.get("server_url", "").strip("/")
+        if not device_key:
+            return None
+        if server_url:
+            host = server_url.replace("https://", "").replace("http://", "")
+            return f"bark://{host}/{device_key}/"
+        return f"bark://{device_key}/"
     return None
+
+
+# ------------------------------------------------------------------ custom channel senders
+
+async def _send_custom(channel: NotificationChannel, title: str, body: str) -> dict[str, Any]:
+    t = channel.type
+    cfg = channel.config or {}
+    if t == "wecom":
+        return await _send_wecom(cfg, title, body)
+    if t == "serverchan":
+        return await _send_serverchan(cfg, title, body)
+    if t == "pushplus":
+        return await _send_pushplus(cfg, title, body)
+    return {"ok": False, "error": f"unsupported custom type: {t}"}
+
+
+async def _send_wecom(config: dict, title: str, body: str) -> dict[str, Any]:
+    """WeChat Work (企业微信) robot webhook."""
+    key = (config.get("webhook_key") or "").strip()
+    if not key:
+        return {"ok": False, "error": "missing webhook_key"}
+
+    url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
+    text = f"## {title}\n\n{body}" if title else body
+    payload = {"msgtype": "markdown", "markdown": {"content": text}}
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload)
+            data = resp.json()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    if data.get("errcode") != 0:
+        return {"ok": False, "error": data.get("errmsg", "unknown")}
+    return {"ok": True}
+
+
+async def _send_serverchan(config: dict, title: str, body: str) -> dict[str, Any]:
+    """ServerChan push notification."""
+    sendkey = (config.get("sendkey") or "").strip()
+    if not sendkey:
+        return {"ok": False, "error": "missing sendkey"}
+
+    url = f"https://sctapi.ftqq.com/{sendkey}.send"
+    payload = {"title": title or "Notification", "desp": body}
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload)
+            data = resp.json()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    if data.get("code") != 0:
+        return {"ok": False, "error": data.get("message", "unknown")}
+    return {"ok": True}
+
+
+async def _send_pushplus(config: dict, title: str, body: str) -> dict[str, Any]:
+    """PushPlus push notification."""
+    token = (config.get("token") or "").strip()
+    if not token:
+        return {"ok": False, "error": "missing token"}
+
+    url = "https://www.pushplus.plus/send"
+    payload = {
+        "token": token,
+        "title": title or "Notification",
+        "content": body,
+        "template": "markdown",
+    }
+    topic = (config.get("topic") or "").strip()
+    if topic:
+        payload["topic"] = topic
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload)
+            data = resp.json()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    if data.get("code") != 200:
+        return {"ok": False, "error": data.get("msg", "unknown")}
+    return {"ok": True}

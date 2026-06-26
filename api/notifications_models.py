@@ -11,6 +11,13 @@ NotificationChannelType = Literal[
     "slack",
     "email",
     "discord",
+    "dingtalk",
+    "lark",
+    "pushover",
+    "bark",
+    "wecom",
+    "serverchan",
+    "pushplus",
 ]
 
 

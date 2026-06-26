@@ -31,6 +31,9 @@ PROVIDER_API_KEY_ENV: dict[str, Optional[str]] = {
     "minimax-cn": "MINIMAX_CN_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "nvidia":     "NVIDIA_API_KEY",
+    # Moonshot's API is branded as Kimi; both provider names route here.
+    "kimi":       "MOONSHOT_API_KEY",
+    "moonshot":   "MOONSHOT_API_KEY",
     # Ollama local runtime does not require auth; remote front-doors may.
     "ollama":         None,
     "ollama-local":   None,

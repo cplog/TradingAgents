@@ -19,6 +19,7 @@ describe("llmConfigToOverrides", () => {
       deep_think_llm: "gpt-5",
       quick_think_llm: "gpt-4o-mini",
       openrouter_free_only: false,
+      backend_url: null,
     });
   });
 
@@ -39,6 +40,11 @@ describe("llmConfigToOverrides", () => {
   it("passes through a custom backend for non-ollama providers", () => {
     const out = llmConfigToOverrides({ ...base, backendUrl: "https://custom.example/v1" });
     expect(out.backend_url).toBe("https://custom.example/v1");
+  });
+
+  it("clears backend_url when the user leaves it blank (avoids stale server .env)", () => {
+    const out = llmConfigToOverrides({ ...base, provider: "openai", backendUrl: "" });
+    expect(out.backend_url).toBeNull();
   });
 });
 
@@ -133,23 +139,26 @@ describe("useLlmConfig", () => {
     h.unmount();
   });
 
-  it("hydrateFromServer fills only keys not present in localStorage", () => {
+  it("hydrateFromServer records server defaults without changing saved picker values", () => {
     storageBacking["ta:llm.provider"] = "anthropic";
+    storageBacking["ta:llm.deepModel"] = "claude-opus";
 
     const h = renderHook(() => useLlmConfig());
     act(() => {
       h.current.value.hydrateFromServer({
-        llm_provider: "ollama-remote",
-        deep_think_llm: "glm-4.7",
-        quick_think_llm: "qwen3",
+        llm_provider: "nvidia",
+        deep_think_llm: "nvidia/nemotron-3-ultra-550b-a55b",
+        quick_think_llm: "nvidia/nemotron-3-ultra-550b-a55b",
+        backend_url: "https://integrate.api.nvidia.com/v1",
       });
     });
 
-    // provider was user-set in localStorage → server value ignored.
     expect(h.current.value.config.provider).toBe("anthropic");
-    // deepModel / quickModel were not set → take server values.
-    expect(h.current.value.config.deepModel).toBe("glm-4.7");
-    expect(h.current.value.config.quickModel).toBe("qwen3");
+    expect(h.current.value.config.deepModel).toBe("claude-opus");
+    expect(h.current.value.serverDefaults).toMatchObject({
+      provider: "nvidia",
+      deepModel: "nvidia/nemotron-3-ultra-550b-a55b",
+    });
     h.unmount();
   });
 

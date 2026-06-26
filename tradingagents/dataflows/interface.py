@@ -1,5 +1,6 @@
 import logging
 
+from .akshare_macro import get_macro_akshare, list_akshare_endpoints
 from .alpha_vantage import (
     get_balance_sheet as get_alpha_vantage_balance_sheet,
     get_cashflow as get_alpha_vantage_cashflow,
@@ -18,14 +19,29 @@ from .catalog import (
     VENDOR_TRY_ORDER,
     get_category_for_method,
 )
+from .china_akshare import get_stock_akshare
+from .china_cn_symbol import (
+    akshare_hk_listing_code,
+    akshare_symbol,
+    akshare_us_ticker,
+)
 from .config import get_config
 from .errors import (
     NoMarketDataError,
     VendorNotConfiguredError,
     VendorRateLimitError,
 )
+from .finnhub_data import (
+    get_stock_finnhub,
+    get_news_finnhub,
+    get_global_news_finnhub,
+)
 from .fred import get_macro_data as get_fred_macro_data
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
+from .rss_news import (
+    get_news_google_rss,
+    get_global_news_google_rss,
+)
 from .vendor_errors import DataVendorUnavailable
 from .y_finance import (
     get_YFin_data_online,
@@ -37,7 +53,6 @@ from .y_finance import (
     get_insider_transactions as get_yfinance_insider_transactions,
 )
 from .yfinance_news import get_news_yfinance, get_global_news_yfinance
-from .akshare_macro import get_macro_akshare, list_akshare_endpoints
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +61,9 @@ VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
         "yfinance": get_YFin_data_online,
+        "akshare": get_stock_akshare,
         "alpha_vantage": get_alpha_vantage_stock,
+        "finnhub": get_stock_finnhub,
     },
     # technical_indicators
     "get_indicators": {
@@ -73,23 +90,31 @@ VENDOR_METHODS = {
     # news_data
     "get_news": {
         "yfinance": get_news_yfinance,
+        "google_rss": get_news_google_rss,
+        "finnhub": get_news_finnhub,
         "alpha_vantage": get_alpha_vantage_news,
     },
     "get_global_news": {
         "yfinance": get_global_news_yfinance,
+        "google_rss": get_global_news_google_rss,
+        "finnhub": get_global_news_finnhub,
         "alpha_vantage": get_alpha_vantage_global_news,
     },
     "get_insider_transactions": {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
     },
-    # macro_data
-    "get_macro_data": {
-        "fred": get_fred_macro_data,
-    },
     # prediction_markets
     "get_prediction_markets": {
         "polymarket": get_polymarket_prediction_markets,
+    },
+    # macro_data via akshare
+    "get_macro_data": {
+        "fred": get_fred_macro_data,
+        "akshare": get_macro_akshare,
+    },
+    "list_akshare_endpoints": {
+        "akshare": list_akshare_endpoints,
     },
 }
 
@@ -169,6 +194,35 @@ def _vendor_should_skip(method: str, result: object) -> bool:
     return any(s.startswith(p) for p in prefixes)
 
 
+def _akshare_auto_fallback_eligible(method: str, symbol: object) -> bool:
+    """AKShare auto-fallback is for CN/HK symbols; US has yfinance + Stooq."""
+    if method != "get_stock_data" or not isinstance(symbol, str):
+        return True
+    sym = symbol.strip().upper()
+    if akshare_symbol(sym) or akshare_hk_listing_code(sym):
+        return True
+    if akshare_us_ticker(sym):
+        return False
+    return True
+
+
+def _filter_auto_akshare_fallback(
+    method: str,
+    primary_vendors: list[str],
+    fallback_vendors: list[str],
+    *args: object,
+) -> list[str]:
+    """Skip AKShare in the automatic chain for US tickers unless explicitly configured."""
+    if "akshare" not in fallback_vendors:
+        return fallback_vendors
+    if "akshare" in primary_vendors:
+        return fallback_vendors
+    symbol = args[0] if args else None
+    if _akshare_auto_fallback_eligible(method, symbol):
+        return fallback_vendors
+    return [v for v in fallback_vendors if v != "akshare"]
+
+
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     category = get_category_for_method(method)
@@ -179,6 +233,9 @@ def route_to_vendor(method: str, *args, **kwargs):
         raise ValueError(f"Method '{method}' not supported")
 
     fallback_vendors = _build_vendor_fallback_chain(method, primary_vendors)
+    fallback_vendors = _filter_auto_akshare_fallback(
+        method, primary_vendors, fallback_vendors, *args
+    )
 
     last_exc = None
     for vendor in fallback_vendors:
@@ -202,5 +259,17 @@ def route_to_vendor(method: str, *args, **kwargs):
             continue
 
     if last_exc is not None:
+        if method in ("list_akshare_endpoints",):
+            reason = str(last_exc)
+            if "package not installed" in reason:
+                hint = "Try: pip install akshare"
+            else:
+                hint = reason
+            return (
+                f"## {method} — not available\n\n"
+                f"**{reason}**\n\n{hint}\n\n"
+                f"> {method.title().replace('_', ' ')} requires the AKShare library. "
+                f"See `tradingagents[china-data]` or `pip install akshare`."
+            )
         raise RuntimeError(f"No available vendor for '{method}': {last_exc}") from last_exc
     raise RuntimeError(f"No available vendor for '{method}'")

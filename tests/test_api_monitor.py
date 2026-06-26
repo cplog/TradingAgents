@@ -114,6 +114,48 @@ def test_monitor_tick_sends_notification(api_client: TestClient, monkeypatch):
 
 
 @pytest.mark.unit
+def test_monitor_tick_akshare_fallback_to_yfinance(api_client: TestClient, monkeypatch):
+    reset_manager_for_tests()
+    monkeypatch.setattr(
+        "api.monitor.engine.scan_us_panic_candidates",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("akshare down")),
+    )
+    monkeypatch.setattr(
+        "api.monitor.engine.scan_watchlist_panic_candidates",
+        lambda tickers, min_drop_pct=-10.0: [
+            {"ticker": "AAPL", "change_pct": -11.0, "amplitude_pct": 4.0}
+        ],
+    )
+
+    class _FakeSignal:
+        score = 85
+        change_pct = -11.0
+
+        def to_dict(self):
+            return {"score": self.score, "change_pct": self.change_pct}
+
+    monkeypatch.setattr(
+        "api.monitor.engine.compute_overnight_signal",
+        lambda *args, **kwargs: _FakeSignal(),
+    )
+    monkeypatch.setattr(
+        "tradingagents.dataflows.config.set_config",
+        lambda *args, **kwargs: None,
+    )
+    sent = []
+
+    async def fake_send(title, body, tags=None, force=False):
+        sent.append({"title": title, "body": body, "tags": tags})
+        return {"sent": True}
+
+    monkeypatch.setattr(get_manager(), "send", fake_send)
+    api_client.put("/api/monitor/watchlist", json={"tickers": ["AAPL"]})
+    r = api_client.post("/api/monitor/tick")
+    assert r.status_code == 200
+    assert any("AAPL" in s["title"] for s in sent)
+
+
+@pytest.mark.unit
 def test_analyze_scan_mode(api_client: TestClient):
     r = api_client.post(
         "/analyze",

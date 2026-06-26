@@ -232,31 +232,6 @@ class NvidiaChatOpenAI(_PreferJsonSchemaMixin, NormalizedChatOpenAI):
 
 class OpenRouterChatOpenAI(_PreferJsonSchemaMixin, NormalizedChatOpenAI):
     """OpenRouter — prefers JSON-schema structured output over tool calling."""
-    """NVIDIA NIM — prefers JSON-schema structured output over tool calling.
-
-    NVIDIA's OpenAI-compatible API (integrate.api.nvidia.com) returns HTTP 404
-    from Cloudflare when LangChain uses ``method=function_calling`` because the
-    gateway cannot locate the auto-generated function binding. Preferring
-    ``json_schema`` overrides ``function_calling``.
-    """
-
-    def with_structured_output(self, schema, *, method=None, **kwargs):
-        caps = get_capabilities(self.model_name)
-        if caps.preferred_structured_method == "none":
-            raise NotImplementedError(
-                f"{self.model_name} has no structured-output method available; "
-                f"agent factories will fall back to free-text generation."
-            )
-        if method is None:
-            if caps.supports_json_schema:
-                method = "json_schema"
-            elif caps.supports_json_mode:
-                method = "json_mode"
-            else:
-                method = caps.preferred_structured_method
-        if method == "function_calling" and not caps.supports_tool_choice:
-            kwargs.setdefault("tool_choice", None)
-        return ChatOpenAI.with_structured_output(self, schema, method=method, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -300,7 +275,9 @@ OPENAI_COMPATIBLE_PROVIDERS: dict[str, ProviderSpec] = {
     "minimax-cn": ProviderSpec(base_url="https://api.minimaxi.com/v1", chat_class=MinimaxChatOpenAI),
     "openrouter": ProviderSpec(base_url="https://openrouter.ai/api/v1", chat_class=OpenRouterChatOpenAI),
     "mistral":    ProviderSpec(base_url="https://api.mistral.ai/v1"),
+    # Moonshot's OpenAI-compatible endpoint is branded as Kimi; accept both names.
     "kimi":       ProviderSpec(base_url="https://api.moonshot.ai/v1"),
+    "moonshot":   ProviderSpec(base_url="https://api.moonshot.ai/v1"),
     "groq":       ProviderSpec(base_url="https://api.groq.com/openai/v1"),
     "nvidia":     ProviderSpec(base_url="https://integrate.api.nvidia.com/v1", chat_class=NvidiaChatOpenAI),
     "ollama":     ProviderSpec(base_url="http://localhost:11434/v1", base_url_env="OLLAMA_BASE_URL",
@@ -342,7 +319,6 @@ class OpenAIClient(BaseLLMClient):
 
     def get_llm(self) -> Any:
         """Return configured ChatOpenAI instance."""
-        self.warn_if_unknown_model()
         spec = OPENAI_COMPATIBLE_PROVIDERS.get(self.provider)
         if spec is None:
             raise ValueError(f"Unknown OpenAI-compatible provider: {self.provider}")
@@ -365,7 +341,17 @@ class OpenAIClient(BaseLLMClient):
                 f"``TRADINGAGENTS_LLM_BACKEND_URL`` env var."
             )
 
-        # Resolve API key or placeholder.
+        has_custom_endpoint = bool(llm_kwargs.get("base_url"))
+
+        # Only check the official model catalog when we are talking to the
+        # provider's default endpoint. Custom/OpenAI-compatible proxies (e.g.
+        # a local LiteLLM gateway) can host arbitrary model names like
+        # ``kimi-k2.6`` without triggering a warning.
+        if not has_custom_endpoint:
+            self.warn_if_unknown_model()
+
+        # Resolve API key or placeholder. Custom endpoints are often keyless,
+        # so fall back to the provider's placeholder when no key is available.
         if spec.key_optional:
             api_key_env = get_api_key_env(self.provider)
             llm_kwargs["api_key"] = (
@@ -376,6 +362,8 @@ class OpenAIClient(BaseLLMClient):
             api_key = os.environ.get(api_key_env) if api_key_env else None
             if api_key:
                 llm_kwargs["api_key"] = api_key
+            elif has_custom_endpoint:
+                llm_kwargs["api_key"] = spec.placeholder_key
             else:
                 raise ValueError(
                     f"API key for provider '{self.provider}' is not set. "

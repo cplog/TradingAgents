@@ -6,6 +6,7 @@ adds API-specific validation.
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, Optional
 
@@ -15,6 +16,7 @@ load_dotenv(find_dotenv(usecwd=True))
 
 from tradingagents.default_config import build_fresh_config
 
+logger = logging.getLogger(__name__)
 
 REQUIRED_API_KEYS = {
     "openai": "OPENAI_API_KEY",
@@ -42,6 +44,62 @@ def _has_ollama_remote_auth() -> bool:
     return token or client_pair
 
 
+def _has_ollama_remote_endpoint() -> bool:
+    return bool(
+        os.getenv("OLLAMA_CF_URL", "").strip()
+        or os.getenv("OLLAMA_BASE_URL", "").strip()
+    )
+
+
+# When TRADINGAGENTS_LLM_PROVIDER is unset, background services (topics refresh,
+# dimensions, etc.) pick the first provider with credentials in this order.
+_SERVER_LLM_PROBE_ORDER: tuple[str, ...] = (
+    "deepseek",
+    "openrouter",
+    "ollama-remote",
+    "anthropic",
+    "google",
+    "openai",
+    "nvidia",
+    "moonshot",
+    "xai",
+    "qwen",
+    "glm",
+    "minimax",
+    "ollama-local",
+)
+
+
+def _provider_has_credentials(provider: str) -> bool:
+    p = provider.lower()
+    if p == "ollama-remote":
+        return _has_ollama_remote_auth() and _has_ollama_remote_endpoint()
+    if p in ("ollama", "ollama-local"):
+        return True
+    env_var = REQUIRED_API_KEYS.get(p)
+    if not env_var:
+        return False
+    return bool(os.getenv(env_var, "").strip())
+
+
+def _auto_resolve_server_llm_provider(cfg: Dict[str, Any]) -> None:
+    """Pick a usable LLM provider for server-side jobs when .env leaves the code default."""
+    if os.environ.get("TRADINGAGENTS_LLM_PROVIDER", "").strip():
+        return
+    current = str(cfg.get("llm_provider") or "openai").lower()
+    if _provider_has_credentials(current):
+        return
+    for candidate in _SERVER_LLM_PROBE_ORDER:
+        if _provider_has_credentials(candidate):
+            cfg["llm_provider"] = candidate
+            logger.info(
+                "Auto-selected llm_provider=%s for server jobs "
+                "(set TRADINGAGENTS_LLM_PROVIDER to override)",
+                candidate,
+            )
+            return
+
+
 def build_service_config() -> Dict[str, Any]:
     """Return a config dict ready for TradingAgentsGraph.
 
@@ -57,6 +115,7 @@ def build_service_config() -> Dict[str, Any]:
     cfg = build_fresh_config()
     if os.environ.get("TRADINGAGENTS_CHECKPOINT_ENABLED") is None:
         cfg["checkpoint_enabled"] = True
+    _auto_resolve_server_llm_provider(cfg)
     return normalize_llm_config(cfg, in_place=True)
 
 

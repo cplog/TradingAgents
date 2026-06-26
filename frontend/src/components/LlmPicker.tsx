@@ -156,8 +156,8 @@ function writeToStorage(partial: Partial<LlmConfig>) {
  *
  * - Reads/writes localStorage so each browser user keeps their choice
  *   independent of the server-side .env default.
- * - `hydrateFromServer` only fills keys the user has *never* touched — server
- *   .env becomes the initial default, not a forced override.
+ * - GET /config is recorded as `serverDefaults` only (for “Reset to server
+ *   defaults”); it never overwrites the user's saved picker values.
  */
 export function useLlmConfig() {
   const initial = useMemo(loadFromStorage, []);
@@ -177,30 +177,7 @@ export function useLlmConfig() {
 
   const hydrateFromServer = useCallback((serverCfg: Record<string, unknown>) => {
     setServerDefaults(serverCfgToDefaults(serverCfg));
-    setConfigState((prev) => {
-      const next: LlmConfig = { ...prev };
-      const apply = (k: keyof LlmConfig, value: unknown) => {
-        if (userKeys.has(k)) return;
-        if (k === "openrouterFreeOnly") {
-          if (typeof value === "boolean") next.openrouterFreeOnly = value;
-          return;
-        }
-        if (typeof value === "string") {
-          (next as Record<string, unknown>)[k] = value;
-        } else if (value === null && k === "backendUrl") {
-          next.backendUrl = "";
-        }
-      };
-      if (typeof serverCfg.llm_provider === "string") {
-        apply("provider", serverCfg.llm_provider === "ollama" ? "ollama-local" : serverCfg.llm_provider);
-      }
-      apply("deepModel", serverCfg.deep_think_llm);
-      apply("quickModel", serverCfg.quick_think_llm);
-      apply("backendUrl", serverCfg.backend_url);
-      apply("openrouterFreeOnly", serverCfg.openrouter_free_only);
-      return next;
-    });
-  }, [userKeys]);
+  }, []);
 
   const reset = useCallback(() => {
     const store = safeStore();
@@ -211,7 +188,14 @@ export function useLlmConfig() {
     setConfigState(serverDefaults ? configFromServerDefaults(serverDefaults) : DEFAULT_CONFIG);
   }, [serverDefaults]);
 
-  return { config, setConfig, hydrateFromServer, reset, serverDefaults };
+  return {
+    config,
+    setConfig,
+    hydrateFromServer,
+    reset,
+    serverDefaults,
+    hasStoredPreferences: userKeys.size > 0,
+  };
 }
 
 /** Build the `config_overrides` payload for /analyze and /batches. */
@@ -226,8 +210,9 @@ export function llmConfigToOverrides(config: LlmConfig): Record<string, unknown>
   if (config.provider.startsWith("ollama")) {
     // Don't inherit a stale OpenRouter URL when the user picks Ollama.
     overrides.backend_url = trimmed && !trimmed.includes("openrouter.ai") ? trimmed : null;
-  } else if (trimmed) {
-    overrides.backend_url = trimmed;
+  } else {
+    // Always override so a stale server .env backend_url cannot leak into runs.
+    overrides.backend_url = trimmed || null;
   }
   return overrides;
 }

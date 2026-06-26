@@ -9,7 +9,10 @@ from typing import Any, Dict, List, Optional, Set
 
 from tradingagents.dataflows.akshare_monitor import scan_us_panic_candidates
 from tradingagents.dataflows.config import get_config, set_config
-from tradingagents.dataflows.daily_signals import compute_overnight_signal
+from tradingagents.dataflows.daily_signals import (
+    compute_overnight_signal,
+    scan_watchlist_panic_candidates,
+)
 from tradingagents.default_config import build_fresh_config
 
 from .scheduler import monitor_should_poll, us_session_now
@@ -112,13 +115,27 @@ class MonitorEngine:
             return {"triggered": [], "message": "empty watchlist"}
 
         loop = asyncio.get_running_loop()
+        candidates: list[dict[str, Any]] = []
         try:
             candidates = await loop.run_in_executor(
                 None, lambda: scan_us_panic_candidates(min_drop_pct=min_drop)
             )
         except Exception as exc:
             self._last_errors.append(f"akshare scan: {exc}")
-            return {"triggered": [], "error": str(exc)}
+            try:
+                candidates = await loop.run_in_executor(
+                    None,
+                    lambda: scan_watchlist_panic_candidates(
+                        sorted(watch), min_drop_pct=min_drop
+                    ),
+                )
+                if candidates:
+                    self._last_errors.append(
+                        f"yfinance watchlist fallback: {len(candidates)} candidate(s)"
+                    )
+            except Exception as fallback_exc:
+                self._last_errors.append(f"yfinance fallback: {fallback_exc}")
+                return {"triggered": [], "error": str(exc)}
 
         hits = [c for c in candidates if c.get("ticker") in watch]
         self._last_candidates = [h["ticker"] for h in hits]

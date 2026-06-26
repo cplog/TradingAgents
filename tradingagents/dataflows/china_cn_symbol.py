@@ -1,4 +1,4 @@
-"""Exchange-style symbol hints for AKShare / BaoStock routing."""
+"""Exchange-style symbol hints for AKShare routing."""
 
 
 import re
@@ -24,29 +24,6 @@ def akshare_symbol(symbol: str) -> str | None:
         return s[:-3]
     if len(s) == 6 and s.isdigit():
         return s
-    return None
-
-
-def baostock_code(symbol: str) -> str | None:
-    """``sh.600000`` / ``sz.000001`` / ``bj.430047`` style for BaoStock."""
-    if not is_cn_a_share_symbol(symbol):
-        return None
-    s = symbol.strip().upper()
-    if s.endswith(".SH"):
-        return "sh." + s[:-3]
-    if s.endswith(".SZ"):
-        return "sz." + s[:-3]
-    if s.endswith(".BJ"):
-        return "bj." + s[:-3]
-    if len(s) == 6 and s.isdigit():
-        first = s[0]
-        if first in "569":
-            return "sh." + s
-        if first in "0123":
-            return "sz." + s
-        if first in "48":
-            return "bj." + s
-        return None
     return None
 
 

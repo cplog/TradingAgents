@@ -125,6 +125,34 @@ def _daily_amplitude_pct(df: pd.DataFrame) -> float | None:
     return float((float(row["High"]) - float(row["Low"])) / close * 100)
 
 
+def scan_watchlist_panic_candidates(
+    tickers: list[str],
+    min_drop_pct: float = -10.0,
+) -> list[dict[str, Any]]:
+    """Watchlist-only panic scan via yfinance when AKShare full-market scan is unavailable."""
+    out: list[dict[str, Any]] = []
+    for raw in tickers:
+        sym = str(raw).strip().upper()
+        if not sym:
+            continue
+        change_pct, amplitude_pct = _fetch_change_pct_yfinance(sym)
+        if change_pct is None or change_pct > min_drop_pct:
+            continue
+        out.append(
+            {
+                "ticker": sym,
+                "akshare_code": None,
+                "name": sym,
+                "change_pct": change_pct,
+                "amplitude_pct": amplitude_pct,
+                "last_price": None,
+                "source": "yfinance",
+            }
+        )
+    out.sort(key=lambda row: row["change_pct"])
+    return out
+
+
 def _fetch_change_pct_yfinance(ticker: str) -> tuple[float | None, float | None]:
     """Return (change_pct, amplitude_proxy) from yfinance fast_info/info."""
     try:

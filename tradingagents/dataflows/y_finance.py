@@ -1,9 +1,17 @@
+import csv
+import logging
 from datetime import datetime
+from io import StringIO
 from typing import Annotated
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import yfinance as yf
 from dateutil.relativedelta import relativedelta
+from yfinance.exceptions import YFRateLimitError
+
+logger = logging.getLogger(__name__)
 
 from .stockstats_utils import (
     StockstatsUtils,
@@ -13,6 +21,112 @@ from .stockstats_utils import (
     yf_retry,
 )
 from .symbol_utils import NoMarketDataError, normalize_symbol
+from .vendor_errors import DataVendorUnavailable
+
+def _is_us_ticker(symbol: str) -> bool:
+    """Heuristic: a bare uppercase ticker (no .SH/.SZ/.HK/.T/.KS etc.) is likely US-listed."""
+    s = symbol.strip().upper()
+    if any(s.endswith(sfx) for sfx in (".SH", ".SZ", ".BJ", ".HK", ".T", ".KS", ".KQ", ".NS", ".BO", ".L", ".TO", ".AX", ".SS", ".V", ".PA", ".DE", ".MI")):
+        return False
+    if s.endswith(("-USD", "-USDT")):
+        return False
+    if "." in s:
+        parts = s.split(".")
+        if len(parts) == 2 and len(parts[0]) <= 5 and len(parts[1]) == 1:
+            return True
+        return False
+    return 1 <= len(s) <= 5 and s.isalpha()
+
+
+def _get_stooq_us_data(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> str | None:
+    """Free fallback for US stocks when Yahoo Finance rate-limits.
+    Uses Stooq (stooq.com) which provides daily OHLCV at no cost.
+    Returns CSV string matching yfinance format, or None on failure.
+    """
+    sym = symbol.strip().upper()
+    stooq_sym = f"{sym.lower()}.us"
+    url = f"https://stooq.com/q/d/l/?s={stooq_sym}&i=d"
+
+    try:
+        req = Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; TradingAgents/1.0)",
+                "Accept": "text/csv,text/plain,*/*",
+            },
+        )
+        with urlopen(req, timeout=15) as resp:
+            payload = resp.read().decode("utf-8", "ignore").strip()
+    except (HTTPError, URLError, OSError) as exc:
+        logger.debug("[Stooq] fetch failed for %s: %s", sym, exc)
+        return None
+
+    if not payload or payload.upper().startswith("NO DATA"):
+        return None
+
+    try:
+        reader = csv.reader(StringIO(payload))
+        rows = list(reader)
+        if len(rows) < 2:
+            return None
+
+        header_tokens = [c.strip().lower() for c in rows[0]]
+        has_header = "close" in header_tokens and "date" in header_tokens
+
+        if has_header:
+            data_rows = rows[1:]
+            date_idx = header_tokens.index("date")
+            open_idx = header_tokens.index("open") if "open" in header_tokens else -1
+            high_idx = header_tokens.index("high") if "high" in header_tokens else -1
+            low_idx = header_tokens.index("low") if "low" in header_tokens else -1
+            close_idx = header_tokens.index("close")
+            vol_idx = header_tokens.index("volume") if "volume" in header_tokens else -1
+        else:
+            data_rows = rows
+
+        out_lines = ["Date,Open,High,Low,Close,Volume"]
+        for row in data_rows:
+            if not row or len(row) < 5:
+                continue
+            cells = [c.strip() for c in row]
+            if has_header:
+                d = cells[date_idx] if date_idx < len(cells) else ""
+                o = cells[open_idx] if open_idx >= 0 and open_idx < len(cells) else ""
+                h = cells[high_idx] if high_idx >= 0 and high_idx < len(cells) else ""
+                l = cells[low_idx] if low_idx >= 0 and low_idx < len(cells) else ""
+                c = cells[close_idx] if close_idx < len(cells) else ""
+                v = cells[vol_idx] if vol_idx >= 0 and vol_idx < len(cells) else "0"
+            else:
+                d = cells[1] if len(cells) > 1 else ""
+                o = cells[2] if len(cells) > 2 else ""
+                h = cells[3] if len(cells) > 3 else ""
+                l = cells[4] if len(cells) > 4 else ""
+                c = cells[5] if len(cells) > 5 else ""
+                v = cells[6] if len(cells) > 6 else "0"
+
+            if not d or not c:
+                continue
+            if start_date <= d <= end_date:
+                out_lines.append(f"{d},{o},{h},{l},{c},{v}")
+
+        if len(out_lines) <= 1:
+            return None
+
+        body = "\n".join(out_lines)
+        header = (
+            f"# Stock data for {sym} from {start_date} to {end_date}\n"
+            f"# Total records: {len(out_lines) - 1}\n"
+            f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Stooq fallback)\n\n"
+        )
+        return header + body
+    except Exception as exc:
+        logger.debug("[Stooq] parse failed for %s: %s", sym, exc)
+        return None
+
 
 def get_YFin_data_online(
     symbol: Annotated[str, "ticker symbol of the company"],
@@ -31,7 +145,17 @@ def get_YFin_data_online(
     # end_date row (and the current day when end_date is today). Request one day
     # past end_date so the requested range is actually inclusive (#986/#987).
     end_inclusive = (end_dt + relativedelta(days=1)).strftime("%Y-%m-%d")
-    data = yf_retry(lambda: ticker.history(start=start_date, end=end_inclusive))
+    try:
+        data = yf_retry(lambda: ticker.history(start=start_date, end=end_inclusive))
+    except YFRateLimitError:
+        # yfinance exhausted all retries. Try Stooq fallback for US stocks.
+        if _is_us_ticker(symbol):
+            stooq = _get_stooq_us_data(symbol, start_date, end_date)
+            if stooq is not None:
+                return stooq
+        raise DataVendorUnavailable(
+            f"yfinance: Yahoo Finance rate-limited after retries for {symbol}"
+        )
 
     # Empty result means the symbol is unknown/delisted. Raise a typed error
     # instead of returning prose: the routing layer turns it into a single
